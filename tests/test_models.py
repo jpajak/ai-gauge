@@ -15,4 +15,5 @@ def test_metric_optional_fields():
     m = UsageMetric(label="Session")
     assert m.percent_used is None
     assert m.resets_at is None
+    assert m.reset_label is None
     assert m.note is None

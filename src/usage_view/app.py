@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import sys
+from datetime import datetime, timedelta
 
 from PyQt6.QtCore import QObject, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
+from . import __version__
 from .config import Config, get_github_pat, get_provider_cookie
 from .cookie_dialog import CookieDialog
 from .models import SnapshotStatus, UsageSnapshot
@@ -22,6 +24,8 @@ LOGIN_URLS = {
     "claude": ("https://claude.ai/login", "Sign in to Claude"),
     "codex": ("https://chatgpt.com/auth/login", "Sign in to ChatGPT"),
 }
+
+_ACTIVE_MODE_MINUTES = 30
 
 
 def _make_tray_icon(percent: float | None = None) -> QIcon:
@@ -43,6 +47,37 @@ def _make_tray_icon(percent: float | None = None) -> QIcon:
     return QIcon(pix)
 
 
+def _adaptive_refresh_minutes(
+    *,
+    active: bool,
+    active_minutes: int,
+    unchanged_cycles: int,
+    max_minutes: int,
+) -> int:
+    active_minutes = max(1, min(active_minutes, max_minutes))
+    if active:
+        return active_minutes
+    backoff = active_minutes * (2 ** max(0, unchanged_cycles))
+    return min(max_minutes, backoff)
+
+
+def _snapshot_signature(snapshot: UsageSnapshot) -> tuple:
+    return (
+        snapshot.status.value,
+        snapshot.error,
+        tuple(
+            (
+                metric.label,
+                round(metric.percent_used or 0, 1)
+                if metric.percent_used is not None
+                else None,
+                metric.reset_label,
+            )
+            for metric in snapshot.metrics
+        ),
+    )
+
+
 class App(QObject):
     """Main application controller — owns the widget, providers, refresh timer, tray."""
 
@@ -53,13 +88,19 @@ class App(QObject):
         self._signals = ProviderSignals()
         self._signals.snapshot_ready.connect(self._on_snapshot)
         self._inflight: set[str] = set()
+        self._refresh_queue: list[str] = []
+        self._cycle_signatures: dict[str, tuple] = {}
+        self._last_cycle_signatures: dict[str, tuple] | None = None
+        self._unchanged_cycles = 0
+        self._active_until = datetime.now() + timedelta(minutes=_ACTIVE_MODE_MINUTES)
+        self._current_refresh_manual = False
 
         # Push any saved session cookies into the WebEngine profiles before any
         # scrape runs, so the headless page loads as signed-in.
         hydrate_all_from_keyring()
 
         self._widget = UsageWidget(self._config)
-        self._widget.refresh_requested.connect(self.refresh_now)
+        self._widget.refresh_requested.connect(lambda: self.refresh_now(manual=True))
         self._widget.settings_requested.connect(self.open_settings)
         self._widget.sign_in_requested.connect(self.open_login)
         self._widget.closed.connect(self._on_widget_closed)
@@ -70,10 +111,11 @@ class App(QObject):
 
         # System tray
         self._tray = QSystemTrayIcon(_make_tray_icon())
-        self._tray.setToolTip("usage view")
+        self._tray.setToolTip(f"usage view {__version__}")
         menu = QMenu()
         menu.addAction("Show / Hide", self._toggle_widget)
-        menu.addAction("Refresh now", self.refresh_now)
+        refresh_act = menu.addAction("Refresh now")
+        refresh_act.triggered.connect(lambda: self.refresh_now(manual=True))
         menu.addAction("Settings…", self.open_settings)
         menu.addSeparator()
         quit_act = QAction("Quit", menu)
@@ -85,14 +127,15 @@ class App(QObject):
 
         # Auto-refresh timer
         self._timer = QTimer(self)
-        self._timer.timeout.connect(self.refresh_now)
+        self._timer.setSingleShot(True)
+        self._timer.timeout.connect(lambda: self.refresh_now(manual=False))
         self._restart_timer()
 
         # First-run: open settings if nothing is configured
         if not self._has_any_credentials():
             QTimer.singleShot(200, self.open_settings)
         else:
-            QTimer.singleShot(500, self.refresh_now)
+            QTimer.singleShot(500, lambda: self.refresh_now(manual=True))
 
         self._widget.show()
 
@@ -132,35 +175,64 @@ class App(QObject):
 
     def _restart_timer(self) -> None:
         self._timer.stop()
-        self._timer.start(self._config.refresh_interval_minutes * 60_000)
+        self._schedule_next_refresh()
+
+    def _schedule_next_refresh(self) -> None:
+        if self._inflight or self._refresh_queue:
+            return
+        max_minutes = max(1, self._config.refresh_interval_minutes)
+        minutes = _adaptive_refresh_minutes(
+            active=datetime.now() < self._active_until,
+            active_minutes=self._config.active_refresh_interval_minutes,
+            unchanged_cycles=self._unchanged_cycles,
+            max_minutes=max_minutes,
+        )
+        self._timer.start(minutes * 60_000)
 
     # ----- Refresh -----
 
-    def refresh_now(self) -> None:
+    def refresh_now(self, manual: bool = True) -> None:
         if not self._providers:
             return
+        if self._inflight or self._refresh_queue:
+            return
+        if manual:
+            self._active_until = datetime.now() + timedelta(minutes=_ACTIVE_MODE_MINUTES)
+            self._unchanged_cycles = 0
+        self._timer.stop()
+        self._current_refresh_manual = manual
+        self._cycle_signatures = {}
         self._widget.set_refreshing(True)
-        for name, provider in self._providers.items():
-            if name in self._inflight:
-                continue
-            self._inflight.add(name)
+        self._refresh_queue = list(self._providers)
+        self._start_next_refresh()
 
-            def _emit(snap: UsageSnapshot, _name=name):
-                self._signals.snapshot_ready.emit(snap)
+    def _start_next_refresh(self) -> None:
+        if self._inflight or not self._refresh_queue:
+            return
+        name = self._refresh_queue.pop(0)
+        provider = self._providers.get(name)
+        if provider is None:
+            QTimer.singleShot(0, self._start_next_refresh)
+            return
+        self._inflight.add(name)
 
-            try:
-                provider.refresh(_emit)
-            except Exception as exc:  # noqa: BLE001
-                self._signals.snapshot_ready.emit(
-                    UsageSnapshot(
-                        provider=name,
-                        status=SnapshotStatus.ERROR,
-                        error=str(exc),
-                    )
+        def _emit(snap: UsageSnapshot, _name=name):
+            self._signals.snapshot_ready.emit(snap)
+
+        try:
+            provider.refresh(_emit)
+        except Exception as exc:  # noqa: BLE001
+            self._signals.snapshot_ready.emit(
+                UsageSnapshot(
+                    provider=name,
+                    status=SnapshotStatus.ERROR,
+                    error=str(exc),
                 )
+            )
 
     def _on_snapshot(self, snapshot: UsageSnapshot) -> None:
         self._snapshots[snapshot.provider] = snapshot
+        self._cycle_signatures[snapshot.provider] = _snapshot_signature(snapshot)
         self._inflight.discard(snapshot.provider)
         display_name = {
             "claude": "Claude",
@@ -169,9 +241,25 @@ class App(QObject):
         }.get(snapshot.provider, snapshot.provider)
         self._widget.update_snapshot(snapshot, display_name)
 
-        if not self._inflight:
+        if self._refresh_queue:
+            QTimer.singleShot(0, self._start_next_refresh)
+        else:
+            changed = self._cycle_changed()
+            if changed:
+                self._active_until = datetime.now() + timedelta(minutes=_ACTIVE_MODE_MINUTES)
+                self._unchanged_cycles = 0
+            elif not self._current_refresh_manual:
+                self._unchanged_cycles += 1
+            self._last_cycle_signatures = dict(self._cycle_signatures)
+            self._current_refresh_manual = False
             self._widget.set_refreshing(False)
             self._update_tray()
+            self._schedule_next_refresh()
+
+    def _cycle_changed(self) -> bool:
+        if self._last_cycle_signatures is None:
+            return True
+        return self._cycle_signatures != self._last_cycle_signatures
 
     def _update_tray(self) -> None:
         max_pct: float | None = None
@@ -187,7 +275,11 @@ class App(QObject):
                     max_pct = m.percent_used
                 lines.append(f"{name} {m.label}: {m.percent_used:.0f}%")
         self._tray.setIcon(_make_tray_icon(max_pct))
-        self._tray.setToolTip("usage view\n" + "\n".join(lines) if lines else "usage view")
+        self._tray.setToolTip(
+            f"usage view {__version__}\n" + "\n".join(lines)
+            if lines
+            else f"usage view {__version__}"
+        )
 
     # ----- Login -----
 
@@ -197,7 +289,7 @@ class App(QObject):
         url, title = LOGIN_URLS[provider]
         dlg = LoginWindow(provider, url, title)
         if dlg.exec():
-            self.refresh_now()
+            self.refresh_now(manual=True)
 
     def open_cookie_paste(self, provider: str) -> None:
         try:
@@ -207,7 +299,7 @@ class App(QObject):
         if dlg.exec():
             # QWebEngineCookieStore commits asynchronously; give the freshly
             # injected cookie a short beat before loading the scrape page.
-            QTimer.singleShot(1000, self.refresh_now)
+            QTimer.singleShot(1000, lambda: self.refresh_now(manual=True))
 
     # ----- Settings -----
 
@@ -221,7 +313,7 @@ class App(QObject):
             self._widget.apply_window_settings()
             self._widget.show()
             self._restart_timer()
-            self.refresh_now()
+            self.refresh_now(manual=True)
 
     # ----- Tray -----
 
@@ -253,6 +345,7 @@ def main() -> int:
     qt_app = QApplication(sys.argv)
     qt_app.setApplicationName("usage-view")
     qt_app.setOrganizationName("usage-view")
+    qt_app.setApplicationVersion(__version__)
     _app = App()  # noqa: F841 - keeps refs alive
     return qt_app.exec()
 

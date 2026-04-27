@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 import keyring
 from pydantic import BaseModel, Field
@@ -73,7 +74,9 @@ class CopilotConfig(BaseModel):
 
 
 class Config(BaseModel):
-    refresh_interval_minutes: int = Field(default=5, ge=1, le=60)
+    active_refresh_interval_minutes: int = Field(default=5, ge=1, le=180)
+    refresh_interval_minutes: int = Field(default=60, ge=1, le=180)
+    start_with_windows: bool = False
     providers: ProviderToggles = Field(default_factory=ProviderToggles)
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     window: WindowState = Field(default_factory=WindowState)
@@ -84,9 +87,22 @@ class Config(BaseModel):
         if not path.exists():
             return cls()
         try:
-            return cls.model_validate_json(path.read_text(encoding="utf-8"))
+            data = json.loads(path.read_text(encoding="utf-8"))
+            if isinstance(data, dict):
+                cls._migrate(data)
+            return cls.model_validate(data)
         except Exception:
             return cls()
+
+    @staticmethod
+    def _migrate(data: dict[str, Any]) -> None:
+        # 0.1.x had a single refresh_interval_minutes value. Preserve that as
+        # the active cadence and let the new idle cap default to 60 minutes.
+        if "active_refresh_interval_minutes" not in data:
+            old_interval = data.get("refresh_interval_minutes")
+            if isinstance(old_interval, int):
+                data["active_refresh_interval_minutes"] = old_interval
+                data["refresh_interval_minutes"] = 60
 
     def save(self) -> None:
         path = config_path()

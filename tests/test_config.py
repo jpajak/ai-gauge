@@ -3,17 +3,21 @@ from usage_view.config import Config, app_data_dir, config_path, webview_profile
 
 def test_defaults():
     c = Config()
-    assert c.refresh_interval_minutes == 5
+    assert c.active_refresh_interval_minutes == 5
+    assert c.refresh_interval_minutes == 60
     assert c.providers.claude is True
     assert c.providers.codex is True
     assert c.providers.copilot is True
+    assert c.start_with_windows is False
     assert c.copilot.monthly_quota == 300
     assert c.window.always_on_top is True
 
 
 def test_round_trip(tmp_path, monkeypatch):
     c = Config()
+    c.active_refresh_interval_minutes = 2
     c.refresh_interval_minutes = 10
+    c.start_with_windows = True
     c.providers.codex = False
     c.copilot.username = "octocat"
     c.copilot.billing_org = "my-org"
@@ -23,7 +27,9 @@ def test_round_trip(tmp_path, monkeypatch):
     c.save()
 
     loaded = Config.load()
+    assert loaded.active_refresh_interval_minutes == 2
     assert loaded.refresh_interval_minutes == 10
+    assert loaded.start_with_windows is True
     assert loaded.providers.codex is False
     assert loaded.providers.claude is True
     assert loaded.copilot.username == "octocat"
@@ -35,7 +41,7 @@ def test_round_trip(tmp_path, monkeypatch):
 
 def test_load_missing_returns_defaults():
     c = Config.load()
-    assert c.refresh_interval_minutes == 5
+    assert c.refresh_interval_minutes == 60
 
 
 def test_paths_under_appdata(tmp_path):
@@ -48,4 +54,15 @@ def test_load_corrupt_falls_back_to_defaults():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text("{ not valid json", encoding="utf-8")
     c = Config.load()
-    assert c.refresh_interval_minutes == 5
+    assert c.refresh_interval_minutes == 60
+
+
+def test_load_migrates_old_refresh_interval_to_active_rate():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"refresh_interval_minutes": 5, "providers": {"claude": true, "codex": true, "copilot": true}}',
+        encoding="utf-8",
+    )
+    c = Config.load()
+    assert c.active_refresh_interval_minutes == 5
+    assert c.refresh_interval_minutes == 60

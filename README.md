@@ -2,6 +2,8 @@
 
 Compact always-on-top Windows monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, system tray, draggable frameless widget.
 
+Current version: **0.2.0**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+
 ## Run from source
 
 ```bash
@@ -20,7 +22,7 @@ The first launch opens the Settings dialog. Configure providers there.
 | **ChatGPT Codex**  | Same as Claude.                                                                                                                                                                                                                                                                                                                                                                                                                             |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal Pro/Pro+, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly quota (Pro=300, Pro+=1500, Business=300, Enterprise=1000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
 
-Sessions persist between runs in `%APPDATA%/usage-view/profiles/{provider}/`. The GitHub PAT is stored in **Windows Credential Manager** via `keyring`; pasted cookies are stored in a DPAPI-encrypted file at `%APPDATA%/usage-view/secrets.dat`.
+Sessions persist between runs in `%APPDATA%/usage-view/profiles/{provider}/`. The GitHub PAT is stored in **Windows Credential Manager** when available, with the same DPAPI-encrypted file fallback used for pasted cookies at `%APPDATA%/usage-view/secrets.dat`.
 
 ### Paste cookie (Google sign-in users)
 
@@ -41,7 +43,10 @@ Google blocks all embedded browsers from signing in. Workaround: copy your exist
 - The widget floats above other windows by default. Drag anywhere to move; close (✕) hides to tray.
 - Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
 - Right-click tray → Refresh / Settings / Quit. Left-click toggles widget visibility.
-- Auto-refresh runs every 5 min by default (1–60 configurable).
+- Auto-refresh is adaptive: manual refresh or changed usage enters the active
+  cadence, then unchanged results back off toward the configured max interval.
+  Defaults are 5 min active and 60 min idle max.
+- Enable **Start with Windows** in Settings if you want it to run as a daily tray utility.
 
 ## Build a standalone .exe
 
@@ -74,4 +79,4 @@ Tests cover: config round-trip, Copilot REST helpers (with mocked HTTP), and sna
 
 - **Why an embedded browser instead of reading Chrome cookies?** Chrome 127+ added App-Bound Encryption (mid-2024) that blocks every external Python library from decrypting Chrome/Edge cookies. Owning the browser session ourselves is the only reliable workaround.
 - **Claude / Codex layouts may change.** If a provider tile shows "error" after a UI update upstream, the page-extractor JS in `src/usage_view/providers/{claude,codex}.py` needs adjusting — the rest of the app keeps working.
-- The Copilot REST endpoint returns the _current calendar month_ of premium-request usage. The widget tracks gross premium requests consumed against the included allowance; net quantity is only the billable overage. Reset is computed as the 1st of the next month.
+- The Copilot REST endpoint returns the _current calendar month_ of premium-request usage. The widget tracks gross premium requests consumed against the included allowance; net quantity is only the billable overage. Reset is computed as the 1st of the next month. GitHub does not currently expose a reliable personal-plan quota field, so Settings uses a plan dropdown with a Custom fallback.

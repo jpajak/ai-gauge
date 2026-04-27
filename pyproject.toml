@@ -1,6 +1,6 @@
 [project]
 name = "usage-view"
-version = "0.1.0"
+version = "0.2.0"
 description = "Compact always-on-top monitor for Claude.ai, ChatGPT Codex, and GitHub Copilot usage limits."
 requires-python = ">=3.11"
 dependencies = [

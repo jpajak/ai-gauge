@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from datetime import timedelta
 from typing import Any, Callable
 
 from PyQt6.QtCore import QObject
@@ -8,6 +9,7 @@ from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from ..webview.scraper import HeadlessScraper
 from .codex import _parse_reset_text  # reuse the same heuristic parser
 from .base import Provider
+from .idle import idle_reset_state
 
 CLAUDE_USAGE_URL = "https://claude.ai/settings/usage"
 
@@ -102,24 +104,31 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
         )
 
     rows = (
-        ("session", "Session"),
-        ("weekly_all", "Weekly"),
-        ("weekly_design", "Design"),
+        ("session", "Session", timedelta(hours=5)),
+        ("weekly_all", "Weekly", timedelta(days=7)),
+        ("weekly_design", "Design", timedelta(days=7)),
     )
     metrics: list[UsageMetric] = []
-    for key, label in rows:
+    for key, label, reset_window in rows:
         card = payload.get(key)
         if not card:
             continue
         percent = _normalize_percent(card.get("percent"), card.get("kind", ""))
         if percent is None:
             continue
+        resets_at = _parse_reset_text(card.get("reset_text"))
+        resets_at, reset_label, idle_note = idle_reset_state(
+            percent=percent,
+            resets_at=resets_at,
+            window=reset_window,
+        )
         metrics.append(
             UsageMetric(
                 label=label,
                 percent_used=percent,
-                resets_at=_parse_reset_text(card.get("reset_text")),
-                note=card.get("reset_text"),
+                resets_at=resets_at,
+                reset_label=reset_label,
+                note=idle_note or card.get("reset_text"),
             )
         )
 

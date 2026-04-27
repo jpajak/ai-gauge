@@ -3,6 +3,7 @@ from __future__ import annotations
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QComboBox,
     QDialog,
     QDialogButtonBox,
     QFormLayout,
@@ -18,6 +19,16 @@ from PyQt6.QtWidgets import (
 )
 
 from .config import Config, get_github_pat, set_github_pat
+from .startup import set_start_with_windows
+
+
+_COPILOT_PLAN_QUOTAS = (
+    ("Pro", 300),
+    ("Pro+", 1500),
+    ("Business", 300),
+    ("Enterprise", 1000),
+    ("Free", 50),
+)
 
 
 _DARK_STYLESHEET = """
@@ -50,7 +61,7 @@ QGroupBox::title {
     background: #1f2937;
     color: #f3f4f6;
 }
-QLineEdit, QSpinBox {
+QLineEdit, QSpinBox, QComboBox {
     background: #111827;
     color: #f3f4f6;
     border: 1px solid #374151;
@@ -59,8 +70,18 @@ QLineEdit, QSpinBox {
     selection-background-color: #2563eb;
     min-height: 22px;
 }
-QLineEdit:focus, QSpinBox:focus {
+QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border-color: #3b82f6;
+}
+QComboBox::drop-down {
+    width: 22px;
+    border: none;
+    background: #374151;
+}
+QComboBox QAbstractItemView {
+    background: #111827;
+    color: #f3f4f6;
+    selection-background-color: #2563eb;
 }
 QSpinBox::up-button, QSpinBox::down-button {
     width: 16px;
@@ -162,16 +183,33 @@ class SettingsDialog(QDialog):
         general_form.setHorizontalSpacing(12)
         general_form.setVerticalSpacing(10)
 
+        self.active_refresh_spin = QSpinBox()
+        self.active_refresh_spin.setRange(1, 180)
+        self.active_refresh_spin.setSuffix(" min")
+        self.active_refresh_spin.setValue(config.active_refresh_interval_minutes)
+        self.active_refresh_spin.setMinimumWidth(110)
+        self.active_refresh_spin.setToolTip(
+            "Refresh cadence after a manual refresh or when usage is changing."
+        )
+        general_form.addRow("Active refresh:", self.active_refresh_spin)
+
         self.refresh_spin = QSpinBox()
-        self.refresh_spin.setRange(1, 60)
+        self.refresh_spin.setRange(1, 180)
         self.refresh_spin.setSuffix(" min")
         self.refresh_spin.setValue(config.refresh_interval_minutes)
         self.refresh_spin.setMinimumWidth(110)
-        general_form.addRow("Auto-refresh every:", self.refresh_spin)
+        self.refresh_spin.setToolTip(
+            "Slowest refresh cadence after repeated unchanged readings."
+        )
+        general_form.addRow("Idle max refresh:", self.refresh_spin)
 
         self.always_on_top_cb = QCheckBox("Always on top")
         self.always_on_top_cb.setChecked(config.window.always_on_top)
         general_form.addRow("", self.always_on_top_cb)
+
+        self.startup_cb = QCheckBox("Start with Windows")
+        self.startup_cb.setChecked(config.start_with_windows)
+        general_form.addRow("", self.startup_cb)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(30, 100)
@@ -285,13 +323,26 @@ class SettingsDialog(QDialog):
         )
         copilot_form.addRow("", org_hint)
 
+        self.gh_plan = QComboBox()
+        for plan, quota in _COPILOT_PLAN_QUOTAS:
+            self.gh_plan.addItem(f"{plan} ({quota:,})", quota)
+        self.gh_plan.addItem("Custom", None)
+        self.gh_plan.currentIndexChanged.connect(self._sync_custom_quota_enabled)
+        copilot_form.addRow("Plan / quota:", self.gh_plan)
+
         self.gh_quota = QSpinBox()
         self.gh_quota.setRange(1, 100000)
         self.gh_quota.setValue(config.copilot.monthly_quota)
         self.gh_quota.setMinimumWidth(110)
-        copilot_form.addRow("Monthly quota:", self.gh_quota)
+        self.gh_quota_label = QLabel("Custom quota:")
+        copilot_form.addRow(self.gh_quota_label, self.gh_quota)
+        self._set_quota_selection(config.copilot.monthly_quota)
 
-        quota_hint = _hint_label("Pro = 300, Pro+ = 1500, Business = 300, Enterprise = 1000")
+        quota_hint = _hint_label(
+            "GitHub does not currently expose a reliable personal-plan quota "
+            "field through the API. Choose your plan here; use Custom if your "
+            "account has a different allowance."
+        )
         copilot_form.addRow("", quota_hint)
 
         # ----- Buttons -----
@@ -334,8 +385,28 @@ class SettingsDialog(QDialog):
             print("Saved GitHub PAT to Windows Credential Manager.")
         self.accept()
 
+    def _set_quota_selection(self, quota: int) -> None:
+        for i in range(self.gh_plan.count()):
+            if self.gh_plan.itemData(i) == quota:
+                self.gh_plan.setCurrentIndex(i)
+                self._sync_custom_quota_enabled()
+                return
+        self.gh_plan.setCurrentIndex(self.gh_plan.count() - 1)
+        self.gh_quota.setValue(quota)
+        self._sync_custom_quota_enabled()
+
+    def _sync_custom_quota_enabled(self) -> None:
+        is_custom = self.gh_plan.currentData() is None
+        self.gh_quota.setVisible(is_custom)
+        self.gh_quota_label.setVisible(is_custom)
+
     def apply_to(self, config: Config) -> None:
         config.refresh_interval_minutes = self.refresh_spin.value()
+        config.active_refresh_interval_minutes = min(
+            self.active_refresh_spin.value(),
+            config.refresh_interval_minutes,
+        )
+        config.start_with_windows = self.startup_cb.isChecked()
         config.window.always_on_top = self.always_on_top_cb.isChecked()
         config.window.opacity = self.opacity_slider.value() / 100.0
         config.providers.claude = self.claude_cb.isChecked()
@@ -345,6 +416,10 @@ class SettingsDialog(QDialog):
         config.copilot.username = username or None
         billing_org = self.gh_billing_org.text().strip()
         config.copilot.billing_org = billing_org or None
-        config.copilot.monthly_quota = self.gh_quota.value()
+        selected_quota = self.gh_plan.currentData()
+        config.copilot.monthly_quota = (
+            int(selected_quota) if selected_quota is not None else self.gh_quota.value()
+        )
+        set_start_with_windows(config.start_with_windows)
 
         config.save()

@@ -16,6 +16,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from . import __version__
 from .config import Config
 from .models import SnapshotStatus, UsageSnapshot
 
@@ -100,6 +101,7 @@ class _MetricRow(QWidget):
         label: str,
         percent: float | None,
         resets_at: datetime | None,
+        reset_label: str | None = None,
         note: str | None = None,
     ) -> None:
         self.label.setText(label)
@@ -115,10 +117,14 @@ class _MetricRow(QWidget):
             f"QProgressBar {{ background:#374151; border:none; border-radius:3px; }}"
             f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
         )
-        rel = _format_relative(resets_at)
+        rel = reset_label if reset_label is not None else _format_relative(resets_at)
         self.reset.setText(rel)
-        if resets_at:
+        if reset_label:
+            self.reset.setToolTip(note or reset_label)
+        elif resets_at:
             self.reset.setToolTip(resets_at.strftime("%Y-%m-%d %H:%M"))
+        else:
+            self.reset.setToolTip("")
 
 
 class _ProviderTile(QFrame):
@@ -190,12 +196,15 @@ class _ProviderTile(QFrame):
         self.status.setToolTip("")
         self.action_btn.setVisible(False)
         self._set_rows(
-            [(m.label, m.percent_used, m.resets_at, m.note) for m in snapshot.metrics]
+            [
+                (m.label, m.percent_used, m.resets_at, m.reset_label, m.note)
+                for m in snapshot.metrics
+            ]
         )
 
     def _set_rows(
         self,
-        rows: list[tuple[str, float | None, datetime | None, str | None]],
+        rows: list[tuple[str, float | None, datetime | None, str | None, str | None]],
     ) -> None:
         # Grow / shrink the row pool to match
         while len(self._rows) < len(rows):
@@ -206,8 +215,8 @@ class _ProviderTile(QFrame):
             r = self._rows.pop()
             self._layout.removeWidget(r)
             r.deleteLater()
-        for row, (label, pct, reset, note) in zip(self._rows, rows):
-            row.set_metric(label, pct, reset, note)
+        for row, (label, pct, reset, reset_label, note) in zip(self._rows, rows):
+            row.set_metric(label, pct, reset, reset_label, note)
 
 
 class UsageWidget(QWidget):
@@ -235,7 +244,8 @@ class UsageWidget(QWidget):
         self._last_fetch_at: datetime | None = None
 
         # Header bar
-        title = QLabel("usage view")
+        title = QLabel(f"usage view {__version__}")
+        title.setToolTip(f"usage-view {__version__}")
         title.setStyleSheet("color:#9ca3af; font-size:10px; font-weight:600;")
 
         self.refresh_btn = self._mini_button("↻", "Refresh now")

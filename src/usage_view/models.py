@@ -17,6 +17,7 @@ class UsageMetric:
     label: str
     percent_used: float | None = None
     resets_at: datetime | None = None
+    reset_label: str | None = None
     note: str | None = None
 
 

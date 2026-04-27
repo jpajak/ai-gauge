@@ -78,6 +78,7 @@ class HeadlessScraper(QObject):
         self.done.emit(result, error)
         # Detach the page; let the view be garbage collected after the signal.
         self._view.setPage(None)
+        self._view.deleteLater()
 
 
 def scrape(

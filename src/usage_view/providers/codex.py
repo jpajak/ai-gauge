@@ -9,6 +9,7 @@ from PyQt6.QtCore import QObject
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from ..webview.scraper import HeadlessScraper
 from .base import Provider
+from .idle import idle_reset_state
 
 CODEX_USAGE_URL = "https://chatgpt.com/codex/cloud/settings/analytics#usage"
 
@@ -123,17 +124,26 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
         card = payload.get(key)
         if not card:
             continue
+        percent = _normalize_percent(card.get("percent"), card.get("kind", ""))
+        resets_at = _parse_reset_text(card.get("reset_text"))
+        reset_window = timedelta(hours=5) if key == "session" else timedelta(days=7)
+        resets_at, reset_label, idle_note = idle_reset_state(
+            percent=percent,
+            resets_at=resets_at,
+            window=reset_window,
+        )
+        note = idle_note or card.get("reset_text")
         metrics.append(
             UsageMetric(
                 label=label,
-                percent_used=_normalize_percent(card.get("percent"), card.get("kind", "")),
-                resets_at=_parse_reset_text(card.get("reset_text")),
-                note=card.get("reset_text"),
+                percent_used=percent,
+                resets_at=resets_at,
+                reset_label=reset_label,
+                note=note,
             )
         )
 
     if not metrics or all(m.percent_used is None for m in metrics):
-        print(f"Codex scrape failed: {payload}")
         return UsageSnapshot(
             provider="codex",
             status=SnapshotStatus.ERROR,

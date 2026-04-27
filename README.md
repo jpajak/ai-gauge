@@ -1,0 +1,77 @@
+# usage-view
+
+Compact always-on-top Windows monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, system tray, draggable frameless widget.
+
+## Run from source
+
+```bash
+py -m venv .venv
+.venv\Scripts\pip install -e .[dev]
+.venv\Scripts\python -m usage_view
+```
+
+The first launch opens the Settings dialog. Configure providers there.
+
+## First-time setup per provider
+
+| Provider           | Setup                                                                                                                                                                                                                                                                                                                                                                                                                                       |
+| ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Claude.ai**      | Two paths: **Paste cookie** (recommended if you sign in with Google) — see below. **Sign in (email)** opens an embedded browser; only works for email/password accounts (Google blocks embedded browsers).                                                                                                                                                                                                                                  |
+| **ChatGPT Codex**  | Same as Claude.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal Pro/Pro+, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly quota (Pro=300, Pro+=1500, Business=300, Enterprise=1000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
+
+Sessions persist between runs in `%APPDATA%/usage-view/profiles/{provider}/`. The GitHub PAT is stored in **Windows Credential Manager** via `keyring`; pasted cookies are stored in a DPAPI-encrypted file at `%APPDATA%/usage-view/secrets.dat`.
+
+### Paste cookie (Google sign-in users)
+
+Google blocks all embedded browsers from signing in. Workaround: copy your existing session cookie from your real browser into the app. Cookies last weeks before they need re-pasting.
+
+1. Sign into <https://claude.ai> (or <https://chatgpt.com>) in **Chrome / Edge / Firefox** as you normally do.
+2. For ChatGPT, press **F12** → **Network**, reload the page, click a
+   `chatgpt.com` request, and copy the full **Request Headers → Cookie:** value.
+   This includes split session cookies plus companion auth cookies such as
+   `__Secure-oai-is`.
+3. For Claude, press **F12** → **Network**, reload `https://claude.ai/settings/usage`,
+   click a `claude.ai` request, and copy the full **Request Headers → Cookie:**
+   value. It must include `sessionKey`.
+4. In the app: Settings → click **Paste cookie** next to the provider, paste, Save.
+
+## Daily use
+
+- The widget floats above other windows by default. Drag anywhere to move; close (✕) hides to tray.
+- Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
+- Right-click tray → Refresh / Settings / Quit. Left-click toggles widget visibility.
+- Auto-refresh runs every 5 min by default (1–60 configurable).
+
+## Build a standalone .exe
+
+No Python install required on the target machine.
+
+```powershell
+.venv\Scripts\pip install pyinstaller
+.venv\Scripts\pyinstaller `
+    --windowed --name usage-view `
+    --paths src `
+    --collect-all PyQt6.QtWebEngineWidgets `
+    --collect-all PyQt6.QtWebEngineCore `
+    --onefile `
+    pyinstaller_entry.py
+```
+
+Output goes to `dist/usage-view/usage-view.exe` (~150–200 MB — Chromium runtime is bundled). Distribute the whole `dist/usage-view` folder; user data still lives outside it under `%APPDATA%/usage-view/`.
+
+For a single-file binary (slower first launch), add `--onefile`.
+
+## Tests
+
+```bash
+.venv\Scripts\pytest
+```
+
+Tests cover: config round-trip, Copilot REST helpers (with mocked HTTP), and snapshot models. Provider scrapers (Claude/Codex) require a live browser session and are validated manually.
+
+## Notes / limitations
+
+- **Why an embedded browser instead of reading Chrome cookies?** Chrome 127+ added App-Bound Encryption (mid-2024) that blocks every external Python library from decrypting Chrome/Edge cookies. Owning the browser session ourselves is the only reliable workaround.
+- **Claude / Codex layouts may change.** If a provider tile shows "error" after a UI update upstream, the page-extractor JS in `src/usage_view/providers/{claude,codex}.py` needs adjusting — the rest of the app keeps working.
+- The Copilot REST endpoint returns the _current calendar month_ of premium-request usage. The widget tracks gross premium requests consumed against the included allowance; net quantity is only the billable overage. Reset is computed as the 1st of the next month.

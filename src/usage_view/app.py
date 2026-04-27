@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import sys
 from datetime import datetime, timedelta
 
@@ -10,6 +11,9 @@ from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 from . import __version__
 from .config import Config, get_github_pat, get_provider_cookie
 from .cookie_dialog import CookieDialog
+from .error_dialog import ErrorDetailsDialog
+from .history import HistoryStore
+from .logging_setup import setup_logging
 from .models import SnapshotStatus, UsageSnapshot
 from .providers.base import Provider, ProviderSignals
 from .providers.claude import ClaudeProvider
@@ -19,6 +23,8 @@ from .settings_dialog import SettingsDialog
 from .webview.cookies import hydrate_all_from_keyring
 from .webview.login_window import LoginWindow
 from .widget import UsageWidget
+
+log = logging.getLogger("usage_view.app")
 
 LOGIN_URLS = {
     "claude": ("https://claude.ai/login", "Sign in to Claude"),
@@ -83,8 +89,11 @@ class App(QObject):
 
     def __init__(self):
         super().__init__()
+        setup_logging()
+        log.info("usage-view %s starting", __version__)
         self._config = Config.load()
         self._snapshots: dict[str, UsageSnapshot] = {}
+        self._history = HistoryStore()
         self._signals = ProviderSignals()
         self._signals.snapshot_ready.connect(self._on_snapshot)
         self._inflight: set[str] = set()
@@ -97,12 +106,14 @@ class App(QObject):
 
         # Push any saved session cookies into the WebEngine profiles before any
         # scrape runs, so the headless page loads as signed-in.
-        hydrate_all_from_keyring()
+        loaded = hydrate_all_from_keyring()
+        log.info("hydrated cookies for: %s", loaded or "none")
 
         self._widget = UsageWidget(self._config)
         self._widget.refresh_requested.connect(lambda: self.refresh_now(manual=True))
         self._widget.settings_requested.connect(self.open_settings)
         self._widget.sign_in_requested.connect(self.open_login)
+        self._widget.details_requested.connect(self.open_error_details)
         self._widget.closed.connect(self._on_widget_closed)
 
         # Pre-populate provider tiles in stable order so they don't pop in.
@@ -181,13 +192,15 @@ class App(QObject):
         if self._inflight or self._refresh_queue:
             return
         max_minutes = max(1, self._config.refresh_interval_minutes)
+        active = datetime.now() < self._active_until
         minutes = _adaptive_refresh_minutes(
-            active=datetime.now() < self._active_until,
+            active=active,
             active_minutes=self._config.active_refresh_interval_minutes,
             unchanged_cycles=self._unchanged_cycles,
             max_minutes=max_minutes,
         )
         self._timer.start(minutes * 60_000)
+        self._widget.set_refresh_state(active=active, minutes=minutes)
 
     # ----- Refresh -----
 
@@ -204,6 +217,16 @@ class App(QObject):
         self._cycle_signatures = {}
         self._widget.set_refreshing(True)
         self._refresh_queue = list(self._providers)
+        self._widget.mark_loading(
+            {
+                name: {
+                    "claude": "Claude",
+                    "codex": "Codex",
+                    "copilot": "Copilot",
+                }.get(name, name)
+                for name in self._refresh_queue
+            }
+        )
         self._start_next_refresh()
 
     def _start_next_refresh(self) -> None:
@@ -234,6 +257,17 @@ class App(QObject):
         self._snapshots[snapshot.provider] = snapshot
         self._cycle_signatures[snapshot.provider] = _snapshot_signature(snapshot)
         self._inflight.discard(snapshot.provider)
+        if snapshot.status == SnapshotStatus.ERROR:
+            log.warning(
+                "snapshot error provider=%s error=%s raw_keys=%s",
+                snapshot.provider,
+                snapshot.error,
+                sorted(snapshot.raw.keys()) if snapshot.raw else [],
+            )
+        try:
+            self._history.record_snapshot(snapshot)
+        except Exception:  # noqa: BLE001
+            log.exception("history.record_snapshot failed")
         display_name = {
             "claude": "Claude",
             "codex": "Codex",
@@ -291,6 +325,18 @@ class App(QObject):
         if dlg.exec():
             self.refresh_now(manual=True)
 
+    def open_error_details(self, provider: str) -> None:
+        snapshot = self._snapshots.get(provider)
+        if snapshot is None or snapshot.status != SnapshotStatus.ERROR:
+            return
+        display_name = {
+            "claude": "Claude",
+            "codex": "Codex",
+            "copilot": "Copilot",
+        }.get(provider, provider)
+        dlg = ErrorDetailsDialog(provider, display_name, snapshot, parent=self._widget)
+        dlg.exec()
+
     def open_cookie_paste(self, provider: str) -> None:
         try:
             dlg = CookieDialog(provider)
@@ -304,6 +350,7 @@ class App(QObject):
     # ----- Settings -----
 
     def open_settings(self) -> None:
+        old_copilot_quota = self._config.copilot.monthly_quota
         dlg = SettingsDialog(self._config, parent=self._widget)
         dlg.sign_in_clicked.connect(self.open_login)
         dlg.paste_cookie_clicked.connect(self.open_cookie_paste)
@@ -312,8 +359,24 @@ class App(QObject):
             self._build_providers()
             self._widget.apply_window_settings()
             self._widget.show()
+            # Copilot's metric label bakes the quota into the displayed string.
+            # If the user just changed it, re-render the cached snapshot now so
+            # the new denominator shows immediately rather than after a refresh.
+            new_copilot_quota = self._config.copilot.monthly_quota
+            if old_copilot_quota != new_copilot_quota:
+                self._rerender_copilot(new_copilot_quota)
             self._restart_timer()
             self.refresh_now(manual=True)
+
+    def _rerender_copilot(self, quota: int) -> None:
+        cached = self._snapshots.get("copilot")
+        if cached is None or cached.status != SnapshotStatus.OK or not cached.raw:
+            return
+        from .providers.copilot import _build_snapshot
+        try:
+            self._on_snapshot(_build_snapshot(cached.raw, quota))
+        except Exception:  # noqa: BLE001
+            log.exception("failed to re-render copilot snapshot with new quota")
 
     # ----- Tray -----
 

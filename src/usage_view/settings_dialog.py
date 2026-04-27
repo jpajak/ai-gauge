@@ -19,6 +19,8 @@ from PyQt6.QtWidgets import (
 )
 
 from .config import Config, get_github_pat, set_github_pat
+from .error_dialog import reveal_path
+from .logging_setup import log_path
 from .startup import set_start_with_windows
 
 
@@ -229,7 +231,14 @@ class SettingsDialog(QDialog):
         providers_layout = QVBoxLayout(providers)
         providers_layout.setSpacing(8)
 
+        providers_hint = _hint_label(
+            "Uncheck a provider to hide its tile from the widget. The panel "
+            "shrinks to fit only what's enabled."
+        )
+        providers_layout.addWidget(providers_hint)
+
         self.claude_cb = QCheckBox("Claude.ai")
+        self.claude_cb.setToolTip("Show the Claude.ai usage tile in the panel.")
         self.claude_cb.setChecked(config.providers.claude)
         claude_paste = QPushButton("Paste cookie")
         claude_paste.setToolTip(
@@ -249,6 +258,7 @@ class SettingsDialog(QDialog):
         providers_layout.addLayout(claude_row)
 
         self.codex_cb = QCheckBox("ChatGPT Codex")
+        self.codex_cb.setToolTip("Show the ChatGPT Codex usage tile in the panel.")
         self.codex_cb.setChecked(config.providers.codex)
         codex_paste = QPushButton("Paste cookie")
         codex_paste.setToolTip(
@@ -273,6 +283,7 @@ class SettingsDialog(QDialog):
         providers_layout.addWidget(google_hint)
 
         self.copilot_cb = QCheckBox("GitHub Copilot")
+        self.copilot_cb.setToolTip("Show the GitHub Copilot usage tile in the panel.")
         self.copilot_cb.setChecked(config.providers.copilot)
         providers_layout.addWidget(self.copilot_cb)
 
@@ -352,6 +363,17 @@ class SettingsDialog(QDialog):
         buttons.accepted.connect(self._accept)
         buttons.rejected.connect(self.reject)
 
+        log_btn = QPushButton("Open log folder")
+        log_btn.setToolTip(
+            "Reveal usage-view.log in Explorer — useful when reporting a problem."
+        )
+        log_btn.clicked.connect(lambda: reveal_path(log_path()))
+
+        button_row = QHBoxLayout()
+        button_row.addWidget(log_btn)
+        button_row.addStretch(1)
+        button_row.addWidget(buttons)
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 12)
         layout.setSpacing(12)
@@ -359,7 +381,7 @@ class SettingsDialog(QDialog):
         layout.addWidget(providers)
         layout.addWidget(copilot)
         layout.addStretch(1)
-        layout.addWidget(buttons)
+        layout.addLayout(button_row)
 
     def _accept(self) -> None:
         new_pat = self.gh_pat_edit.text().strip()

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (
     QDialog,
@@ -13,6 +15,9 @@ from PyQt6.QtWidgets import (
 from .config import COOKIE_NAMES, set_provider_cookie
 from .config import get_provider_cookie
 from .webview.cookies import _parse_cookie_pairs, inject_session_cookie
+from .webview.verify import VERIFY_TARGETS, verify_session
+
+log = logging.getLogger("usage_view.cookie_dialog")
 
 INSTRUCTIONS = {
     "claude": (
@@ -70,10 +75,11 @@ class CookieDialog(QDialog):
         if provider not in INSTRUCTIONS:
             raise ValueError(f"unknown provider: {provider}")
         self._provider = provider
+        self._verifier = None
         title, instructions_html = INSTRUCTIONS[provider]
         self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         self.setWindowTitle(f"Paste {title}")
-        self.resize(540, 420)
+        self.resize(540, 460)
         self.setStyleSheet(_DARK_STYLESHEET)
 
         instructions = QLabel(instructions_html.replace("\n", "<br/>"))
@@ -88,19 +94,29 @@ class CookieDialog(QDialog):
         self._cookie_input.setPlaceholderText("Paste cookie value here…")
         self._cookie_input.setMinimumHeight(80)
 
-        buttons = QDialogButtonBox(
+        self._status = QLabel("")
+        self._status.setWordWrap(True)
+        self._status.setTextFormat(Qt.TextFormat.RichText)
+        self._status.setStyleSheet("color:#9ca3af; font-size:11px;")
+
+        self._buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Save
             | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.accepted.connect(self._save)
-        buttons.rejected.connect(self.reject)
+        self._buttons.accepted.connect(self._save)
+        self._buttons.rejected.connect(self.reject)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(16, 16, 16, 12)
         layout.setSpacing(10)
         layout.addWidget(instructions)
         layout.addWidget(self._cookie_input, 1)
-        layout.addWidget(buttons)
+        layout.addWidget(self._status)
+        layout.addWidget(self._buttons)
+
+    def _set_busy(self, busy: bool) -> None:
+        self._buttons.setEnabled(not busy)
+        self._cookie_input.setReadOnly(busy)
 
     def _save(self) -> None:
         value = self._cookie_input.toPlainText().strip()
@@ -130,5 +146,46 @@ class CookieDialog(QDialog):
         names = ", ".join(name for name, _ in pairs[:6])
         if len(pairs) > 6:
             names += f", and {len(pairs) - 6} more"
-        print(f"Saved {self._provider} cookies: {names}")
-        self.accept()
+        log.info("saved %s cookies: %s", self._provider, names)
+
+        if self._provider not in VERIFY_TARGETS:
+            self.accept()
+            return
+
+        self._set_busy(True)
+        self._status.setText(
+            f"<span style='color:#9ca3af;'>Saved. Verifying that the cookie loads "
+            f"a signed-in {self._provider} page…</span>"
+        )
+        self._verifier = verify_session(self._provider, self._on_verify_done, parent=self)
+
+    def _on_verify_done(self, ok: bool, error: str) -> None:
+        if ok:
+            log.info("cookie verify ok for %s", self._provider)
+            self.accept()
+            return
+
+        if error:
+            # Inconclusive (timeout / page failed to load). Cookie is saved;
+            # accept anyway so the user can let the regular refresh retry.
+            log.warning("cookie verify inconclusive for %s: %s", self._provider, error)
+            QMessageBox.information(
+                self,
+                "Couldn't reach the verification page",
+                f"Cookie was saved, but verification couldn't complete "
+                f"({error}). The next refresh will try with the new cookie.",
+            )
+            self.accept()
+            return
+
+        # Loaded but the signed-in marker was missing — cookie is incomplete or
+        # already invalid.
+        log.warning("cookie verify failed for %s: page loaded but signed-out", self._provider)
+        self._set_busy(False)
+        self._status.setText(
+            "<span style='color:#ef4444;'><b>Cookie didn't authenticate.</b> The page loaded "
+            "but still showed signed-out. Common causes: you copied only part of the "
+            "<code>Cookie:</code> header, the cookie has already expired, or the "
+            "request you grabbed was an auth-less one. Try copying the full header "
+            "from a request that returns user data and paste again.</span>"
+        )

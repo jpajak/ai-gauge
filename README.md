@@ -2,7 +2,7 @@
 
 Compact always-on-top Windows monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, system tray, draggable frameless widget.
 
-Current version: **0.2.0**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.3.1**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Run from source
 

@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+import time
 from typing import Any, Callable
 
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
@@ -7,6 +9,8 @@ from PyQt6.QtWebEngineWidgets import QWebEngineView
 
 from .page import QuietWebEnginePage
 from .profile import get_profile
+
+log = logging.getLogger("usage_view.scraper")
 
 
 class HeadlessScraper(QObject):
@@ -29,9 +33,12 @@ class HeadlessScraper(QObject):
         parent: QObject | None = None,
     ):
         super().__init__(parent)
+        self._provider = provider
+        self._url = url
         self._extractor_js = extractor_js
         self._wait_ms = wait_ms
         self._finished = False
+        self._started_at = time.monotonic()
 
         profile = get_profile(provider)
         self._page = QuietWebEnginePage(profile, self)
@@ -47,6 +54,7 @@ class HeadlessScraper(QObject):
 
         self._page.loadFinished.connect(self._on_load_finished)
         self._page.load(QUrl(url))
+        log.info("scrape start provider=%s url=%s", provider, url)
 
     def _on_load_finished(self, ok: bool) -> None:
         if self._finished:
@@ -75,6 +83,19 @@ class HeadlessScraper(QObject):
             return
         self._finished = True
         self._timeout.stop()
+        elapsed = time.monotonic() - self._started_at
+        if error:
+            log.warning(
+                "scrape fail provider=%s url=%s elapsed=%.1fs error=%s",
+                self._provider, self._url, elapsed, error,
+            )
+        else:
+            log.info(
+                "scrape ok provider=%s elapsed=%.1fs result_keys=%s",
+                self._provider,
+                elapsed,
+                sorted(result.keys()) if isinstance(result, dict) else type(result).__name__,
+            )
         self.done.emit(result, error)
         # Detach the page; let the view be garbage collected after the signal.
         self._view.setPage(None)

@@ -21,6 +21,14 @@ from .config import Config
 from .models import SnapshotStatus, UsageSnapshot
 
 ROW_BAR_HEIGHT = 8
+PROVIDER_ORDER = ("claude", "codex", "copilot")
+
+
+def _provider_sort_key(provider: str) -> tuple[int, str]:
+    try:
+        return (PROVIDER_ORDER.index(provider), provider)
+    except ValueError:
+        return (len(PROVIDER_ORDER), provider)
 
 
 def _format_relative(dt: datetime | None) -> str:
@@ -61,6 +69,30 @@ def _color_for_percent(p: float | None) -> str:
     if p >= 50:
         return "#eab308"
     return "#22c55e"
+
+
+def _short_error_reason(error: str | None) -> str:
+    """One-word tag for the most common failure modes, appended to the 'error' label.
+
+    Matches against substrings of the error string returned by providers and the
+    scraper. Falls back to plain "error" when nothing matches.
+    """
+    if not error:
+        return "error"
+    e = error.lower()
+    if "timeout" in e:
+        return "error · timeout"
+    if "failed to load" in e or "load failed" in e:
+        return "error · load failed"
+    if "layout" in e:
+        return "error · layout changed"
+    if "extractor returned null" in e or "no data extracted" in e:
+        return "error · no data"
+    if "github" in e or "api" in e:
+        return "error · api"
+    if "not signed in" in e or "auth" in e:
+        return "error · signed out"
+    return "error"
 
 
 class _MetricRow(QWidget):
@@ -131,6 +163,7 @@ class _ProviderTile(QFrame):
     """A provider section: header line + N metric rows."""
 
     sign_in_requested = pyqtSignal(str)  # provider name
+    details_requested = pyqtSignal(str)  # provider name (when error label is clicked)
 
     def __init__(self, provider: str, display_name: str, parent: QWidget | None = None):
         super().__init__(parent)
@@ -140,9 +173,13 @@ class _ProviderTile(QFrame):
         self.header = QLabel(display_name)
         self.header.setStyleSheet("color: #e5e7eb; font-size: 12px; font-weight: 700;")
 
-        self.status = QLabel("")
-        self.status.setStyleSheet("color: #9ca3af; font-size: 10px;")
+        self.status = QLabel("loading…")
+        self.status.setStyleSheet("color: #6b7280; font-size: 10px; font-style: italic;")
         self.status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.status.setTextFormat(Qt.TextFormat.RichText)
+        self.status.linkActivated.connect(
+            lambda _href: self.details_requested.emit(self.provider)
+        )
 
         self.action_btn = QPushButton("Sign in")
         self.action_btn.setVisible(False)
@@ -170,30 +207,50 @@ class _ProviderTile(QFrame):
 
     def set_snapshot(self, snapshot: UsageSnapshot | None) -> None:
         if snapshot is None:
-            self.status.setText("--")
+            self.status.setText("loading…")
+            self.status.setStyleSheet(
+                "color: #6b7280; font-size: 10px; font-style: italic;"
+            )
+            self.status.setToolTip("")
+            self.status.setCursor(Qt.CursorShape.ArrowCursor)
             self.action_btn.setVisible(False)
             self._set_rows([])
             return
 
         if snapshot.status == SnapshotStatus.AUTH_REQUIRED:
             self.status.setText("not signed in")
-            self.status.setStyleSheet("color: #f59e0b; font-size: 10px;")
+            self.status.setStyleSheet(
+                "color: #f59e0b; font-size: 10px; font-style: normal;"
+            )
+            self.status.setToolTip(snapshot.error or "")
+            self.status.setCursor(Qt.CursorShape.ArrowCursor)
             self.action_btn.setVisible(self.provider in ("claude", "codex"))
             self._set_rows([])
             return
 
         if snapshot.status == SnapshotStatus.ERROR:
-            self.status.setText("error")
-            self.status.setStyleSheet("color: #ef4444; font-size: 10px;")
-            self.status.setToolTip(snapshot.error or "unknown error")
+            label = _short_error_reason(snapshot.error)
+            self.status.setText(
+                f'<a href="details" style="color:#ef4444; text-decoration:none;">{label}</a>'
+            )
+            self.status.setStyleSheet(
+                "color: #ef4444; font-size: 10px; font-style: normal;"
+            )
+            self.status.setToolTip(
+                (snapshot.error or "unknown error") + "\n\nClick for details."
+            )
+            self.status.setCursor(Qt.CursorShape.PointingHandCursor)
             self.action_btn.setVisible(False)
             self._set_rows([])
             return
 
         # OK
         self.status.setText("")
-        self.status.setStyleSheet("color: #9ca3af; font-size: 10px;")
+        self.status.setStyleSheet(
+            "color: #9ca3af; font-size: 10px; font-style: normal;"
+        )
         self.status.setToolTip("")
+        self.status.setCursor(Qt.CursorShape.ArrowCursor)
         self.action_btn.setVisible(False)
         self._set_rows(
             [
@@ -225,6 +282,7 @@ class UsageWidget(QWidget):
     refresh_requested = pyqtSignal()
     settings_requested = pyqtSignal()
     sign_in_requested = pyqtSignal(str)
+    details_requested = pyqtSignal(str)
     closed = pyqtSignal()
 
     def __init__(self, config: Config, parent: QWidget | None = None):
@@ -248,6 +306,10 @@ class UsageWidget(QWidget):
         title.setToolTip(f"usage-view {__version__}")
         title.setStyleSheet("color:#9ca3af; font-size:10px; font-weight:600;")
 
+        self.cadence_label = QLabel("")
+        self.cadence_label.setStyleSheet("color:#6b7280; font-size:10px;")
+        self.cadence_label.setToolTip("")
+
         self.refresh_btn = self._mini_button("↻", "Refresh now")
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
 
@@ -264,6 +326,7 @@ class UsageWidget(QWidget):
         header.setContentsMargins(8, 4, 4, 2)
         header.setSpacing(4)
         header.addWidget(title)
+        header.addWidget(self.cadence_label)
         header.addStretch(1)
         header.addWidget(self.age_label)
         header.addWidget(self.refresh_btn)
@@ -279,8 +342,9 @@ class UsageWidget(QWidget):
         outer.setSpacing(0)
         outer.addLayout(header)
         outer.addLayout(self._tile_layout)
-        outer.addStretch(1)
 
+        # Height is layout-driven (refit on tile/snapshot changes); width is
+        # user-controlled via the saved config.
         self.resize(QSize(config.window.width, config.window.height))
         if config.window.x is not None and config.window.y is not None:
             self.move(QPoint(config.window.x, config.window.y))
@@ -309,9 +373,23 @@ class UsageWidget(QWidget):
         if provider not in self._tiles:
             tile = _ProviderTile(provider, display_name, self)
             tile.sign_in_requested.connect(self.sign_in_requested.emit)
+            tile.details_requested.connect(self.details_requested.emit)
             self._tiles[provider] = tile
-            self._tile_layout.addWidget(tile)
+            self._insert_tile_in_provider_order(provider, tile)
+            self._refit_height()
         return self._tiles[provider]
+
+    def _insert_tile_in_provider_order(self, provider: str, tile: _ProviderTile) -> None:
+        provider_rank = _provider_sort_key(provider)
+        index = self._tile_layout.count()
+        for i in range(self._tile_layout.count()):
+            existing = self._tile_layout.itemAt(i).widget()
+            if not isinstance(existing, _ProviderTile):
+                continue
+            if _provider_sort_key(existing.provider) > provider_rank:
+                index = i
+                break
+        self._tile_layout.insertWidget(index, tile)
 
     def remove_tile(self, provider: str) -> None:
         tile = self._tiles.pop(provider, None)
@@ -319,17 +397,48 @@ class UsageWidget(QWidget):
             return
         self._tile_layout.removeWidget(tile)
         tile.deleteLater()
+        self._refit_height()
 
     def update_snapshot(self, snapshot: UsageSnapshot, display_name: str) -> None:
         tile = self.ensure_tile(snapshot.provider, display_name)
         tile.set_snapshot(snapshot)
         self._last_fetch_at = max(snapshot.fetched_at, self._last_fetch_at or snapshot.fetched_at)
         self._refresh_age_label()
+        self._refit_height()
+
+    def mark_loading(self, providers: dict[str, str]) -> None:
+        for provider, display_name in providers.items():
+            self.ensure_tile(provider, display_name).set_snapshot(None)
+        self._refit_height()
+
+    def _refit_height(self) -> None:
+        """Resize the window vertically to match the layout's preferred height.
+
+        Width stays user-controlled. Deferred to the next event-loop tick so
+        Qt has flushed any pending tile add/remove or stylesheet updates first.
+        """
+        QTimer.singleShot(0, self._do_refit_height)
+
+    def _do_refit_height(self) -> None:
+        target = self.sizeHint().height()
+        if target > 0 and target != self.height():
+            self.resize(self.width(), target)
 
     def set_refreshing(self, refreshing: bool) -> None:
         self.refresh_btn.setEnabled(not refreshing)
         if refreshing:
             self.age_label.setText("refreshing…")
+
+    def set_refresh_state(self, active: bool, minutes: int) -> None:
+        """Show the next-refresh cadence in the header (e.g. 'active · 5m')."""
+        mode = "active" if active else "idle"
+        self.cadence_label.setText(f"· {mode} {minutes}m")
+        self.cadence_label.setToolTip(
+            f"In {mode} mode — next auto-refresh in ~{minutes} min."
+        )
+        # Brighter when actively polling, dimmer when slowed down.
+        color = "#9ca3af" if active else "#6b7280"
+        self.cadence_label.setStyleSheet(f"color:{color}; font-size:10px;")
 
     def _refresh_age_label(self) -> None:
         if self._last_fetch_at is None:

@@ -1,8 +1,6 @@
 from __future__ import annotations
 
-from typing import Any
-
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import Qt, QUrl
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
@@ -16,22 +14,7 @@ from PyQt6.QtWidgets import (
 
 from .page import QuietWebEnginePage
 from .profile import get_profile
-
-# Verification: load the actual usage / dashboard page after the user clicks
-# "I'm signed in" and check via JS whether we're authenticated.
-VERIFY_TARGETS = {
-    "claude": (
-        "https://claude.ai/settings/usage",
-        # If we see "Plan usage limits" anywhere in the body, we're signed in.
-        # Otherwise, the page redirects to /login.
-        "(() => document.body && document.body.innerText.includes('Plan usage limits'))()",
-    ),
-    "codex": (
-        "https://chatgpt.com/codex/cloud/settings/analytics",
-        # The analytics page contains 'Balance' / 'usage limit' once signed in.
-        "(() => document.body && /usage limit/i.test(document.body.innerText))()",
-    ),
-}
+from .verify import VERIFY_TARGETS, verify_session  # noqa: F401 - VERIFY_TARGETS re-exported for callers
 
 
 def _styled_page(profile, parent) -> QWebEnginePage:
@@ -160,33 +143,23 @@ class LoginWindow(QDialog):
         self._popup_pages.append(popup_page)
 
     def _verify(self) -> None:
-        target = VERIFY_TARGETS.get(self._provider)
-        if not target:
+        if self._provider not in VERIFY_TARGETS:
             self.accept()
             return
-        url, check_js = target
         self._status.setText("Verifying session…")
         self._status.setStyleSheet("color:#6b7280;")
 
-        verify_page = _styled_page(self._profile, self)
-
-        def _after_load(ok: bool):
-            if not ok:
-                self._status.setText("Could not load verification page. Try again.")
-                self._status.setStyleSheet("color:#dc2626;")
-                return
-            verify_page.runJavaScript(check_js, _after_check)
-
-        def _after_check(result: Any):
-            if result is True:
+        def _on_done(ok: bool, error: str) -> None:
+            if ok:
                 self.accept()
+                return
+            if error:
+                self._status.setText(f"Could not load verification page ({error}). Try again.")
             else:
                 self._status.setText(
                     "Not signed in yet — please complete sign-in in the window above."
                 )
-                self._status.setStyleSheet("color:#dc2626;")
+            self._status.setStyleSheet("color:#dc2626;")
 
-        verify_page.loadFinished.connect(_after_load)
-        verify_page.load(QUrl(url))
-        # Hold a ref so it doesn't get GC'd before callbacks fire
-        self._verify_page = verify_page
+        # Hold a ref so it doesn't get GC'd before the callback fires
+        self._verifier = verify_session(self._provider, _on_done, parent=self)

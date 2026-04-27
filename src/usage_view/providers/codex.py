@@ -120,7 +120,7 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
         )
 
     metrics: list[UsageMetric] = []
-    for key, label in (("session", "5 hour"), ("weekly", "Weekly")):
+    for key, label in (("session", "Session"), ("weekly", "Weekly")):
         card = payload.get(key)
         if not card:
             continue

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from PyQt6.QtCore import Qt, QUrl
+from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtWebEngineCore import QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
@@ -47,7 +47,6 @@ class _PopupPage(QuietWebEnginePage):
         view = QWebEngineView()
         view.setPage(self)
         view.setWindowFlag(Qt.WindowType.Window, True)
-        view.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
         view.resize(560, 720)
         view.setWindowTitle("Sign in")
         view.show()
@@ -84,8 +83,9 @@ class LoginWindow(QDialog):
     def __init__(self, provider: str, login_url: str, title: str, parent=None):
         # Don't pass parent — avoids style cascade from main widget.
         super().__init__(None)
-        # Stays-on-top so it renders above the main always-on-top widget.
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        # Intentionally NOT WindowStaysOnTopHint: an always-on-top sign-in
+        # dialog can sit over OAuth popups (Apple, Microsoft, magic-link
+        # email confirmation pages) the user opens in their real browser.
         self._provider = provider
         self.setWindowTitle(title)
         self.resize(960, 760)
@@ -102,8 +102,10 @@ class LoginWindow(QDialog):
         self._popup_pages: list[_PopupPage] = []  # keep refs
 
         instructions = QLabel(
-            "Sign in normally. <b>Use email/password</b> if shown — "
-            "Google sign-in often blocks embedded browsers. "
+            "<b>Do not click \u201cContinue with Google\u201d</b> \u2014 Google blocks "
+            "embedded browsers. If you normally sign in with Google, just type "
+            "that same email address into the <b>Enter your email</b> box and "
+            "use the <b>magic link</b> sent to your inbox. "
             "Click <b>I'm signed in</b> when you reach your account."
         )
         instructions.setWordWrap(True)
@@ -146,20 +148,79 @@ class LoginWindow(QDialog):
         if self._provider not in VERIFY_TARGETS:
             self.accept()
             return
+        url, check_js = VERIFY_TARGETS[self._provider]
+        self._verify_url = url
+        self._verify_check_js = check_js
         self._status.setText("Verifying session…")
         self._status.setStyleSheet("color:#6b7280;")
 
-        def _on_done(ok: bool, error: str) -> None:
-            if ok:
-                self.accept()
-                return
-            if error:
-                self._status.setText(f"Could not load verification page ({error}). Try again.")
-            else:
-                self._status.setText(
-                    "Not signed in yet — please complete sign-in in the window above."
-                )
-            self._status.setStyleSheet("color:#dc2626;")
+        # Verify by navigating the *existing* signed-in view, not a fresh
+        # page. A fresh QWebEnginePage racing against the cookie store's
+        # async commit was landing on /login?from=logout right after a
+        # successful sign-in. The user's view already holds the live
+        # session, so navigating it to the usage URL is the most
+        # reliable way to prove the cookies stick.
+        try:
+            self._page.loadFinished.disconnect(self._on_verify_load_finished)
+        except (TypeError, RuntimeError):
+            pass
+        self._page.loadFinished.connect(self._on_verify_load_finished)
 
-        # Hold a ref so it doesn't get GC'd before the callback fires
-        self._verifier = verify_session(self._provider, _on_done, parent=self)
+        self._verify_timeout = QTimer(self)
+        self._verify_timeout.setSingleShot(True)
+        self._verify_timeout.timeout.connect(self._on_verify_timeout)
+        self._verify_timeout.start(20000)
+
+        self._view.load(QUrl(url))
+
+    def _on_verify_load_finished(self, ok: bool) -> None:
+        try:
+            self._page.loadFinished.disconnect(self._on_verify_load_finished)
+        except (TypeError, RuntimeError):
+            pass
+        if not ok:
+            self._verify_finish(False, "page failed to load")
+            return
+        # SPA hydration is async — poll the JS check rather than sampling
+        # once. Claude's usage page renders skeleton first, then fills in
+        # "Plan usage limits" a beat later.
+        self._verify_attempts = 0
+        QTimer.singleShot(1500, self._run_verify_check)
+
+    def _run_verify_check(self) -> None:
+        if getattr(self, "_verify_timeout", None) is None:
+            return  # already finished
+        landed = self._page.url().toString()
+        if "/login" in landed.lower():
+            self._verify_finish(False, "")
+            return
+        self._page.runJavaScript(self._verify_check_js, self._on_verify_js_result)
+
+    def _on_verify_js_result(self, result) -> None:
+        if result is True:
+            self._verify_finish(True, "")
+            return
+        self._verify_attempts = getattr(self, "_verify_attempts", 0) + 1
+        if self._verify_attempts >= 12:
+            self._verify_finish(False, "")
+            return
+        QTimer.singleShot(1000, self._run_verify_check)
+
+    def _on_verify_timeout(self) -> None:
+        self._verify_finish(False, "timeout")
+
+    def _verify_finish(self, ok: bool, error: str) -> None:
+        timer = getattr(self, "_verify_timeout", None)
+        if timer is not None:
+            timer.stop()
+            self._verify_timeout = None
+        if ok:
+            self.accept()
+            return
+        if error:
+            self._status.setText(f"Could not load verification page ({error}). Try again.")
+        else:
+            self._status.setText(
+                "Not signed in yet — please complete sign-in in the window above."
+            )
+        self._status.setStyleSheet("color:#dc2626;")

@@ -2,7 +2,7 @@
 
 Compact always-on-top Windows monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, system tray, draggable frameless widget.
 
-Current version: **0.3.1**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.4.1**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 ## Run from source
 
@@ -18,8 +18,8 @@ The first launch opens the Settings dialog. Configure providers there.
 
 | Provider           | Setup                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Claude.ai**      | Two paths: **Paste cookie** (recommended if you sign in with Google) — see below. **Sign in (email)** opens an embedded browser; only works for email/password accounts (Google blocks embedded browsers).                                                                                                                                                                                                                                  |
-| **ChatGPT Codex**  | Same as Claude.                                                                                                                                                                                                                                                                                                                                                                                                                             |
+| **Claude.ai**      | **Sign in (recommended):** opens an embedded browser. <b>Don't click "Continue with Google"</b> — Google blocks embedded browsers. If your account is Google-linked, just type that same email into the **Enter your email** box and use the **magic link** sent to your inbox. **Paste cookie:** alternative if magic-link is unavailable; see below. |
+| **ChatGPT Codex**  | Same as Claude — use email + magic link in the embedded browser, or paste cookie. |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal Pro/Pro+, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly quota (Pro=300, Pro+=1500, Business=300, Enterprise=1000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
 
 Sessions persist between runs in `%APPDATA%/usage-view/profiles/{provider}/`. The GitHub PAT is stored in **Windows Credential Manager** when available, with the same DPAPI-encrypted file fallback used for pasted cookies at `%APPDATA%/usage-view/secrets.dat`.

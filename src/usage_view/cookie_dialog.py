@@ -77,7 +77,9 @@ class CookieDialog(QDialog):
         self._provider = provider
         self._verifier = None
         title, instructions_html = INSTRUCTIONS[provider]
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        # Not stays-on-top: the user has to switch to their normal browser to
+        # copy the cookie, and the main widget is suspended from always-on-top
+        # by the caller while this is open.
         self.setWindowTitle(f"Paste {title}")
         self.resize(540, 460)
         self.setStyleSheet(_DARK_STYLESHEET)

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import timedelta
 from typing import Any, Callable
 
@@ -12,6 +13,7 @@ from .base import Provider
 from .idle import idle_reset_state
 
 CLAUDE_USAGE_URL = "https://claude.ai/settings/usage"
+log = logging.getLogger("usage_view.providers.claude")
 
 # Claude's settings/usage page renders rows like:
 #   "Current session  Resets in 2 hr 59 min  [bar]  64% used"
@@ -82,6 +84,8 @@ EXTRACTOR_JS = r"""
     weekly_all: readRow('All models'),
     weekly_design: readRow('Claude Design'),
     url: location.href,
+    title: document.title,
+    body_text: (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 500),
   };
 })();
 """
@@ -95,19 +99,73 @@ def _normalize_percent(percent: float | None, kind: str) -> float | None:
     return percent
 
 
-def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
-    if payload.get("logged_out"):
+def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
+    if payload.get("url") != CLAUDE_USAGE_URL:
+        return False
+    title = str(payload.get("title") or "").strip().lower()
+    page_text = str(payload.get("body_text") or "").lower()
+    if title != "claude":
+        return False
+    if "%" in page_text or "plan usage limits" in page_text:
+        return False
+    return any(marker in page_text for marker in ("new chat", "recents", "projects"))
+
+
+def _empty_usage_metrics() -> list[UsageMetric]:
+    return [
+        UsageMetric(
+            "Session",
+            0.0,
+            None,
+            "idle",
+            "Countdown starts when you next use this limit.",
+        ),
+        UsageMetric(
+            "Weekly",
+            0.0,
+            None,
+            "idle",
+            "Countdown starts when you next use this limit.",
+        ),
+    ]
+
+
+def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
+    url = str(payload.get("url") or "").lower()
+    return bool(payload.get("logged_out")) or "/logout" in url or "/login" in url
+
+
+def _build_snapshot(
+    payload: dict[str, Any],
+    *,
+    show_design: bool = False,
+) -> UsageSnapshot:
+    page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
+    if _is_logged_out_payload(payload):
         return UsageSnapshot(
             provider="claude",
             status=SnapshotStatus.AUTH_REQUIRED,
             error="Not signed in to Claude.",
+            raw=payload,
+        )
+    if (
+        "verify you are human" in page_text
+        or "just a moment" in page_text
+        or "cloudflare" in page_text
+    ):
+        return UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Claude security verification required. Click Connect and complete the browser check.",
+            raw=payload,
         )
 
     rows = (
         ("session", "Session", timedelta(hours=5)),
         ("weekly_all", "Weekly", timedelta(days=7)),
-        ("weekly_design", "Design", timedelta(days=7)),
     )
+    if show_design:
+        rows += (("weekly_design", "Design", timedelta(days=7)),)
     metrics: list[UsageMetric] = []
     for key, label, reset_window in rows:
         card = payload.get(key)
@@ -133,12 +191,15 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
         )
 
     if not metrics:
-        return UsageSnapshot(
-            provider="claude",
-            status=SnapshotStatus.ERROR,
-            error="Could not read usage from page (layout may have changed).",
-            raw=payload,
-        )
+        if _looks_like_empty_signed_in_usage(payload):
+            metrics = _empty_usage_metrics()
+        else:
+            return UsageSnapshot(
+                provider="claude",
+                status=SnapshotStatus.ERROR,
+                error="Could not read usage from page (layout may have changed).",
+                raw=payload,
+            )
 
     return UsageSnapshot(
         provider="claude",
@@ -152,23 +213,31 @@ class ClaudeProvider(Provider):
     name = "claude"
     display_name = "Claude"
 
-    def __init__(self, parent: QObject | None = None):
+    def __init__(self, parent: QObject | None = None, show_design: bool = False):
         self._parent = parent
         self._scraper: HeadlessScraper | None = None
+        self._show_design = show_design
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         def _handle(result: Any, error: str) -> None:
             self._scraper = None
             if error or not isinstance(result, dict):
-                on_done(
-                    UsageSnapshot(
-                        provider="claude",
-                        status=SnapshotStatus.ERROR,
-                        error=error or "no data extracted",
-                    )
+                snapshot = UsageSnapshot(
+                    provider="claude",
+                    status=SnapshotStatus.ERROR,
+                    error=error or "no data extracted",
                 )
+                log.warning(
+                    "provider snapshot error provider=claude reason=%s", snapshot.error
+                )
+                on_done(snapshot)
                 return
-            on_done(_build_snapshot(result))
+            snapshot = _build_snapshot(result, show_design=self._show_design)
+            if snapshot.status == SnapshotStatus.ERROR:
+                log.warning(
+                    "provider snapshot error provider=claude reason=%s", snapshot.error
+                )
+            on_done(snapshot)
 
         self._scraper = HeadlessScraper(
             provider="claude",

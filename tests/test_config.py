@@ -1,4 +1,9 @@
-from usage_view.config import Config, app_data_dir, config_path, webview_profile_dir
+from usage_view.config import (
+    Config,
+    app_data_dir,
+    config_path,
+    webview_profile_dir,
+)
 
 
 def test_defaults():
@@ -6,6 +11,7 @@ def test_defaults():
     assert c.active_refresh_interval_minutes == 5
     assert c.refresh_interval_minutes == 60
     assert c.providers.claude is True
+    assert c.providers.claude_design is False
     assert c.providers.codex is True
     assert c.providers.copilot is True
     assert c.start_with_windows is False
@@ -66,3 +72,16 @@ def test_load_migrates_old_refresh_interval_to_active_rate():
     c = Config.load()
     assert c.active_refresh_interval_minutes == 5
     assert c.refresh_interval_minutes == 60
+
+
+def test_load_clamps_saved_window_size():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"window": {"width": 5000, "height": 2}}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert c.window.width == 340
+    assert c.window.height == 80

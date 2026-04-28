@@ -11,6 +11,9 @@ from pydantic import BaseModel, Field
 APP_NAME = "usage-view"
 KEYRING_SERVICE = "usage-view"
 KEYRING_GITHUB_PAT = "github-pat"
+WINDOW_WIDTH = 340
+WINDOW_MIN_HEIGHT = 80
+WINDOW_MAX_HEIGHT = 420
 
 # Per-provider session cookie names (HttpOnly cookies you can't read via JS).
 # COOKIE_NAMES is the primary name shown in the UI. COOKIE_NAME_ALIASES covers
@@ -55,14 +58,15 @@ def config_path() -> Path:
 class WindowState(BaseModel):
     x: int | None = None
     y: int | None = None
-    width: int = 340
-    height: int = 220
+    width: int = WINDOW_WIDTH
+    height: int = Field(default=220, ge=WINDOW_MIN_HEIGHT, le=WINDOW_MAX_HEIGHT)
     always_on_top: bool = True
     opacity: float = Field(default=1.0, ge=0.3, le=1.0)
 
 
 class ProviderToggles(BaseModel):
     claude: bool = True
+    claude_design: bool = False
     codex: bool = True
     copilot: bool = True
 
@@ -103,6 +107,14 @@ class Config(BaseModel):
             if isinstance(old_interval, int):
                 data["active_refresh_interval_minutes"] = old_interval
                 data["refresh_interval_minutes"] = 60
+        window = data.get("window")
+        if isinstance(window, dict):
+            width = window.get("width")
+            height = window.get("height")
+            if isinstance(width, int):
+                window["width"] = WINDOW_WIDTH
+            if isinstance(height, int):
+                window["height"] = max(WINDOW_MIN_HEIGHT, min(height, WINDOW_MAX_HEIGHT))
 
     def save(self) -> None:
         path = config_path()
@@ -121,17 +133,23 @@ def get_github_pat() -> str | None:
     except keyring.errors.KeyringError:
         pass
     from .secret_storage import load_secret
-    return load_secret(KEYRING_GITHUB_PAT)
+    legacy_pat = load_secret(KEYRING_GITHUB_PAT)
+    if not legacy_pat:
+        return None
+    try:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, legacy_pat)
+    except keyring.errors.KeyringError:
+        return legacy_pat
+    from .secret_storage import save_secret
+    save_secret(KEYRING_GITHUB_PAT, None)
+    return legacy_pat
 
 
 def set_github_pat(pat: str | None) -> None:
     from .secret_storage import save_secret
     if pat:
-        try:
-            keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, pat)
-        except keyring.errors.KeyringError:
-            pass
-        save_secret(KEYRING_GITHUB_PAT, pat)
+        keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, pat)
+        save_secret(KEYRING_GITHUB_PAT, None)
     else:
         try:
             keyring.delete_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT)

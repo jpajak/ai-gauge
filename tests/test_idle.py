@@ -37,3 +37,14 @@ def test_idle_reset_state_keeps_nonzero_usage():
     assert reset == resets_at
     assert label is None
     assert note is None
+
+
+def test_idle_reset_state_marks_unused_missing_reset_as_idle():
+    reset, label, note = idle_reset_state(
+        percent=0,
+        resets_at=None,
+        window=timedelta(days=7),
+    )
+    assert reset is None
+    assert label == "idle"
+    assert note is not None

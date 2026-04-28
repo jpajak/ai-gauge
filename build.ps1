@@ -33,7 +33,9 @@ if ($OneFile) {
 $args = @(
     "-m", "PyInstaller",
     "--noconfirm",
+    "--clean",
     "--windowed",
+    "--noupx",
     "--name", "usage-view",
     "--paths", "src",
     "--collect-all", "PyQt6.QtWebEngineWidgets",

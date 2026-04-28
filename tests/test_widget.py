@@ -49,3 +49,89 @@ def test_mark_loading_invalidates_existing_tile_data(qtbot):
     assert tile.status.text().startswith("loading")
     assert tile.status.toolTip() == ""
     assert tile._rows == []  # noqa: SLF001
+
+
+def test_auth_required_tile_uses_sign_in_button(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Not signed in.",
+        ),
+        "Claude",
+    )
+
+    tile = widget._tiles["claude"]  # noqa: SLF001
+    assert tile.action_btn.text() == "Sign in"
+    assert not tile.action_btn.isHidden()
+
+
+def test_sign_in_button_emits_sign_in_signal(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="codex",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Not signed in.",
+        ),
+        "Codex",
+    )
+
+    with qtbot.waitSignal(widget.sign_in_requested) as signal:
+        widget._tiles["codex"].action_btn.click()  # noqa: SLF001
+
+    assert signal.args == ["codex"]
+
+
+def test_refresh_state_shows_next_refresh_countdown(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.set_refresh_state(
+        active=True,
+        minutes=5,
+        next_at=datetime.now() + timedelta(minutes=3, seconds=5),
+    )
+
+    assert widget.cadence_label.text() == "· active next 4m"
+    assert "5 min cadence" in widget.cadence_label.toolTip()
+
+
+def test_refresh_state_shows_now_when_next_refresh_is_due(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.set_refresh_state(
+        active=False,
+        minutes=60,
+        next_at=datetime.now() - timedelta(seconds=1),
+    )
+
+    assert widget.cadence_label.text() == "· idle next now"
+
+
+def test_widget_uses_fixed_width_despite_extreme_saved_size(qtbot):
+    config = Config()
+    config.window.width = 5000
+    config.window.height = 2
+
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    assert widget.width() == 340
+    assert widget.height() >= 80
+
+
+def test_refit_restores_fixed_width_after_dpi_resize_glitch(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.resize(5000, 120)
+
+    widget._do_refit_height()  # noqa: SLF001
+
+    assert widget.width() == 340

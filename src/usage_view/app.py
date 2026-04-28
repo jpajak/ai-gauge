@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+import json
 import logging
+import os
 import sys
 from datetime import datetime, timedelta
 
@@ -9,7 +11,7 @@ from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
 
 from . import __version__
-from .config import Config, get_github_pat, get_provider_cookie
+from .config import Config
 from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
 from .history import HistoryStore
@@ -32,6 +34,7 @@ LOGIN_URLS = {
 }
 
 _ACTIVE_MODE_MINUTES = 30
+_LOG_VALUE_LIMIT = 300
 
 
 def _make_tray_icon(percent: float | None = None) -> QIcon:
@@ -74,14 +77,47 @@ def _snapshot_signature(snapshot: UsageSnapshot) -> tuple:
         tuple(
             (
                 metric.label,
-                round(metric.percent_used or 0, 1)
-                if metric.percent_used is not None
-                else None,
+                (
+                    round(metric.percent_used or 0, 1)
+                    if metric.percent_used is not None
+                    else None
+                ),
                 metric.reset_label,
             )
             for metric in snapshot.metrics
         ),
     )
+
+
+def _summarize_for_log(value, *, depth: int = 0):
+    if depth > 3:
+        return "..."
+    if isinstance(value, str):
+        return (
+            value
+            if len(value) <= _LOG_VALUE_LIMIT
+            else value[:_LOG_VALUE_LIMIT] + "..."
+        )
+    if isinstance(value, (int, float, bool)) or value is None:
+        return value
+    if isinstance(value, dict):
+        return {
+            str(k): _summarize_for_log(v, depth=depth + 1)
+            for k, v in sorted(value.items(), key=lambda item: str(item[0]))
+        }
+    if isinstance(value, (list, tuple)):
+        summarized = [_summarize_for_log(v, depth=depth + 1) for v in value[:5]]
+        if len(value) > 5:
+            summarized.append(f"... {len(value) - 5} more")
+        return summarized
+    return repr(value)
+
+
+def _raw_summary(raw: dict) -> str:
+    try:
+        return json.dumps(_summarize_for_log(raw), sort_keys=True, default=str)
+    except TypeError:
+        return repr(raw)
 
 
 class App(QObject):
@@ -90,7 +126,14 @@ class App(QObject):
     def __init__(self):
         super().__init__()
         setup_logging()
-        log.info("usage-view %s starting", __version__)
+        log.info(
+            "usage-view %s starting frozen=%s executable=%s cwd=%s appdata=%s",
+            __version__,
+            bool(getattr(sys, "frozen", False)),
+            sys.executable,
+            os.getcwd(),
+            os.environ.get("APPDATA", ""),
+        )
         self._config = Config.load()
         self._snapshots: dict[str, UsageSnapshot] = {}
         self._history = HistoryStore()
@@ -142,11 +185,10 @@ class App(QObject):
         self._timer.timeout.connect(lambda: self.refresh_now(manual=False))
         self._restart_timer()
 
-        # First-run: open settings if nothing is configured
-        if not self._has_any_credentials():
-            QTimer.singleShot(200, self.open_settings)
-        else:
-            QTimer.singleShot(500, lambda: self.refresh_now(manual=True))
+        # Always start with a refresh — fresh installs see provider tiles in
+        # their auth-required state with a Sign in button instead of a
+        # surprise modal popup.
+        QTimer.singleShot(500, lambda: self.refresh_now(manual=True))
 
         self._widget.show()
 
@@ -156,7 +198,10 @@ class App(QObject):
         # Tear down any existing providers (no shared state to clean up beyond refs)
         self._providers.clear()
         if self._config.providers.claude:
-            self._providers["claude"] = ClaudeProvider(parent=self)
+            self._providers["claude"] = ClaudeProvider(
+                parent=self,
+                show_design=self._config.providers.claude_design,
+            )
             self._widget.ensure_tile("claude", "Claude")
         else:
             self._widget.remove_tile("claude")
@@ -170,19 +215,6 @@ class App(QObject):
             self._widget.ensure_tile("copilot", "Copilot")
         else:
             self._widget.remove_tile("copilot")
-
-    def _has_any_credentials(self) -> bool:
-        if get_github_pat() and self._config.providers.copilot:
-            return True
-        # Profile dirs exist & non-empty hint at past sign-ins
-        from .config import webview_profile_dir
-        for p in ("claude", "codex"):
-            if not getattr(self._config.providers, p):
-                continue
-            d = webview_profile_dir(p)
-            if d.exists() and any(d.iterdir()):
-                return True
-        return False
 
     def _restart_timer(self) -> None:
         self._timer.stop()
@@ -199,8 +231,54 @@ class App(QObject):
             unchanged_cycles=self._unchanged_cycles,
             max_minutes=max_minutes,
         )
-        self._timer.start(minutes * 60_000)
-        self._widget.set_refresh_state(active=active, minutes=minutes)
+        next_refresh_at = datetime.now() + timedelta(minutes=minutes)
+        # Don't let an idle backoff stretch past a known reset — otherwise the
+        # panel keeps showing 100% for tens of minutes after the limit has
+        # actually rolled over. Pull the refresh forward so we re-read shortly
+        # after the predicted reset.
+        soon_after_reset = self._earliest_reset_refresh_time()
+        if soon_after_reset is not None and soon_after_reset < next_refresh_at:
+            next_refresh_at = soon_after_reset
+            minutes = max(
+                1,
+                int((next_refresh_at - datetime.now()).total_seconds() // 60) or 1,
+            )
+        delay_ms = max(
+            1000,
+            int((next_refresh_at - datetime.now()).total_seconds() * 1000),
+        )
+        self._timer.start(delay_ms)
+        self._widget.set_refresh_state(
+            active=active,
+            minutes=minutes,
+            next_at=next_refresh_at,
+        )
+
+    def _earliest_reset_refresh_time(self) -> datetime | None:
+        """Earliest moment the next scheduled refresh should run because some
+        provider's metric is predicted to reset soon.
+
+        Returns ``None`` when there is nothing useful to anticipate.
+        """
+        now = datetime.now()
+        # Give the upstream a minute to commit the reset before we re-read.
+        grace = timedelta(minutes=1)
+        earliest: datetime | None = None
+        for snap in self._snapshots.values():
+            if snap.status != SnapshotStatus.OK:
+                continue
+            for metric in snap.metrics:
+                if metric.resets_at is None:
+                    continue
+                if (metric.percent_used or 0) <= 0:
+                    # An unused metric resetting changes nothing visible.
+                    continue
+                target = metric.resets_at + grace
+                if target <= now:
+                    continue
+                if earliest is None or target < earliest:
+                    earliest = target
+        return earliest
 
     # ----- Refresh -----
 
@@ -210,23 +288,26 @@ class App(QObject):
         if self._inflight or self._refresh_queue:
             return
         if manual:
-            self._active_until = datetime.now() + timedelta(minutes=_ACTIVE_MODE_MINUTES)
+            self._active_until = datetime.now() + timedelta(
+                minutes=_ACTIVE_MODE_MINUTES
+            )
             self._unchanged_cycles = 0
         self._timer.stop()
         self._current_refresh_manual = manual
         self._cycle_signatures = {}
         self._widget.set_refreshing(True)
         self._refresh_queue = list(self._providers)
-        self._widget.mark_loading(
-            {
-                name: {
-                    "claude": "Claude",
-                    "codex": "Codex",
-                    "copilot": "Copilot",
-                }.get(name, name)
-                for name in self._refresh_queue
-            }
-        )
+        if manual:
+            self._widget.mark_loading(
+                {
+                    name: {
+                        "claude": "Claude",
+                        "codex": "Codex",
+                        "copilot": "Copilot",
+                    }.get(name, name)
+                    for name in self._refresh_queue
+                }
+            )
         self._start_next_refresh()
 
     def _start_next_refresh(self) -> None:
@@ -259,10 +340,19 @@ class App(QObject):
         self._inflight.discard(snapshot.provider)
         if snapshot.status == SnapshotStatus.ERROR:
             log.warning(
-                "snapshot error provider=%s error=%s raw_keys=%s",
+                "snapshot error provider=%s error=%s raw_keys=%s raw_summary=%s",
                 snapshot.provider,
                 snapshot.error,
                 sorted(snapshot.raw.keys()) if snapshot.raw else [],
+                _raw_summary(snapshot.raw) if snapshot.raw else "{}",
+            )
+        elif snapshot.status == SnapshotStatus.AUTH_REQUIRED:
+            log.info(
+                "snapshot auth_required provider=%s error=%s raw_keys=%s raw_summary=%s",
+                snapshot.provider,
+                snapshot.error,
+                sorted(snapshot.raw.keys()) if snapshot.raw else [],
+                _raw_summary(snapshot.raw) if snapshot.raw else "{}",
             )
         try:
             self._history.record_snapshot(snapshot)
@@ -280,7 +370,9 @@ class App(QObject):
         else:
             changed = self._cycle_changed()
             if changed:
-                self._active_until = datetime.now() + timedelta(minutes=_ACTIVE_MODE_MINUTES)
+                self._active_until = datetime.now() + timedelta(
+                    minutes=_ACTIVE_MODE_MINUTES
+                )
                 self._unchanged_cycles = 0
             elif not self._current_refresh_manual:
                 self._unchanged_cycles += 1
@@ -315,15 +407,35 @@ class App(QObject):
             else f"usage view {__version__}"
         )
 
-    # ----- Login -----
+    # ----- Login / cookie paste -----
 
     def open_login(self, provider: str) -> None:
         if provider not in LOGIN_URLS:
             return
         url, title = LOGIN_URLS[provider]
         dlg = LoginWindow(provider, url, title)
-        if dlg.exec():
+        self._widget.suspend_always_on_top()
+        try:
+            accepted = bool(dlg.exec())
+        finally:
+            self._widget.restore_always_on_top()
+        if accepted:
             self.refresh_now(manual=True)
+
+    def open_cookie_paste(self, provider: str) -> None:
+        try:
+            dlg = CookieDialog(provider)
+        except ValueError:
+            return
+        self._widget.suspend_always_on_top()
+        try:
+            accepted = bool(dlg.exec())
+        finally:
+            self._widget.restore_always_on_top()
+        if accepted:
+            # QWebEngineCookieStore commits asynchronously; give the freshly
+            # injected cookie a short beat before loading the scrape page.
+            QTimer.singleShot(1000, lambda: self.refresh_now(manual=True))
 
     def open_error_details(self, provider: str) -> None:
         snapshot = self._snapshots.get(provider)
@@ -337,16 +449,6 @@ class App(QObject):
         dlg = ErrorDetailsDialog(provider, display_name, snapshot, parent=self._widget)
         dlg.exec()
 
-    def open_cookie_paste(self, provider: str) -> None:
-        try:
-            dlg = CookieDialog(provider)
-        except ValueError:
-            return
-        if dlg.exec():
-            # QWebEngineCookieStore commits asynchronously; give the freshly
-            # injected cookie a short beat before loading the scrape page.
-            QTimer.singleShot(1000, lambda: self.refresh_now(manual=True))
-
     # ----- Settings -----
 
     def open_settings(self) -> None:
@@ -354,7 +456,12 @@ class App(QObject):
         dlg = SettingsDialog(self._config, parent=self._widget)
         dlg.sign_in_clicked.connect(self.open_login)
         dlg.paste_cookie_clicked.connect(self.open_cookie_paste)
-        if dlg.exec():
+        self._widget.suspend_always_on_top()
+        try:
+            accepted = bool(dlg.exec())
+        finally:
+            self._widget.restore_always_on_top()
+        if accepted:
             dlg.apply_to(self._config)
             self._build_providers()
             self._widget.apply_window_settings()
@@ -373,6 +480,7 @@ class App(QObject):
         if cached is None or cached.status != SnapshotStatus.OK or not cached.raw:
             return
         from .providers.copilot import _build_snapshot
+
         try:
             self._on_snapshot(_build_snapshot(cached.raw, quota))
         except Exception:  # noqa: BLE001

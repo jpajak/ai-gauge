@@ -169,8 +169,9 @@ class SettingsDialog(QDialog):
         # Don't pass parent — avoids any cascading stylesheet issues.
         # Keep window centered relative to parent manually if needed later.
         super().__init__(None)
-        # Stays-on-top so we render above the main widget (which is itself stays-on-top).
-        self.setWindowFlag(Qt.WindowType.WindowStaysOnTopHint, True)
+        # Intentionally NOT stays-on-top: users may need to switch to their
+        # normal browser to grab a session cookie, and the app's own widget
+        # is suspended from always-on-top by the caller while this is open.
         self.setWindowTitle("Usage View — Settings")
         self.setModal(True)
         self.resize(560, 650)
@@ -240,40 +241,51 @@ class SettingsDialog(QDialog):
         self.claude_cb = QCheckBox("Claude.ai")
         self.claude_cb.setToolTip("Show the Claude.ai usage tile in the panel.")
         self.claude_cb.setChecked(config.providers.claude)
-        claude_paste = QPushButton("Paste cookie")
-        claude_paste.setToolTip(
-            "Paste the sessionKey cookie from your real browser (Google sign-in path)."
-        )
-        claude_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("claude"))
         claude_signin = QPushButton("Sign in (email)")
+        claude_signin.setObjectName("claude_signin_btn")
         claude_signin.setToolTip(
             "Open an embedded browser to sign in. Only works for email/password — "
             "Google sign-in is blocked in embedded browsers."
         )
         claude_signin.clicked.connect(lambda: self.sign_in_clicked.emit("claude"))
+        claude_paste = QPushButton("Paste cookie")
+        claude_paste.setObjectName("claude_paste_cookie_btn")
+        claude_paste.setToolTip(
+            "Paste the sessionKey cookie from your real browser (Google sign-in path)."
+        )
+        claude_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("claude"))
         claude_row = QHBoxLayout()
         claude_row.addWidget(self.claude_cb, 1)
-        claude_row.addWidget(claude_paste)
         claude_row.addWidget(claude_signin)
+        claude_row.addWidget(claude_paste)
         providers_layout.addLayout(claude_row)
+
+        self.claude_design_cb = QCheckBox("Show Claude Design limit")
+        self.claude_design_cb.setToolTip(
+            "Show Claude's separate design-generation usage limit when Claude exposes it."
+        )
+        self.claude_design_cb.setChecked(config.providers.claude_design)
+        providers_layout.addWidget(self.claude_design_cb)
 
         self.codex_cb = QCheckBox("ChatGPT Codex")
         self.codex_cb.setToolTip("Show the ChatGPT Codex usage tile in the panel.")
         self.codex_cb.setChecked(config.providers.codex)
-        codex_paste = QPushButton("Paste cookie")
-        codex_paste.setToolTip(
-            "Paste the __Secure-next-auth.session-token cookie from your real browser."
-        )
-        codex_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("codex"))
         codex_signin = QPushButton("Sign in (email)")
+        codex_signin.setObjectName("codex_signin_btn")
         codex_signin.setToolTip(
             "Open an embedded browser to sign in. Only works for email/password."
         )
         codex_signin.clicked.connect(lambda: self.sign_in_clicked.emit("codex"))
+        codex_paste = QPushButton("Paste cookie")
+        codex_paste.setObjectName("codex_paste_cookie_btn")
+        codex_paste.setToolTip(
+            "Paste the __Secure-next-auth.session-token cookie from your real browser."
+        )
+        codex_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("codex"))
         codex_row = QHBoxLayout()
         codex_row.addWidget(self.codex_cb, 1)
-        codex_row.addWidget(codex_paste)
         codex_row.addWidget(codex_signin)
+        codex_row.addWidget(codex_paste)
         providers_layout.addLayout(codex_row)
 
         google_hint = _hint_label(
@@ -300,11 +312,21 @@ class SettingsDialog(QDialog):
         self.gh_pat_edit = QLineEdit()
         self.gh_pat_edit.setEchoMode(QLineEdit.EchoMode.Password)
         existing_pat = get_github_pat()
+        self._had_existing_pat = bool(existing_pat)
         if existing_pat:
-            self.gh_pat_edit.setPlaceholderText("•••••••••• (saved — leave blank to keep)")
+            self.gh_pat_edit.setPlaceholderText(
+                "•••••••••• (saved — leave blank to keep)"
+            )
         else:
             self.gh_pat_edit.setPlaceholderText("ghp_... or github_pat_...")
         copilot_form.addRow("Personal Access Token:", self.gh_pat_edit)
+
+        self.clear_pat_cb = QCheckBox("Clear saved GitHub PAT")
+        self.clear_pat_cb.setToolTip(
+            "Remove the token from Windows Credential Manager."
+        )
+        self.clear_pat_cb.setVisible(self._had_existing_pat)
+        copilot_form.addRow("", self.clear_pat_cb)
 
         pat_help = _hint_label(
             "Use a <b>fine-grained PAT</b>. Add <b>Account permissions → Plan → Read</b> "
@@ -385,6 +407,25 @@ class SettingsDialog(QDialog):
 
     def _accept(self) -> None:
         new_pat = self.gh_pat_edit.text().strip()
+        if self.clear_pat_cb.isChecked() and not new_pat:
+            try:
+                set_github_pat(None)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "PAT was not cleared",
+                    f"The saved token could not be cleared:\n{exc}",
+                )
+                return
+            if get_github_pat():
+                QMessageBox.warning(
+                    self,
+                    "PAT was not cleared",
+                    "The token still appears to be available after clearing. "
+                    "Remove the 'usage-view' / 'github-pat' credential from "
+                    "Windows Credential Manager.",
+                )
+                return
         if new_pat:
             try:
                 set_github_pat(new_pat)
@@ -432,6 +473,7 @@ class SettingsDialog(QDialog):
         config.window.always_on_top = self.always_on_top_cb.isChecked()
         config.window.opacity = self.opacity_slider.value() / 100.0
         config.providers.claude = self.claude_cb.isChecked()
+        config.providers.claude_design = self.claude_design_cb.isChecked()
         config.providers.codex = self.codex_cb.isChecked()
         config.providers.copilot = self.copilot_cb.isChecked()
         username = self.gh_username.text().strip()

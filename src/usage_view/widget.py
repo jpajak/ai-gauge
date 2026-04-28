@@ -1,7 +1,6 @@
 from __future__ import annotations
 
-from datetime import datetime
-from typing import Callable
+from datetime import datetime, timedelta
 
 from PyQt6.QtCore import QPoint, QSize, Qt, QTimer, pyqtSignal
 from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPen
@@ -17,11 +16,15 @@ from PyQt6.QtWidgets import (
 )
 
 from . import __version__
-from .config import Config
+from .config import Config, WINDOW_MAX_HEIGHT, WINDOW_MIN_HEIGHT, WINDOW_WIDTH
 from .models import SnapshotStatus, UsageSnapshot
 
 ROW_BAR_HEIGHT = 8
 PROVIDER_ORDER = ("claude", "codex", "copilot")
+
+
+def _clamp_height(value: int) -> int:
+    return max(WINDOW_MIN_HEIGHT, min(value, WINDOW_MAX_HEIGHT))
 
 
 def _provider_sort_key(provider: str) -> tuple[int, str]:
@@ -57,6 +60,18 @@ def _format_age(dt: datetime) -> str:
         return f"{secs // 60}m ago"
     h = secs // 3600
     return f"{h}h ago"
+
+
+def _format_countdown(dt: datetime) -> str:
+    secs = int((dt - datetime.now()).total_seconds())
+    if secs <= 0:
+        return "now"
+    if secs < 60:
+        return "<1m"
+    if secs < 3600:
+        return f"{(secs + 59) // 60}m"
+    h, m = divmod((secs + 59) // 60, 60)
+    return f"{h}h {m:02d}m" if m else f"{h}h"
 
 
 def _color_for_percent(p: float | None) -> str:
@@ -113,12 +128,16 @@ class _MetricRow(QWidget):
         self.pct = QLabel("--")
         self.pct.setStyleSheet("color: #f3f4f6; font-size: 11px; font-weight: 600;")
         self.pct.setFixedWidth(34)
-        self.pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.pct.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
 
         self.reset = QLabel("")
         self.reset.setStyleSheet("color: #9ca3af; font-size: 10px;")
         self.reset.setFixedWidth(58)
-        self.reset.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.reset.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 1, 0, 1)
@@ -174,8 +193,12 @@ class _ProviderTile(QFrame):
         self.header.setStyleSheet("color: #e5e7eb; font-size: 12px; font-weight: 700;")
 
         self.status = QLabel("loading…")
-        self.status.setStyleSheet("color: #6b7280; font-size: 10px; font-style: italic;")
-        self.status.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+        self.status.setStyleSheet(
+            "color: #6b7280; font-size: 10px; font-style: italic;"
+        )
+        self.status.setAlignment(
+            Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+        )
         self.status.setTextFormat(Qt.TextFormat.RichText)
         self.status.linkActivated.connect(
             lambda _href: self.details_requested.emit(self.provider)
@@ -189,7 +212,9 @@ class _ProviderTile(QFrame):
             "border-radius:3px; padding:0 8px; font-size:10px; }"
             "QPushButton:hover { background:#6b7280; }"
         )
-        self.action_btn.clicked.connect(lambda: self.sign_in_requested.emit(self.provider))
+        self.action_btn.clicked.connect(
+            lambda: self.sign_in_requested.emit(self.provider)
+        )
 
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
@@ -291,6 +316,7 @@ class UsageWidget(QWidget):
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool,
         )
         self._config = config
+        self.setFixedWidth(WINDOW_WIDTH)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         # Background is drawn in paintEvent; no widget-level stylesheet — that
         # would cascade into child dialogs (Settings) and break their layout.
@@ -300,6 +326,9 @@ class UsageWidget(QWidget):
 
         self._tiles: dict[str, _ProviderTile] = {}
         self._last_fetch_at: datetime | None = None
+        self._refresh_mode: str | None = None
+        self._refresh_interval_minutes: int | None = None
+        self._next_refresh_at: datetime | None = None
 
         # Header bar
         title = QLabel(f"usage view {__version__}")
@@ -344,17 +373,22 @@ class UsageWidget(QWidget):
         outer.addLayout(self._tile_layout)
 
         # Height is layout-driven (refit on tile/snapshot changes); width is
-        # user-controlled via the saved config.
-        self.resize(QSize(config.window.width, config.window.height))
+        # intentionally fixed because the frameless widget has no resize handle.
+        self.resize(
+            QSize(
+                WINDOW_WIDTH,
+                _clamp_height(config.window.height),
+            )
+        )
         if config.window.x is not None and config.window.y is not None:
             self.move(QPoint(config.window.x, config.window.y))
 
         # Drag-by-anywhere
         self._drag_offset: QPoint | None = None
 
-        # Update "Xs ago" label every second
+        # Update "Xs ago" and next-refresh countdown labels every second.
         self._tick = QTimer(self)
-        self._tick.timeout.connect(self._refresh_age_label)
+        self._tick.timeout.connect(self._refresh_header_labels)
         self._tick.start(1000)
 
     def _mini_button(self, glyph: str, tooltip: str) -> QPushButton:
@@ -379,7 +413,9 @@ class UsageWidget(QWidget):
             self._refit_height()
         return self._tiles[provider]
 
-    def _insert_tile_in_provider_order(self, provider: str, tile: _ProviderTile) -> None:
+    def _insert_tile_in_provider_order(
+        self, provider: str, tile: _ProviderTile
+    ) -> None:
         provider_rank = _provider_sort_key(provider)
         index = self._tile_layout.count()
         for i in range(self._tile_layout.count()):
@@ -402,8 +438,10 @@ class UsageWidget(QWidget):
     def update_snapshot(self, snapshot: UsageSnapshot, display_name: str) -> None:
         tile = self.ensure_tile(snapshot.provider, display_name)
         tile.set_snapshot(snapshot)
-        self._last_fetch_at = max(snapshot.fetched_at, self._last_fetch_at or snapshot.fetched_at)
-        self._refresh_age_label()
+        self._last_fetch_at = max(
+            snapshot.fetched_at, self._last_fetch_at or snapshot.fetched_at
+        )
+        self._refresh_header_labels()
         self._refit_height()
 
     def mark_loading(self, providers: dict[str, str]) -> None:
@@ -414,37 +452,60 @@ class UsageWidget(QWidget):
     def _refit_height(self) -> None:
         """Resize the window vertically to match the layout's preferred height.
 
-        Width stays user-controlled. Deferred to the next event-loop tick so
+        Width stays fixed. Deferred to the next event-loop tick so
         Qt has flushed any pending tile add/remove or stylesheet updates first.
         """
         QTimer.singleShot(0, self._do_refit_height)
 
     def _do_refit_height(self) -> None:
-        target = self.sizeHint().height()
-        if target > 0 and target != self.height():
-            self.resize(self.width(), target)
+        target_height = _clamp_height(self.sizeHint().height())
+        target_width = WINDOW_WIDTH
+        if target_height != self.height() or target_width != self.width():
+            self.resize(target_width, target_height)
 
     def set_refreshing(self, refreshing: bool) -> None:
         self.refresh_btn.setEnabled(not refreshing)
         if refreshing:
             self.age_label.setText("refreshing…")
+            self.cadence_label.setText("· refreshing")
+            self.cadence_label.setToolTip("Refresh is currently running.")
 
-    def set_refresh_state(self, active: bool, minutes: int) -> None:
-        """Show the next-refresh cadence in the header (e.g. 'active · 5m')."""
+    def set_refresh_state(
+        self,
+        active: bool,
+        minutes: int,
+        next_at: datetime | None = None,
+    ) -> None:
+        """Show refresh mode plus a live countdown to the next scheduled run."""
         mode = "active" if active else "idle"
-        self.cadence_label.setText(f"· {mode} {minutes}m")
-        self.cadence_label.setToolTip(
-            f"In {mode} mode — next auto-refresh in ~{minutes} min."
-        )
-        # Brighter when actively polling, dimmer when slowed down.
-        color = "#9ca3af" if active else "#6b7280"
-        self.cadence_label.setStyleSheet(f"color:{color}; font-size:10px;")
+        self._refresh_mode = mode
+        self._refresh_interval_minutes = minutes
+        self._next_refresh_at = next_at or datetime.now() + timedelta(minutes=minutes)
+        self._refresh_header_labels()
+
+    def _refresh_header_labels(self) -> None:
+        self._refresh_age_label()
+        self._refresh_cadence_label()
 
     def _refresh_age_label(self) -> None:
-        if self._last_fetch_at is None:
-            self.age_label.setText("")
+        self.age_label.setText(
+            "" if self._last_fetch_at is None else _format_age(self._last_fetch_at)
+        )
+
+    def _refresh_cadence_label(self) -> None:
+        if self._refresh_mode is None or self._next_refresh_at is None:
+            self.cadence_label.setText("")
+            self.cadence_label.setToolTip("")
             return
-        self.age_label.setText(_format_age(self._last_fetch_at))
+        remaining = _format_countdown(self._next_refresh_at)
+        self.cadence_label.setText(f"· {self._refresh_mode} next {remaining}")
+        interval = self._refresh_interval_minutes or 0
+        self.cadence_label.setToolTip(
+            f"In {self._refresh_mode} mode — {interval} min cadence. "
+            f"Next auto-refresh: {self._next_refresh_at.strftime('%Y-%m-%d %H:%M:%S')}."
+        )
+        color = "#9ca3af" if self._refresh_mode == "active" else "#6b7280"
+        self.cadence_label.setStyleSheet(f"color:{color}; font-size:10px;")
 
     def _apply_always_on_top(self, on: bool) -> None:
         flags = self.windowFlags()
@@ -453,6 +514,25 @@ class UsageWidget(QWidget):
         else:
             flags &= ~Qt.WindowType.WindowStaysOnTopHint
         self.setWindowFlags(flags)
+
+    def suspend_always_on_top(self) -> None:
+        """Drop always-on-top so a spawned browser window can come forward.
+
+        Used while a Connect or Settings dialog is open: those dialogs ask
+        the user to interact with a Chrome/Edge window the app launched,
+        and an always-on-top widget would sit over it.
+        """
+        was_visible = self.isVisible()
+        self._apply_always_on_top(False)
+        if was_visible:
+            self.show()
+
+    def restore_always_on_top(self) -> None:
+        """Re-apply the configured always-on-top setting after a dialog closes."""
+        was_visible = self.isVisible()
+        self._apply_always_on_top(self._config.window.always_on_top)
+        if was_visible:
+            self.show()
 
     def apply_window_settings(self) -> None:
         """Re-read window-related fields from config and apply."""
@@ -466,24 +546,33 @@ class UsageWidget(QWidget):
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         if event.button() == Qt.MouseButton.LeftButton:
-            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            self._drag_offset = (
+                event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+            )
             event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
-        if self._drag_offset is not None and event.buttons() & Qt.MouseButton.LeftButton:
+        if (
+            self._drag_offset is not None
+            and event.buttons() & Qt.MouseButton.LeftButton
+        ):
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             event.accept()
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         self._drag_offset = None
+        self._do_refit_height()
         # Persist position
         self._config.window.x = self.x()
         self._config.window.y = self.y()
+        self._config.window.width = WINDOW_WIDTH
+        self._config.window.height = _clamp_height(self.height())
         self._config.save()
 
     def closeEvent(self, event):  # noqa: N802
-        self._config.window.width = self.width()
-        self._config.window.height = self.height()
+        self._do_refit_height()
+        self._config.window.width = WINDOW_WIDTH
+        self._config.window.height = _clamp_height(self.height())
         self._config.save()
         self.closed.emit()
         super().closeEvent(event)

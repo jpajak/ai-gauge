@@ -1,7 +1,12 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
-from usage_view.app import App, _adaptive_refresh_minutes, _raw_summary
+from usage_view.app import (
+    App,
+    _acquire_instance_lock,
+    _adaptive_refresh_minutes,
+    _raw_summary,
+)
 from usage_view.models import SnapshotStatus, UsageMetric, UsageSnapshot
 
 
@@ -183,6 +188,17 @@ def test_raw_summary_includes_sanitized_payload_details():
     assert "xxx" in summary
     assert "more" in summary
     assert len(summary) < 700
+
+
+def test_instance_lock_prevents_second_running_copy(tmp_path, monkeypatch):
+    monkeypatch.setattr("usage_view.app.app_data_dir", lambda: tmp_path)
+
+    first = _acquire_instance_lock()
+    assert first is not None
+    try:
+        assert _acquire_instance_lock() is None
+    finally:
+        first.unlock()
 
 
 def _schedule_app_stub() -> App:

@@ -91,6 +91,19 @@ class SessionVerifier(QObject):
         self._finished = True
         self._timeout.stop()
         self.done.emit(ok, error)
+        QTimer.singleShot(0, self._cleanup)
+
+    def _cleanup(self) -> None:
+        try:
+            self._page.loadFinished.disconnect(self._on_load_finished)
+        except (TypeError, RuntimeError):
+            pass
+        try:
+            self._page.setLifecycleState(self._page.LifecycleState.Discarded)
+        except RuntimeError:
+            pass
+        self._page.deleteLater()
+        self.deleteLater()
 
 
 def verify_session(

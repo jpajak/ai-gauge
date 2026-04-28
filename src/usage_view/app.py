@@ -6,12 +6,12 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-from PyQt6.QtCore import QObject, Qt, QTimer
+from PyQt6.QtCore import QObject, QLockFile, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QSystemTrayIcon
 
 from . import __version__
-from .config import Config
+from .config import Config, app_data_dir
 from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
 from .history import HistoryStore
@@ -118,6 +118,15 @@ def _raw_summary(raw: dict) -> str:
         return json.dumps(_summarize_for_log(raw), sort_keys=True, default=str)
     except TypeError:
         return repr(raw)
+
+
+def _acquire_instance_lock() -> QLockFile | None:
+    lock_path = app_data_dir() / "usage-view.lock"
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    lock = QLockFile(str(lock_path))
+    if not lock.tryLock(100):
+        return None
+    return lock
 
 
 class App(QObject):
@@ -548,6 +557,9 @@ class App(QObject):
 
 
 def main() -> int:
+    instance_lock = _acquire_instance_lock()
+    if instance_lock is None:
+        return 0
     # QtWebEngine requires this attribute set before QApplication is constructed.
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     # Importing QtWebEngineWidgets before the QApplication forces its OpenGL
@@ -560,6 +572,7 @@ def main() -> int:
     qt_app.setOrganizationName("usage-view")
     qt_app.setApplicationVersion(__version__)
     _app = App()  # noqa: F841 - keeps refs alive
+    _instance_lock = instance_lock  # noqa: F841 - keep the single-instance lock alive
     return qt_app.exec()
 
 

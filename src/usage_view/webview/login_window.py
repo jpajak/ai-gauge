@@ -52,6 +52,7 @@ class _PopupPage(QuietWebEnginePage):
         view = QWebEngineView()
         view.setPage(self)
         view.setWindowFlag(Qt.WindowType.Window, True)
+        view.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         view.resize(560, 720)
         view.setWindowTitle("Sign in")
         view.show()
@@ -153,6 +154,22 @@ class LoginWindow(QDialog):
             )
         )
         self._popup_pages.append(popup_page)
+
+    def closeEvent(self, event) -> None:
+        self._close_popups()
+        super().closeEvent(event)
+
+    def done(self, result: int) -> None:
+        self._close_popups()
+        super().done(result)
+
+    def _close_popups(self) -> None:
+        for popup_page in list(self._popup_pages):
+            view = popup_page._popup_view
+            if view is not None:
+                view.close()
+            popup_page.deleteLater()
+        self._popup_pages.clear()
 
     def _verify(self) -> None:
         if self._provider not in VERIFY_TARGETS:

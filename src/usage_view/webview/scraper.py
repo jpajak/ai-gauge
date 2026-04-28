@@ -97,9 +97,24 @@ class HeadlessScraper(QObject):
                 sorted(result.keys()) if isinstance(result, dict) else type(result).__name__,
             )
         self.done.emit(result, error)
-        # Detach the page; let the view be garbage collected after the signal.
+        # Release Chromium resources after connected callbacks have had a
+        # chance to clear their Python references.
+        QTimer.singleShot(0, self._cleanup)
+
+    def _cleanup(self) -> None:
+        try:
+            self._page.loadFinished.disconnect(self._on_load_finished)
+        except (TypeError, RuntimeError):
+            pass
+        self._view.stop()
         self._view.setPage(None)
+        try:
+            self._page.setLifecycleState(self._page.LifecycleState.Discarded)
+        except RuntimeError:
+            pass
         self._view.deleteLater()
+        self._page.deleteLater()
+        self.deleteLater()
 
 
 def scrape(

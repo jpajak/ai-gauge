@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.4.3 - 2026-04-28
+
+### Added
+
+- Added a single-instance lock so a Startup launch and a manual launch cannot run two full app trees at the same time.
+
+### Fixed
+
+- Fixed completed Claude/Codex offscreen scrapes retaining their `QWebEnginePage` owner, which could leave QtWebEngine renderer processes accumulating after repeated refreshes.
+- Cleaned up cookie-verification WebEngine pages and OAuth popup windows more aggressively after they finish or close.
+
 ## 0.4.2 - 2026-04-28
 
 ### Added

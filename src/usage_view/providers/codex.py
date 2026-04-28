@@ -10,9 +10,11 @@ from PyQt6.QtCore import QObject
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from ..webview.scraper import HeadlessScraper
 from .base import Provider
+from .diagnostics import log_page_diagnosis
 from .idle import idle_reset_state
 
 CODEX_USAGE_URL = "https://chatgpt.com/codex/cloud/settings/analytics#usage"
+_EXPECTED_ROWS = ("session", "weekly")
 log = logging.getLogger("usage_view.providers.codex")
 
 # Walks the rendered analytics page, finds the two "Balance" cards by their
@@ -203,6 +205,13 @@ def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
 def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
     page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
     if _is_logged_out_payload(payload):
+        log_page_diagnosis(
+            log,
+            provider="codex",
+            classification="logged_out",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+        )
         return UsageSnapshot(
             provider="codex",
             status=SnapshotStatus.AUTH_REQUIRED,
@@ -214,6 +223,13 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
         or "just a moment" in page_text
         or "cloudflare" in page_text
     ):
+        log_page_diagnosis(
+            log,
+            provider="codex",
+            classification="security_verification",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+        )
         return UsageSnapshot(
             provider="codex",
             status=SnapshotStatus.AUTH_REQUIRED,
@@ -247,12 +263,27 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
 
     if not metrics or all(m.percent_used is None for m in metrics):
         if _looks_like_empty_signed_in_usage(payload):
+            log_page_diagnosis(
+                log,
+                provider="codex",
+                classification="empty_signed_in_usage",
+                payload=payload,
+                expected_rows=_EXPECTED_ROWS,
+            )
             return UsageSnapshot(
                 provider="codex",
                 status=SnapshotStatus.OK,
                 metrics=_empty_usage_metrics(),
                 raw=payload,
             )
+        log_page_diagnosis(
+            log,
+            provider="codex",
+            classification="layout_changed",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+            level=logging.WARNING,
+        )
         return UsageSnapshot(
             provider="codex",
             status=SnapshotStatus.ERROR,

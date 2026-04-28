@@ -72,6 +72,23 @@ def test_claude_unparsed_usage_payload_still_reports_layout_error():
     assert "layout may have changed" in (snapshot.error or "")
 
 
+def test_claude_cant_reach_page_is_load_failure():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly_all": None,
+            "weekly_design": None,
+            "title": "Claude",
+            "url": CLAUDE_USAGE_URL,
+            "body_text": "Can't reach Claude Check your connection. Try again",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "load failed" in (snapshot.error or "")
+
+
 def test_claude_design_limit_is_hidden_by_default():
     payload = {
         "logged_out": False,

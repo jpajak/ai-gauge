@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from datetime import datetime
 from typing import Callable
 
@@ -11,6 +12,7 @@ from .base import Provider
 
 GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2026-03-10"
+log = logging.getLogger("usage_view.providers.copilot")
 
 
 def _github_headers(pat: str) -> dict[str, str]:
@@ -136,6 +138,9 @@ class CopilotProvider(Provider):
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         pat = get_github_pat()
         if not pat:
+            log.info(
+                "provider api diagnosis provider=copilot classification=missing_pat"
+            )
             on_done(
                 UsageSnapshot(
                     provider="copilot",
@@ -150,6 +155,13 @@ class CopilotProvider(Provider):
         def work() -> UsageSnapshot:
             username = _resolve_username(pat, config.copilot.username)
             if not username:
+                log.info(
+                    "provider api diagnosis provider=copilot "
+                    "classification=username_unresolved username_configured=%s "
+                    "billing_org_configured=%s",
+                    bool(config.copilot.username),
+                    bool(config.copilot.billing_org),
+                )
                 return UsageSnapshot(
                     provider="copilot",
                     status=SnapshotStatus.AUTH_REQUIRED,
@@ -163,6 +175,21 @@ class CopilotProvider(Provider):
                     payload = _fetch_user_premium_usage(pat, username)
             except requests.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
+                request_id = (
+                    exc.response.headers.get("x-github-request-id", "")
+                    if exc.response is not None
+                    else ""
+                )
+                log.warning(
+                    "provider api diagnosis provider=copilot "
+                    "classification=http_error status=%s scope=%s "
+                    "billing_org_configured=%s username_configured=%s request_id=%s",
+                    status,
+                    "org" if billing_org else "user",
+                    bool(billing_org),
+                    bool(config.copilot.username),
+                    request_id,
+                )
                 if status in (401, 403):
                     detail = (
                         " Re-issue with organization Administration read permission "
@@ -196,6 +223,11 @@ class CopilotProvider(Provider):
                 try:
                     snapshot = work()
                 except Exception as exc:  # noqa: BLE001
+                    log.exception(
+                        "provider api diagnosis provider=copilot "
+                        "classification=unexpected_exception type=%s",
+                        type(exc).__name__,
+                    )
                     snapshot = UsageSnapshot(
                         provider="copilot",
                         status=SnapshotStatus.ERROR,

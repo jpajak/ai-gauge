@@ -35,6 +35,26 @@ class _Widget:
         )
 
 
+class _Dialog:
+    def __init__(self):
+        self.calls = []
+
+    def isMinimized(self):
+        return False
+
+    def show(self):
+        self.calls.append("show")
+
+    def showNormal(self):
+        self.calls.append("showNormal")
+
+    def raise_(self):
+        self.calls.append("raise")
+
+    def activateWindow(self):
+        self.calls.append("activate")
+
+
 def _refresh_app_stub() -> App:
     app = App.__new__(App)
     app._providers = {"claude": object(), "codex": object()}  # noqa: SLF001
@@ -134,6 +154,16 @@ def test_scheduled_refresh_keeps_existing_tiles_visible():
     assert app._widget.loading_calls == []  # noqa: SLF001
     assert app._refresh_queue == ["claude", "codex"]  # noqa: SLF001
     assert app._unchanged_cycles == 3  # noqa: SLF001
+
+
+def test_widget_activation_raises_open_settings_dialog():
+    app = App.__new__(App)
+    dialog = _Dialog()
+    app._settings_dialog = dialog  # noqa: SLF001
+
+    app._on_widget_activated()  # noqa: SLF001
+
+    assert dialog.calls == ["show", "raise", "activate"]
 
 
 def test_raw_summary_includes_sanitized_payload_details():

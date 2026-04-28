@@ -14,6 +14,7 @@ KEYRING_GITHUB_PAT = "github-pat"
 WINDOW_WIDTH = 340
 WINDOW_MIN_HEIGHT = 80
 WINDOW_MAX_HEIGHT = 420
+WINDOW_COLLAPSED_HEIGHT = 58
 
 # Per-provider session cookie names (HttpOnly cookies you can't read via JS).
 # COOKIE_NAMES is the primary name shown in the UI. COOKIE_NAME_ALIASES covers
@@ -60,6 +61,7 @@ class WindowState(BaseModel):
     y: int | None = None
     width: int = WINDOW_WIDTH
     height: int = Field(default=220, ge=WINDOW_MIN_HEIGHT, le=WINDOW_MAX_HEIGHT)
+    collapsed: bool = False
     always_on_top: bool = True
     opacity: float = Field(default=1.0, ge=0.3, le=1.0)
 

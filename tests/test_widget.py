@@ -1,5 +1,7 @@
 from datetime import datetime, timedelta
 
+from PyQt6.QtCore import Qt
+
 from usage_view.config import Config
 from usage_view.models import SnapshotStatus, UsageMetric, UsageSnapshot
 from usage_view.widget import UsageWidget
@@ -10,6 +12,17 @@ def _tile_order(widget: UsageWidget) -> list[str]:
         widget._tile_layout.itemAt(i).widget().provider
         for i in range(widget._tile_layout.count())
     ]
+
+
+def _collapsed_chip_texts(widget: UsageWidget) -> list[str]:
+    texts = []
+    layout = widget._collapsed_summary_layout  # noqa: SLF001
+    for i in range(layout.count()):
+        item = layout.itemAt(i)
+        child = item.widget()
+        if child is not None and child is not widget._collapsed_label:  # noqa: SLF001
+            texts.append(child.text())
+    return texts
 
 
 def test_reenabled_provider_returns_to_canonical_order(qtbot):
@@ -25,7 +38,7 @@ def test_reenabled_provider_returns_to_canonical_order(qtbot):
     assert _tile_order(widget) == ["claude", "codex", "copilot"]
 
 
-def test_mark_loading_invalidates_existing_tile_data(qtbot):
+def test_mark_loading_preserves_existing_data_and_dims_tile(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
     fetched = datetime(2026, 4, 27, 12, 0)
@@ -46,9 +59,51 @@ def test_mark_loading_invalidates_existing_tile_data(qtbot):
     widget.mark_loading({"codex": "Codex"})
 
     tile = widget._tiles["codex"]  # noqa: SLF001
-    assert tile.status.text().startswith("loading")
-    assert tile.status.toolTip() == ""
-    assert tile._rows == []  # noqa: SLF001
+    # Prior data stays on screen — only the visual "refreshing" flag flips.
+    assert len(tile._rows) == 1  # noqa: SLF001
+    assert tile._rows[0].pct.text() == "47%"  # noqa: SLF001
+    assert tile._refreshing is True  # noqa: SLF001
+    # And the cached snapshot is intact so collapsed chips keep their values.
+    assert widget._snapshots["codex"] is not None  # noqa: SLF001
+
+
+def test_mark_loading_shows_skeleton_when_no_prior_data(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.mark_loading({"claude": "Claude", "codex": "Codex", "copilot": "Copilot"})
+    widget._do_refit_height()  # noqa: SLF001
+
+    for provider in ("claude", "codex", "copilot"):
+        tile = widget._tiles[provider]  # noqa: SLF001
+        assert tile._refreshing is True  # noqa: SLF001
+        assert len(tile._rows) == 1  # noqa: SLF001
+        # Indeterminate range == busy mode (animated stripe).
+        assert tile._rows[0].bar.maximum() == 0  # noqa: SLF001
+
+    assert widget._header_widget.height() <= widget._header_widget.sizeHint().height() + 2  # noqa: SLF001
+    assert widget._tile_container.height() <= widget._tile_container.sizeHint().height() + 2  # noqa: SLF001
+
+
+def test_update_snapshot_clears_refreshing_flag(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.mark_loading({"codex": "Codex"})
+    assert widget._tiles["codex"]._refreshing is True  # noqa: SLF001
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="codex",
+            status=SnapshotStatus.OK,
+            metrics=[UsageMetric("Session", 50.0, None)],
+        ),
+        "Codex",
+    )
+
+    assert widget._tiles["codex"]._refreshing is False  # noqa: SLF001
+    # The previously-skeleton row is now a real metric row.
+    assert widget._tiles["codex"]._rows[0].bar.maximum() == 100  # noqa: SLF001
 
 
 def test_auth_required_tile_uses_sign_in_button(qtbot):
@@ -135,3 +190,89 @@ def test_refit_restores_fixed_width_after_dpi_resize_glitch(qtbot):
     widget._do_refit_height()  # noqa: SLF001
 
     assert widget.width() == 340
+
+
+def test_collapsed_mode_shows_session_summary(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Session", 50.0, None),
+                UsageMetric("Weekly", 12.0, None),
+            ],
+        ),
+        "Claude",
+    )
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="codex",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Session", 0.0, None),
+                UsageMetric("Weekly", 15.0, None),
+            ],
+        ),
+        "Codex",
+    )
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="copilot",
+            status=SnapshotStatus.OK,
+            metrics=[UsageMetric("Premium (1434/1500)", 96.0, None)],
+        ),
+        "Copilot",
+    )
+
+    widget.set_collapsed(True)
+
+    assert not widget._collapsed_widget.isHidden()  # noqa: SLF001
+    assert widget._tile_container.isHidden()  # noqa: SLF001
+    assert _collapsed_chip_texts(widget) == ["Claude 50%", "Codex 0%", "Copilot 96%"]
+    assert all("Weekly" not in text for text in _collapsed_chip_texts(widget))
+
+
+def test_collapsed_mode_resizes_immediately(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.resize(340, 260)
+
+    widget.set_collapsed(True)
+
+    assert widget.height() == 58
+
+
+def test_collapsed_mode_persists_and_expands(qtbot):
+    config = Config()
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    widget.set_collapsed(True)
+    assert config.window.collapsed is True
+
+    widget.set_collapsed(False)
+    assert config.window.collapsed is False
+    assert widget._collapsed_widget.isHidden()  # noqa: SLF001
+    assert not widget._tile_container.isHidden()  # noqa: SLF001
+
+
+def test_always_on_top_suspension_is_reference_counted(qtbot):
+    config = Config()
+    config.window.always_on_top = True
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    assert widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+    widget.suspend_always_on_top()
+    widget.suspend_always_on_top()
+    assert not widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+    widget.restore_always_on_top()
+    assert not widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+    widget.restore_always_on_top()
+    assert widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint

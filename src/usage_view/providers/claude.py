@@ -10,9 +10,11 @@ from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from ..webview.scraper import HeadlessScraper
 from .codex import _parse_reset_text  # reuse the same heuristic parser
 from .base import Provider
+from .diagnostics import log_page_diagnosis
 from .idle import idle_reset_state
 
 CLAUDE_USAGE_URL = "https://claude.ai/settings/usage"
+_EXPECTED_ROWS = ("session", "weekly_all", "weekly_design")
 log = logging.getLogger("usage_view.providers.claude")
 
 # Claude's settings/usage page renders rows like:
@@ -135,6 +137,15 @@ def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
     return bool(payload.get("logged_out")) or "/logout" in url or "/login" in url
 
 
+def _is_load_failed_payload(payload: dict[str, Any]) -> bool:
+    page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
+    return (
+        "can't reach claude" in page_text
+        or "check your connection" in page_text
+        or "try again" in page_text and "claude" in page_text
+    )
+
+
 def _build_snapshot(
     payload: dict[str, Any],
     *,
@@ -142,10 +153,32 @@ def _build_snapshot(
 ) -> UsageSnapshot:
     page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
     if _is_logged_out_payload(payload):
+        log_page_diagnosis(
+            log,
+            provider="claude",
+            classification="logged_out",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+        )
         return UsageSnapshot(
             provider="claude",
             status=SnapshotStatus.AUTH_REQUIRED,
             error="Not signed in to Claude.",
+            raw=payload,
+        )
+    if _is_load_failed_payload(payload):
+        log_page_diagnosis(
+            log,
+            provider="claude",
+            classification="load_failed",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+            level=logging.WARNING,
+        )
+        return UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.ERROR,
+            error="Claude page load failed. Check your connection and try again.",
             raw=payload,
         )
     if (
@@ -153,6 +186,13 @@ def _build_snapshot(
         or "just a moment" in page_text
         or "cloudflare" in page_text
     ):
+        log_page_diagnosis(
+            log,
+            provider="claude",
+            classification="security_verification",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+        )
         return UsageSnapshot(
             provider="claude",
             status=SnapshotStatus.AUTH_REQUIRED,
@@ -192,8 +232,23 @@ def _build_snapshot(
 
     if not metrics:
         if _looks_like_empty_signed_in_usage(payload):
+            log_page_diagnosis(
+                log,
+                provider="claude",
+                classification="empty_signed_in_usage",
+                payload=payload,
+                expected_rows=_EXPECTED_ROWS,
+            )
             metrics = _empty_usage_metrics()
         else:
+            log_page_diagnosis(
+                log,
+                provider="claude",
+                classification="layout_changed",
+                payload=payload,
+                expected_rows=_EXPECTED_ROWS,
+                level=logging.WARNING,
+            )
             return UsageSnapshot(
                 provider="claude",
                 status=SnapshotStatus.ERROR,

@@ -169,11 +169,11 @@ class SettingsDialog(QDialog):
         # Don't pass parent — avoids any cascading stylesheet issues.
         # Keep window centered relative to parent manually if needed later.
         super().__init__(None)
-        # Intentionally NOT stays-on-top: users may need to switch to their
-        # normal browser to grab a session cookie, and the app's own widget
-        # is suspended from always-on-top by the caller while this is open.
+        # Intentionally NOT stays-on-top or app-modal: users may need to switch
+        # to their normal browser, and clicking the status panel should bring
+        # this existing Settings window back to the foreground.
         self.setWindowTitle("Usage View — Settings")
-        self.setModal(True)
+        self.setModal(False)
         self.resize(560, 650)
         self.setStyleSheet(_DARK_STYLESHEET)
         self._config = config

@@ -17,6 +17,7 @@ def test_defaults():
     assert c.start_with_windows is False
     assert c.copilot.monthly_quota == 300
     assert c.window.always_on_top is True
+    assert c.window.collapsed is False
 
 
 def test_round_trip(tmp_path, monkeypatch):

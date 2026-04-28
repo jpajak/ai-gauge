@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from PyQt6.QtCore import QObject, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
-from PyQt6.QtWidgets import QApplication, QMenu, QSystemTrayIcon
+from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QSystemTrayIcon
 
 from . import __version__
 from .config import Config
@@ -146,6 +146,8 @@ class App(QObject):
         self._unchanged_cycles = 0
         self._active_until = datetime.now() + timedelta(minutes=_ACTIVE_MODE_MINUTES)
         self._current_refresh_manual = False
+        self._settings_dialog: SettingsDialog | None = None
+        self._settings_old_copilot_quota: int | None = None
 
         # Push any saved session cookies into the WebEngine profiles before any
         # scrape runs, so the headless page loads as signed-in.
@@ -157,6 +159,7 @@ class App(QObject):
         self._widget.settings_requested.connect(self.open_settings)
         self._widget.sign_in_requested.connect(self.open_login)
         self._widget.details_requested.connect(self.open_error_details)
+        self._widget.activated_requested.connect(self._on_widget_activated)
         self._widget.closed.connect(self._on_widget_closed)
 
         # Pre-populate provider tiles in stable order so they don't pop in.
@@ -452,15 +455,49 @@ class App(QObject):
     # ----- Settings -----
 
     def open_settings(self) -> None:
+        if self._settings_dialog is not None:
+            self._raise_settings_dialog()
+            return
         old_copilot_quota = self._config.copilot.monthly_quota
         dlg = SettingsDialog(self._config, parent=self._widget)
+        dlg.setModal(False)
+        dlg.setWindowModality(Qt.WindowModality.NonModal)
         dlg.sign_in_clicked.connect(self.open_login)
         dlg.paste_cookie_clicked.connect(self.open_cookie_paste)
+        dlg.finished.connect(
+            lambda result, dialog=dlg, old_quota=old_copilot_quota: (
+                self._on_settings_finished(dialog, result, old_quota)
+            )
+        )
+        self._settings_dialog = dlg
+        self._settings_old_copilot_quota = old_copilot_quota
         self._widget.suspend_always_on_top()
-        try:
-            accepted = bool(dlg.exec())
-        finally:
-            self._widget.restore_always_on_top()
+        dlg.show()
+        self._raise_settings_dialog()
+
+    def _raise_settings_dialog(self) -> None:
+        dlg = self._settings_dialog
+        if dlg is None:
+            return
+        if dlg.isMinimized():
+            dlg.showNormal()
+        else:
+            dlg.show()
+        dlg.raise_()
+        dlg.activateWindow()
+
+    def _on_settings_finished(
+        self,
+        dlg: SettingsDialog,
+        result: int,
+        old_copilot_quota: int,
+    ) -> None:
+        if self._settings_dialog is not dlg:
+            return
+        self._settings_dialog = None
+        self._settings_old_copilot_quota = None
+        self._widget.restore_always_on_top()
+        accepted = result == QDialog.DialogCode.Accepted.value
         if accepted:
             dlg.apply_to(self._config)
             self._build_providers()
@@ -474,6 +511,11 @@ class App(QObject):
                 self._rerender_copilot(new_copilot_quota)
             self._restart_timer()
             self.refresh_now(manual=True)
+        dlg.deleteLater()
+
+    def _on_widget_activated(self) -> None:
+        if self._settings_dialog is not None:
+            self._raise_settings_dialog()
 
     def _rerender_copilot(self, quota: int) -> None:
         cached = self._snapshots.get("copilot")

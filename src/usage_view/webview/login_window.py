@@ -14,7 +14,10 @@ from PyQt6.QtWidgets import (
 
 from .page import QuietWebEnginePage
 from .profile import get_profile
-from .verify import VERIFY_TARGETS, verify_session  # noqa: F401 - VERIFY_TARGETS re-exported for callers
+from .verify import (
+    VERIFY_TARGETS,
+    verify_session,
+)  # noqa: F401 - VERIFY_TARGETS re-exported for callers
 
 
 def _styled_page(profile, parent) -> QWebEnginePage:
@@ -26,7 +29,9 @@ def _styled_page(profile, parent) -> QWebEnginePage:
     s.setAttribute(QWebEngineSettings.WebAttribute.LocalStorageEnabled, True)
     s.setAttribute(QWebEngineSettings.WebAttribute.PluginsEnabled, True)
     s.setAttribute(QWebEngineSettings.WebAttribute.AllowRunningInsecureContent, False)
-    s.setAttribute(QWebEngineSettings.WebAttribute.AllowGeolocationOnInsecureOrigins, False)
+    s.setAttribute(
+        QWebEngineSettings.WebAttribute.AllowGeolocationOnInsecureOrigins, False
+    )
     s.setAttribute(QWebEngineSettings.WebAttribute.ScrollAnimatorEnabled, True)
     s.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, True)
     s.setAttribute(QWebEngineSettings.WebAttribute.HyperlinkAuditingEnabled, False)
@@ -140,8 +145,13 @@ class LoginWindow(QDialog):
         request.openIn(popup_page)
         view = popup_page.attach_view()
         # When the popup closes, drop the reference.
-        view.destroyed.connect(lambda _=None: self._popup_pages.remove(popup_page)
-                               if popup_page in self._popup_pages else None)
+        view.destroyed.connect(
+            lambda _=None: (
+                self._popup_pages.remove(popup_page)
+                if popup_page in self._popup_pages
+                else None
+            )
+        )
         self._popup_pages.append(popup_page)
 
     def _verify(self) -> None:
@@ -218,7 +228,9 @@ class LoginWindow(QDialog):
             self.accept()
             return
         if error:
-            self._status.setText(f"Could not load verification page ({error}). Try again.")
+            self._status.setText(
+                f"Could not load verification page ({error}). Try again."
+            )
         else:
             self._status.setText(
                 "Not signed in yet — please complete sign-in in the window above."

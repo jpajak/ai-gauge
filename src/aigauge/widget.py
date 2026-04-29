@@ -947,6 +947,32 @@ class UsageWidget(QWidget):
         if was_visible:
             self.show()  # re-applying flags hides the window
 
+    def show_as_popover(self, anchor_global_x: int, anchor_global_y: int) -> None:
+        """Show the widget below ``(anchor_global_x, anchor_global_y)``.
+
+        Used as the macOS menu-bar drop-down. The widget gets ``Qt.Popup``
+        flags so it dismisses when the user clicks outside it. The widget's
+        own X button still hides it; settings dialogs still spawn correctly
+        because they're separate top-level windows.
+        """
+        self.setWindowFlags(
+            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Popup
+        )
+        self.setWindowOpacity(self._config.window.opacity)
+        self._refit_height()
+        # Anchor: top of widget aligned just below the menu bar at the icon.
+        # If the anchor would push the widget off the right edge of the
+        # screen, shift it left so it stays fully on screen.
+        screen = self.screen() or self.window().screen()
+        target_x = anchor_global_x - self.width() // 2
+        if screen is not None:
+            geo = screen.availableGeometry()
+            target_x = max(geo.left() + 4, min(target_x, geo.right() - self.width() - 4))
+        self.move(target_x, anchor_global_y + 4)
+        self.show()
+        self.raise_()
+        self.activateWindow()
+
     # ----- drag-to-move -----
 
     def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802

@@ -16,6 +16,7 @@ from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
 from .history import HistoryStore
 from .logging_setup import setup_logging
+from .menubar import render_menubar_pixmap
 from .models import SnapshotStatus, UsageSnapshot
 from .platforms import get_platform
 from .providers.base import Provider, ProviderSignals
@@ -38,7 +39,7 @@ _ACTIVE_MODE_MINUTES = 30
 _LOG_VALUE_LIMIT = 300
 
 
-def _make_tray_icon(percent: float | None = None) -> QIcon:
+def _make_dot_tray_icon(percent: float | None = None) -> QIcon:
     pix = QPixmap(32, 32)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
@@ -55,6 +56,17 @@ def _make_tray_icon(percent: float | None = None) -> QIcon:
     painter.drawEllipse(4, 4, 24, 24)
     painter.end()
     return QIcon(pix)
+
+
+def _enabled_providers(config: Config) -> tuple[str, ...]:
+    out: list[str] = []
+    if config.providers.claude:
+        out.append("claude")
+    if config.providers.codex:
+        out.append("codex")
+    if config.providers.copilot:
+        out.append("copilot")
+    return tuple(out)
 
 
 def _adaptive_refresh_minutes(
@@ -177,21 +189,29 @@ class App(QObject):
         self._providers: dict[str, Provider] = {}
         self._build_providers()
 
-        # System tray
-        self._tray = QSystemTrayIcon(_make_tray_icon())
-        self._tray.setToolTip(f"AI Gauge {__version__}")
-        menu = QMenu()
-        menu.addAction("Show / Hide", self._toggle_widget)
-        refresh_act = menu.addAction("Refresh now")
-        refresh_act.triggered.connect(lambda: self.refresh_now(manual=True))
-        menu.addAction("Settings…", self.open_settings)
-        menu.addSeparator()
-        quit_act = QAction("Quit", menu)
-        quit_act.triggered.connect(QApplication.instance().quit)
-        menu.addAction(quit_act)
-        self._tray.setContextMenu(menu)
-        self._tray.activated.connect(self._on_tray_activated)
-        self._tray.show()
+        # System tray (or menu-bar item on macOS, or no-tray fallback on Linux)
+        self._ui_mode = get_platform().default_ui_mode()
+        tray_available = QSystemTrayIcon.isSystemTrayAvailable()
+        if not tray_available:
+            # Stock GNOME has no system tray. Force the floating widget to be
+            # the only UI and serve the same menu via right-click on it.
+            log.info("system tray not available; falling back to widget-only UI")
+            self._ui_mode = "floating_widget"
+
+        self._app_menu = self._build_app_menu()
+
+        if tray_available:
+            self._tray = QSystemTrayIcon(self._render_tray_icon())
+            self._tray.setToolTip(f"AI Gauge {__version__}")
+            self._tray.setContextMenu(self._app_menu)
+            self._tray.activated.connect(self._on_tray_activated)
+            self._tray.show()
+        else:
+            self._tray = None
+            self._widget.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+            self._widget.customContextMenuRequested.connect(
+                lambda pos: self._app_menu.exec(self._widget.mapToGlobal(pos))
+            )
 
         # Auto-refresh timer
         self._timer = QTimer(self)
@@ -204,7 +224,11 @@ class App(QObject):
         # surprise modal popup.
         QTimer.singleShot(500, lambda: self.refresh_now(manual=True))
 
-        self._widget.show()
+        # On Windows/Linux the floating widget is the headline UI; on macOS
+        # the menu-bar item is, and the widget appears as a popover only
+        # when the user clicks the menu bar.
+        if self._ui_mode == "floating_widget":
+            self._widget.show()
 
     # ----- Lifecycle helpers -----
 
@@ -402,7 +426,8 @@ class App(QObject):
         return self._cycle_signatures != self._last_cycle_signatures
 
     def _update_tray(self) -> None:
-        max_pct: float | None = None
+        if self._tray is None:
+            return
         lines: list[str] = []
         for name in ("claude", "codex", "copilot"):
             snap = self._snapshots.get(name)
@@ -411,15 +436,41 @@ class App(QObject):
             for m in snap.metrics:
                 if m.percent_used is None:
                     continue
-                if max_pct is None or m.percent_used > max_pct:
-                    max_pct = m.percent_used
                 lines.append(f"{name} {m.label}: {m.percent_used:.0f}%")
-        self._tray.setIcon(_make_tray_icon(max_pct))
+        self._tray.setIcon(self._render_tray_icon())
         self._tray.setToolTip(
             f"AI Gauge {__version__}\n" + "\n".join(lines)
             if lines
             else f"AI Gauge {__version__}"
         )
+
+    def _build_app_menu(self) -> QMenu:
+        menu = QMenu()
+        menu.addAction("Show / Hide", self._toggle_widget)
+        refresh_act = menu.addAction("Refresh now")
+        refresh_act.triggered.connect(lambda: self.refresh_now(manual=True))
+        menu.addAction("Settings…", self.open_settings)
+        menu.addSeparator()
+        quit_act = QAction("Quit", menu)
+        quit_act.triggered.connect(QApplication.instance().quit)
+        menu.addAction(quit_act)
+        return menu
+
+    def _render_tray_icon(self) -> QIcon:
+        if self._ui_mode == "menubar":
+            providers = _enabled_providers(self._config)
+            pixmap = render_menubar_pixmap(self._snapshots, providers)
+            return QIcon(pixmap)
+        max_pct: float | None = None
+        for snap in self._snapshots.values():
+            if snap.status != SnapshotStatus.OK:
+                continue
+            for m in snap.metrics:
+                if m.percent_used is None:
+                    continue
+                if max_pct is None or m.percent_used > max_pct:
+                    max_pct = m.percent_used
+        return _make_dot_tray_icon(max_pct)
 
     # ----- Login / cookie paste -----
 
@@ -548,10 +599,23 @@ class App(QObject):
     def _toggle_widget(self) -> None:
         if self._widget.isVisible():
             self._widget.hide()
-        else:
-            self._widget.show()
-            self._widget.raise_()
-            self._widget.activateWindow()
+            return
+        if self._ui_mode == "menubar" and self._tray is not None:
+            geo = self._tray.geometry()
+            if geo.isEmpty():
+                # Some macOS Qt builds return an empty rect; fall back to the
+                # top-right of the screen near the menu bar.
+                screen_geo = QApplication.primaryScreen().availableGeometry()
+                anchor_x = screen_geo.right() - 80
+                anchor_y = screen_geo.top()
+            else:
+                anchor_x = geo.center().x()
+                anchor_y = geo.bottom()
+            self._widget.show_as_popover(anchor_x, anchor_y)
+            return
+        self._widget.show()
+        self._widget.raise_()
+        self._widget.activateWindow()
 
     def _on_widget_closed(self) -> None:
         # Closing the widget hides to tray rather than quitting

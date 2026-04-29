@@ -16,39 +16,28 @@ For AI Gauge, the release page should include:
 - SHA256 checksums for downloadable artifacts.
 - A short note that the app is unsigned unless code signing has been added.
 
-## Release Checklist
+## Release Checklist (automated path)
+
+The recommended path uses [.github/workflows/release.yml](.github/workflows/release.yml):
+pushing a `v*` tag triggers a Windows GitHub-Actions runner that runs the
+test suite, builds the standalone .exe, zips it, computes a SHA256, and
+attaches both files to a **draft** release on GitHub. You publish the draft
+from the web UI.
 
 1. Confirm `pyproject.toml`, `src/aigauge/__init__.py`, `README.md`, and
-   `CHANGELOG.md` all show the same version. The CI workflow runs
-   `tools/check_versions.py` for this; you can run it locally with:
+   `CHANGELOG.md` all show the new version. The release workflow runs
+   `tools/check_versions.py` and also rejects mismatched tag/pyproject
+   versions, but a local pre-flight catches issues sooner:
 
    ```powershell
    .venv\Scripts\python.exe tools\check_versions.py
-   ```
-
-2. Run the test suite:
-
-   ```powershell
    .venv\Scripts\python.exe -m pytest
-   ```
-
-3. Build the recommended one-folder Windows package:
-
-   ```powershell
    .\build.ps1
+   .\dist\ai-gauge\ai-gauge.exe   # smoke-test
    ```
 
-4. Smoke-test `dist\ai-gauge\ai-gauge.exe` on the release machine.
-5. Zip the full `dist\ai-gauge\` folder. Do not upload only the executable
-   from a one-folder build.
-6. Create checksums:
-
-   ```powershell
-   Get-FileHash .\dist\ai-gauge.zip -Algorithm SHA256
-   ```
-
-7. Commit the release prep changes.
-8. Create and push a version tag:
+2. Commit the release prep changes to `main`.
+3. Create and push the version tag:
 
    ```powershell
    git tag v0.5.0
@@ -56,10 +45,31 @@ For AI Gauge, the release page should include:
    git push origin v0.5.0
    ```
 
-9. In GitHub, open the repository, go to **Releases**, choose **Draft a new
-   release**, select the tag, paste the changelog notes, and attach the zip.
-10. Mark the release as a prerelease if you want early testers before a wider
-    announcement.
+4. Watch the **release** workflow under the Actions tab. On success it
+   creates a draft release on the [Releases page](https://github.com/jpajak/ai-gauge/releases)
+   with `ai-gauge-<version>-windows.zip` and the matching `.sha256` attached.
+5. Open the draft release, paste the relevant changelog notes into the body
+   (the workflow auto-generates a commit list, but the changelog reads
+   better), and click **Publish release**. Mark as prerelease if you want a
+   soft launch.
+
+## Manual fallback
+
+If the automated workflow is unavailable (e.g. you're publishing from a
+fork without Actions enabled), the manual flow still works:
+
+1. Run the same local pre-flight in step 1 above.
+2. Zip the full `dist\ai-gauge\` folder. Do not upload only the executable
+   from a one-folder build.
+3. Create a checksum:
+
+   ```powershell
+   Get-FileHash .\ai-gauge-0.5.0-windows.zip -Algorithm SHA256
+   ```
+
+4. Push the version tag, then in GitHub go to **Releases** → **Draft a new
+   release**, select the tag, paste the changelog notes, and attach the zip
+   plus the SHA256 file.
 
 ## Suggested Release Notes Shape
 

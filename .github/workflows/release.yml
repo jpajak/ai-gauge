@@ -1,0 +1,94 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve version from tag
+        id: ver
+        shell: pwsh
+        run: |
+          $tag = "${{ github.ref_name }}"
+          $version = $tag -replace '^v',''
+          "tag=$tag"         | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "version=$version" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Bootstrap virtualenv (build.ps1 expects .venv\Scripts\python.exe)
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\pip.exe install -e .[dev]
+
+      - name: Check versions, then run tests
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .\.venv\Scripts\python.exe tools\check_versions.py
+          .\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Confirm tag matches pyproject version
+        shell: pwsh
+        run: |
+          $line = Select-String -Path pyproject.toml -Pattern '^version\s*=\s*"([^"]+)"' | Select-Object -First 1
+          if (-not $line) { Write-Error "could not find version in pyproject.toml" }
+          $projVersion = $line.Matches[0].Groups[1].Value
+          $tagVersion = "${{ steps.ver.outputs.version }}"
+          if ($projVersion -ne $tagVersion) {
+            Write-Error "tag version $tagVersion does not match pyproject.toml version $projVersion"
+          }
+          Write-Host "Tag and pyproject agree on $tagVersion"
+
+      - name: Build standalone .exe (one-folder)
+        shell: pwsh
+        run: .\build.ps1
+
+      - name: Package as zip + sha256
+        id: pack
+        shell: pwsh
+        run: |
+          $version = "${{ steps.ver.outputs.version }}"
+          $zipName = "ai-gauge-$version-windows.zip"
+          $shaName = "$zipName.sha256"
+          # Zip the dist\ai-gauge folder itself (not just its contents) so users
+          # extract a self-contained ai-gauge\ directory.
+          Compress-Archive -Path dist\ai-gauge -DestinationPath $zipName -Force
+          $sha = (Get-FileHash $zipName -Algorithm SHA256).Hash.ToLower()
+          "$sha *$zipName" | Out-File -Encoding ascii -FilePath $shaName
+          "zip=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sha=$shaName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          Write-Host "SHA256: $sha"
+
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: AI Gauge ${{ steps.ver.outputs.version }}
+          tag_name: ${{ steps.ver.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            See [CHANGELOG.md](https://github.com/jpajak/ai-gauge/blob/${{ steps.ver.outputs.tag }}/CHANGELOG.md) for full notes.
+
+            **Download:** `${{ steps.pack.outputs.zip }}` — extract the folder and run `ai-gauge.exe` inside.
+            **Verify:** SHA256 lives in `${{ steps.pack.outputs.sha }}` next to the zip.
+
+            The binary is unsigned; Windows SmartScreen may warn on first launch.
+          files: |
+            ${{ steps.pack.outputs.zip }}
+            ${{ steps.pack.outputs.sha }}

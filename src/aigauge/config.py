@@ -1,14 +1,14 @@
 from __future__ import annotations
 
 import json
-import os
 from pathlib import Path
 from typing import Any
 
 import keyring
 from pydantic import BaseModel, Field
 
-APP_NAME = "ai-gauge"
+from .platforms import APP_NAME, get_platform
+
 KEYRING_SERVICE = "ai-gauge"
 KEYRING_GITHUB_PAT = "github-pat"
 WINDOW_WIDTH = 340
@@ -41,11 +41,13 @@ COOKIE_DOMAINS = {
 
 
 def app_data_dir() -> Path:
-    """%APPDATA%/ai-gauge on Windows, ~/.config/ai-gauge elsewhere."""
-    base = os.environ.get("APPDATA")
-    if base:
-        return Path(base) / APP_NAME
-    return Path.home() / ".config" / APP_NAME
+    """Per-OS config / log / secrets directory.
+
+    - Windows: ``%APPDATA%/ai-gauge``
+    - macOS:   ``~/Library/Application Support/ai-gauge``
+    - Linux:   ``$XDG_CONFIG_HOME/ai-gauge`` (or ``~/.config/ai-gauge``)
+    """
+    return get_platform().app_data_dir()
 
 
 def webview_profile_dir(provider: str) -> Path:
@@ -82,7 +84,7 @@ class CopilotConfig(BaseModel):
 class Config(BaseModel):
     active_refresh_interval_minutes: int = Field(default=5, ge=1, le=180)
     refresh_interval_minutes: int = Field(default=60, ge=1, le=180)
-    start_with_windows: bool = False
+    start_at_login: bool = False
     providers: ProviderToggles = Field(default_factory=ProviderToggles)
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     window: WindowState = Field(default_factory=WindowState)
@@ -109,6 +111,9 @@ class Config(BaseModel):
             if isinstance(old_interval, int):
                 data["active_refresh_interval_minutes"] = old_interval
                 data["refresh_interval_minutes"] = 60
+        # 0.5.x renamed start_with_windows to start_at_login (cross-platform).
+        if "start_at_login" not in data and "start_with_windows" in data:
+            data["start_at_login"] = bool(data.pop("start_with_windows"))
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")
@@ -134,30 +139,28 @@ def get_github_pat() -> str | None:
             return pat
     except keyring.errors.KeyringError:
         pass
-    from .secret_storage import load_secret
-    legacy_pat = load_secret(KEYRING_GITHUB_PAT)
+    legacy_pat = get_platform().load_secret(KEYRING_GITHUB_PAT)
     if not legacy_pat:
         return None
     try:
         keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, legacy_pat)
     except keyring.errors.KeyringError:
         return legacy_pat
-    from .secret_storage import save_secret
-    save_secret(KEYRING_GITHUB_PAT, None)
+    get_platform().save_secret(KEYRING_GITHUB_PAT, None)
     return legacy_pat
 
 
 def set_github_pat(pat: str | None) -> None:
-    from .secret_storage import save_secret
+    platform = get_platform()
     if pat:
         keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, pat)
-        save_secret(KEYRING_GITHUB_PAT, None)
+        platform.save_secret(KEYRING_GITHUB_PAT, None)
     else:
         try:
             keyring.delete_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT)
         except keyring.errors.PasswordDeleteError:
             pass
-        save_secret(KEYRING_GITHUB_PAT, None)
+        platform.save_secret(KEYRING_GITHUB_PAT, None)
 
 
 def _cookie_key(provider: str) -> str:
@@ -165,12 +168,8 @@ def _cookie_key(provider: str) -> str:
 
 
 def get_provider_cookie(provider: str) -> str | None:
-    # DPAPI-encrypted file — Credential Manager has a 2.5KB blob limit that
-    # ChatGPT's session JWT exceeds.
-    from .secret_storage import load_secret
-    return load_secret(_cookie_key(provider))
+    return get_platform().load_secret(_cookie_key(provider))
 
 
 def set_provider_cookie(provider: str, value: str | None) -> None:
-    from .secret_storage import save_secret
-    save_secret(_cookie_key(provider), value)
+    get_platform().save_secret(_cookie_key(provider), value)

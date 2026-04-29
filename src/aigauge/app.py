@@ -17,6 +17,7 @@ from .error_dialog import ErrorDetailsDialog
 from .history import HistoryStore
 from .logging_setup import setup_logging
 from .models import SnapshotStatus, UsageSnapshot
+from .platforms import get_platform
 from .providers.base import Provider, ProviderSignals
 from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
@@ -136,12 +137,13 @@ class App(QObject):
         super().__init__()
         setup_logging()
         log.info(
-            "ai-gauge %s starting frozen=%s executable=%s cwd=%s appdata=%s",
+            "ai-gauge %s starting platform=%s frozen=%s executable=%s cwd=%s app_data=%s",
             __version__,
+            get_platform().name,
             bool(getattr(sys, "frozen", False)),
             sys.executable,
             os.getcwd(),
-            os.environ.get("APPDATA", ""),
+            app_data_dir(),
         )
         self._config = Config.load()
         self._snapshots: dict[str, UsageSnapshot] = {}

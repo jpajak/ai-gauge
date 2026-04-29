@@ -32,7 +32,7 @@ def test_paste_cookie_button_emits_paste_cookie_signal(qtbot):
 
 
 def test_claude_design_limit_is_optional(qtbot, monkeypatch):
-    monkeypatch.setattr(settings_dialog, "set_start_with_windows", lambda enabled: None)
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
     config = Config()
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)

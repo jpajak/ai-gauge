@@ -1,38 +1,28 @@
+"""Auto-start at login.
+
+Thin wrapper around the platform seam. The actual per-OS work (registry on
+Windows, LaunchAgent plist on macOS, .desktop file on Linux) lives in
+``aigauge.platforms``.
+"""
 from __future__ import annotations
 
-import sys
-from pathlib import Path
-
-_RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_RUN_VALUE = "ai-gauge"
+from .platforms import autostart_command, get_platform
 
 
 def _startup_command() -> str:
-    if getattr(sys, "frozen", False):
-        return f'"{sys.executable}"'
+    # Stringified form of the autostart argv. Kept for legacy callers / tests
+    # that want a human-readable command line. The platform impls themselves
+    # use the argv directly (no quoting fragility).
+    argv = autostart_command()
+    if not argv:
+        return ""
+    head, *tail = argv
+    return " ".join([f'"{head}"', *tail])
 
-    python = Path(sys.executable)
-    pythonw = python.with_name("pythonw.exe")
-    launcher = pythonw if pythonw.exists() else python
-    return f'"{launcher}" -m aigauge'
+
+def set_start_at_login(enabled: bool) -> None:
+    get_platform().set_autostart(enabled)
 
 
-def set_start_with_windows(enabled: bool) -> None:
-    if sys.platform != "win32":
-        return
-
-    import winreg
-
-    with winreg.OpenKey(
-        winreg.HKEY_CURRENT_USER,
-        _RUN_KEY,
-        0,
-        winreg.KEY_SET_VALUE,
-    ) as key:
-        if enabled:
-            winreg.SetValueEx(key, _RUN_VALUE, 0, winreg.REG_SZ, _startup_command())
-        else:
-            try:
-                winreg.DeleteValue(key, _RUN_VALUE)
-            except FileNotFoundError:
-                pass
+def get_start_at_login() -> bool:
+    return get_platform().get_autostart()

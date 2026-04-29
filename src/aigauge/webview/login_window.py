@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import logging
+
 from PyQt6.QtCore import Qt, QTimer, QUrl
-from PyQt6.QtWebEngineCore import QWebEngineSettings
+from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import (
     QDialog,
@@ -19,9 +21,75 @@ from .verify import (
     verify_session,
 )  # noqa: F401 - VERIFY_TARGETS re-exported for callers
 
+log = logging.getLogger("aigauge.webview.login")
+
+# Top-frame navigation in the embedded sign-in browser is restricted to these
+# host suffixes. The goal is defense in depth against an open-redirect bug on
+# either provider redirecting the embedded browser to an arbitrary URL.
+# Subresources (iframes, fonts, analytics, captchas) are not filtered — only
+# main-frame loads. If a real sign-in flow needs another host, add it here.
+AUTH_HOST_ALLOWLIST: tuple[str, ...] = (
+    # Anthropic / Claude
+    "claude.ai",
+    "anthropic.com",
+    # OpenAI / ChatGPT / Codex
+    "chatgpt.com",
+    "openai.com",
+    "oaistatic.com",
+    "oaiusercontent.com",
+    # Identity providers used by the above for SSO popups.
+    "auth0.com",
+    "appleid.apple.com",
+    "apple.com",
+    "icloud.com",
+    "microsoftonline.com",
+    "microsoft.com",
+    "live.com",
+)
+
+
+def _host_allowed(host: str) -> bool:
+    host = host.lower().strip()
+    if not host:
+        return False
+    for suffix in AUTH_HOST_ALLOWLIST:
+        if host == suffix or host.endswith("." + suffix):
+            return True
+    return False
+
+
+class _AllowlistedPage(QuietWebEnginePage):
+    """QuietWebEnginePage that blocks main-frame navigation off the auth allowlist."""
+
+    def acceptNavigationRequest(  # noqa: N802 — Qt override
+        self,
+        url: QUrl,
+        nav_type: QWebEnginePage.NavigationType,
+        is_main_frame: bool,
+    ) -> bool:
+        if is_main_frame:
+            scheme = url.scheme().lower()
+            if scheme in ("about", "data", "blob"):
+                return True
+            if scheme not in ("http", "https"):
+                log.warning(
+                    "login_window: blocking non-http navigation scheme=%s url=%s",
+                    scheme,
+                    url.toString(),
+                )
+                return False
+            if not _host_allowed(url.host()):
+                log.warning(
+                    "login_window: blocking off-allowlist navigation host=%s url=%s",
+                    url.host(),
+                    url.toString(),
+                )
+                return False
+        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
+
 
 def _styled_page(profile, parent) -> QWebEnginePage:
-    page = QuietWebEnginePage(profile, parent)
+    page = _AllowlistedPage(profile, parent)
     s = page.settings()
     s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
     s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, True)
@@ -38,14 +106,12 @@ def _styled_page(profile, parent) -> QWebEnginePage:
     return page
 
 
-class _PopupPage(QuietWebEnginePage):
+class _PopupPage(_AllowlistedPage):
     """Page used for popup OAuth windows opened from the main login view."""
 
     def __init__(self, profile, parent):
         super().__init__(profile, parent)
         self._popup_view: QWebEngineView | None = None
-        # Intercept Google popups — they're going to fail anyway and confuse the user.
-        self.urlChanged.connect(self._on_url_changed)
         self._google_warned = False
 
     def attach_view(self) -> QWebEngineView:
@@ -63,19 +129,30 @@ class _PopupPage(QuietWebEnginePage):
         self._popup_view = view
         return view
 
-    def _on_url_changed(self, url: QUrl) -> None:
-        host = url.host()
-        if "google.com" in host or "accounts.google" in host:
-            if self._google_warned or self._popup_view is None:
-                return
-            self._google_warned = True
-            QMessageBox.warning(
-                self._popup_view,
-                "Google sign-in not supported",
-                "Google blocks sign-in from embedded browsers. Cancel this "
-                "window and use the <b>Paste cookie</b> button in Settings "
-                "instead — that path works with Google-authed accounts.",
-            )
+    def acceptNavigationRequest(  # noqa: N802 — Qt override
+        self,
+        url: QUrl,
+        nav_type: QWebEnginePage.NavigationType,
+        is_main_frame: bool,
+    ) -> bool:
+        # Google sign-in is going to fail anyway (Google blocks embedded
+        # browsers), and the host is also off-allowlist below — surface a
+        # friendlier message before the generic block kicks in.
+        if is_main_frame and not self._google_warned:
+            host = url.host().lower()
+            if "google.com" in host or "accounts.google" in host:
+                self._google_warned = True
+                if self._popup_view is not None:
+                    QMessageBox.warning(
+                        self._popup_view,
+                        "Google sign-in not supported",
+                        "Google blocks sign-in from embedded browsers. Cancel "
+                        "this window and use the <b>Paste cookie</b> button "
+                        "in Settings instead — that path works with "
+                        "Google-authed accounts.",
+                    )
+                return False
+        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
 
 class LoginWindow(QDialog):

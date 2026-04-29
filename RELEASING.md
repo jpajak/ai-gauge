@@ -19,7 +19,13 @@ For AI Gauge, the release page should include:
 ## Release Checklist
 
 1. Confirm `pyproject.toml`, `src/aigauge/__init__.py`, `README.md`, and
-   `CHANGELOG.md` all show the same version.
+   `CHANGELOG.md` all show the same version. The CI workflow runs
+   `tools/check_versions.py` for this; you can run it locally with:
+
+   ```powershell
+   .venv\Scripts\python.exe tools\check_versions.py
+   ```
+
 2. Run the test suite:
 
    ```powershell
@@ -45,9 +51,9 @@ For AI Gauge, the release page should include:
 8. Create and push a version tag:
 
    ```powershell
-   git tag v0.4.2
+   git tag v0.5.0
    git push origin main
-   git push origin v0.4.2
+   git push origin v0.5.0
    ```
 
 9. In GitHub, open the repository, go to **Releases**, choose **Draft a new
@@ -58,7 +64,7 @@ For AI Gauge, the release page should include:
 ## Suggested Release Notes Shape
 
 ```markdown
-## AI Gauge 0.4.2
+## AI Gauge 0.5.0
 
 Compact always-on-top Windows monitor for Claude.ai, ChatGPT Codex, and GitHub
 Copilot usage limits.

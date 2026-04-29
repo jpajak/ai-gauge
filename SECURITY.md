@@ -9,8 +9,11 @@ or Microsoft.
 Please do not open a public issue for a vulnerability that exposes session
 cookies, GitHub tokens, or other secrets.
 
-Until a private reporting channel is configured for this repository, contact
-the maintainer directly through their GitHub profile and include:
+Preferred channel: open a private security advisory at
+<https://github.com/jpajak/ai-gauge/security/advisories/new>.
+
+If that is not available, contact the maintainer directly through their
+GitHub profile and include:
 
 - A short description of the issue.
 - Steps to reproduce it.
@@ -32,9 +35,44 @@ The app stores provider sessions locally on the user's machine:
 - Embedded browser profiles are stored under
   `%APPDATA%/ai-gauge/profiles/{provider}/`.
 
-`secrets.dat` uses Windows DPAPI when available, so it is intended to be
-readable only by the same Windows user account. If DPAPI is unavailable, the
-app may fall back to local file storage for compatibility.
+`secrets.dat` is encrypted with Windows DPAPI (`CryptProtectData`).
+
+### What DPAPI does and does not protect against
+
+DPAPI binds the ciphertext to the **Windows user account**, not to AI Gauge.
+That has two consequences worth being explicit about:
+
+- **Same-user processes can decrypt it.** Any process running under the same
+  Windows user — including a malicious script, another browser extension
+  host, or a user-mode malware sample — can call `CryptUnprotectData` and
+  recover the plaintext. This is the same threat model Chrome's pre-v127
+  cookie storage used.
+- **Other Windows users on the same machine cannot decrypt it.** A different
+  local account or a service account running as `LOCAL SYSTEM` will not be
+  able to read `secrets.dat` without first impersonating the user.
+
+The secrets stored here are session tokens, not just passwords — recovery of
+a Claude or ChatGPT session cookie is functionally equivalent to taking over
+the account in a browser until the cookie expires. Treat your Windows user
+profile accordingly.
+
+On non-Windows hosts (used for cross-platform development), the secret-store
+write path is **disabled by default**. Setting
+`AIGAUGE_ALLOW_PLAINTEXT_SECRETS=1` opts into a plaintext fallback for
+testing purposes only; production code paths should never reach this branch.
+
+## Embedded Browser
+
+The sign-in window uses an in-process `QWebEngineView` with a per-provider
+profile under `%APPDATA%/ai-gauge/profiles/{provider}/`. Cookies it acquires
+are kept inside that profile and are not shared with your real Chrome or
+Edge browser.
+
+Navigation in the embedded browser is restricted to an allowlist of
+provider auth domains (Claude, ChatGPT, and their known OAuth/identity hops
+plus the magic-link delivery surfaces). Off-allowlist navigations are
+blocked as defense-in-depth against an open-redirect bug on either provider
+sending the embedded browser to an arbitrary URL.
 
 ## Privacy
 

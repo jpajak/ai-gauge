@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.5.0 - 2026-04-28
+
+### Changed
+
+- Renamed the project from `usage-view` to `ai-gauge`. Package import is now `aigauge`, console script is `ai-gauge`, app data lives under `%APPDATA%/ai-gauge/`, and the standalone build outputs `dist/ai-gauge/ai-gauge.exe`. Existing installs that wrote to `%APPDATA%/usage-view/` are not migrated automatically — copy the folder over if you want to keep history and saved sessions.
+
+### Added
+
+- Continuous integration on GitHub Actions: pytest runs against Python 3.11 and 3.12 on Windows for every push and pull request, gated by a `tools/check_versions.py` script that fails the build if `pyproject.toml`, `src/aigauge/__init__.py`, the README, and the changelog drift out of sync.
+- Issue templates (bug report, provider layout broken, feature request) and a `CONTRIBUTING.md` with dev setup, test, and PR expectations.
+- URL allowlist on the embedded sign-in browser: navigation is restricted to the auth-related domains for Claude and ChatGPT (and their known OAuth/identity hops). Off-allowlist navigations are blocked, hardening the embedded browser against open-redirect abuse on either provider's auth flow.
+
+### Security
+
+- `secret_storage` now refuses to write secrets on non-Windows hosts instead of silently falling back to a plaintext `secrets.dat` (an artifact of early cross-platform dev). Reads still succeed where possible so existing test fixtures keep working, but production write paths require DPAPI.
+- `SECURITY.md` now spells out that DPAPI encryption is per-user, not per-process: any code running as the same Windows user can decrypt `secrets.dat`.
+
 ## 0.4.3 - 2026-04-28
 
 ### Added

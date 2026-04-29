@@ -1,0 +1,35 @@
+name: Feature request
+description: Suggest a new provider, a UI change, or a workflow improvement.
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Please open a feature request before writing code, especially for new
+        providers or anything that changes the panel layout. AI Gauge tries to
+        stay small and Windows-tray-shaped, so not every idea will fit.
+  - type: textarea
+    id: problem
+    attributes:
+      label: What problem are you trying to solve?
+      description: Describe the user-facing problem, not a specific implementation.
+    validations:
+      required: true
+  - type: textarea
+    id: idea
+    attributes:
+      label: What's your suggested change?
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives you've considered
+      placeholder: "e.g. could already be handled by paste-cookie + manual refresh"
+  - type: checkboxes
+    id: scope
+    attributes:
+      label: Scope check
+      options:
+        - label: This is a Windows desktop feature (cross-platform requests are unlikely to land — see README).
+        - label: I'm willing to send a PR if we agree on the design.

@@ -1,0 +1,64 @@
+name: Provider layout broken
+description: Claude or Codex tile shows `error · layout changed` or empty values after a provider UI update.
+labels: [provider-layout]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        AI Gauge scrapes Claude.ai and ChatGPT Codex usage pages. When those
+        pages change shape upstream, the page-extractor JS in
+        `src/aigauge/providers/{claude,codex}.py` needs adjusting. These
+        reports are very welcome.
+
+        **Do not paste your `Cookie:` header.** Paste only the diagnostic
+        details below.
+  - type: dropdown
+    id: provider
+    attributes:
+      label: Which provider tile is broken?
+      options:
+        - Claude.ai
+        - ChatGPT Codex
+        - Both
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: AI Gauge version
+      placeholder: "e.g. 0.5.0"
+    validations:
+      required: true
+  - type: textarea
+    id: tile-text
+    attributes:
+      label: Exact text shown on the tile
+      placeholder: "e.g. error · layout changed"
+    validations:
+      required: true
+  - type: textarea
+    id: error-dialog
+    attributes:
+      label: Click the tile error and copy the raw payload
+      description: |
+        Click the error label on the tile to open the details dialog, hit Copy,
+        and paste it here. Redact any URLs that look user-specific.
+      render: text
+  - type: textarea
+    id: page-state
+    attributes:
+      label: What does the actual provider page look like right now?
+      description: |
+        Open the same URL in your normal browser and describe (or screenshot)
+        what's there. New "Plan usage limits" header? Different chart? Banner?
+        That description is what makes the fix tractable.
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant log lines
+      description: |
+        From `%APPDATA%/ai-gauge/ai-gauge.log`. Look for `provider=claude` or
+        `provider=codex` lines around the failed refresh.
+      render: text

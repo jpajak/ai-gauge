@@ -7,18 +7,33 @@ __Secure-next-auth.session-token can be 5-10KB).
 We store these in %APPDATA%/ai-gauge/secrets.dat, encrypted with DPAPI
 (CryptProtectData) — same per-user encryption that pre-v127 Chrome used. No
 new Python dependencies; calls into crypt32.dll via ctypes.
+
+This module is Windows-only by design. On non-Windows hosts (used during
+cross-platform development of pure-Python helpers), writes are routed to a
+plaintext file under a sandboxed test directory and a loud warning is logged.
+Production callers should never reach the non-Windows branch.
 """
 from __future__ import annotations
 
 import ctypes
 import ctypes.wintypes as wt
 import json
+import logging
+import os
 import sys
 from pathlib import Path
 
 from .config import app_data_dir
 
+log = logging.getLogger("aigauge.secret_storage")
+
 _SECRETS_FILENAME = "secrets.dat"
+
+# Opt-in escape hatch for the cross-platform test suite. When unset (the
+# normal case) writes on non-Windows refuse loudly so a misconfigured macOS
+# or Linux box cannot silently produce an unencrypted secrets.dat next to a
+# real cookie.
+_ALLOW_PLAINTEXT_ENV = "AIGAUGE_ALLOW_PLAINTEXT_SECRETS"
 
 
 class _DataBlob(ctypes.Structure):
@@ -108,8 +123,21 @@ def _save_all(data: dict[str, str]) -> None:
     payload = json.dumps(data).encode("utf-8")
     if sys.platform == "win32":
         path.write_bytes(_protect(payload))
-    else:
+        return
+    if os.environ.get(_ALLOW_PLAINTEXT_ENV) == "1":
+        log.warning(
+            "secret_storage: writing PLAINTEXT secrets.dat on non-Windows host "
+            "(AIGAUGE_ALLOW_PLAINTEXT_SECRETS=1). This is a development-only "
+            "escape hatch; do not use it with real provider cookies."
+        )
         path.write_bytes(payload)
+        return
+    raise RuntimeError(
+        "secret_storage: refusing to write secrets on non-Windows host. "
+        "DPAPI encryption is unavailable, so writing here would store the "
+        "value in plaintext. Run on Windows, or set "
+        "AIGAUGE_ALLOW_PLAINTEXT_SECRETS=1 to opt in (development only)."
+    )
 
 
 def save_secret(name: str, value: str | None) -> None:

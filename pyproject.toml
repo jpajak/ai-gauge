@@ -1,11 +1,11 @@
 [project]
 name = "ai-gauge"
-version = "0.4.3"
+version = "0.5.0"
 description = "Compact always-on-top monitor for Claude.ai, ChatGPT Codex, and GitHub Copilot usage limits."
 requires-python = ">=3.11"
 dependencies = [
-    "PyQt6>=6.7",
-    "PyQt6-WebEngine>=6.7",
+    "PyQt6>=6.7,<7",
+    "PyQt6-WebEngine>=6.7,<7",
     "requests>=2.32",
     "pydantic>=2.6",
     "keyring>=25.0",

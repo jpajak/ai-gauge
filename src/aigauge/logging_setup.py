@@ -21,7 +21,7 @@ def setup_logging() -> logging.Logger:
     callers can write to it directly without going through getLogger().
     """
     logger = logging.getLogger(LOGGER_NAME)
-    if getattr(logger, "_uv_initialized", False):
+    if getattr(logger, "_ag_initialized", False):
         return logger
 
     logger.setLevel(logging.INFO)
@@ -49,5 +49,5 @@ def setup_logging() -> logging.Logger:
         # still capture diagnostics rather than silently dropping them.
         logger.addHandler(logging.StreamHandler())
 
-    logger._uv_initialized = True  # type: ignore[attr-defined]
+    logger._ag_initialized = True  # type: ignore[attr-defined]
     return logger

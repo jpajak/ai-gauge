@@ -1,17 +1,30 @@
 # AI Gauge
 
-Compact always-on-top Windows monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, system tray, draggable frameless widget.
+[![test](https://github.com/jpajak/ai-gauge/actions/workflows/test.yml/badge.svg)](https://github.com/jpajak/ai-gauge/actions/workflows/test.yml)
+![Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
+![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
+![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-Current version: **0.4.3**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Compact always-on-top **Windows** monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, system tray, draggable frameless widget.
+
+> **Requires Windows 10 or 11 and Python 3.11+.** AI Gauge depends on Windows-only APIs (DPAPI for secret encryption, Credential Manager, the Windows registry for Start-with-Windows, and `%APPDATA%`). It does not run on macOS or Linux.
+
+Current version: **0.5.0**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is a personal open-source project and unofficial local desktop
 utility. It is not an AloeDesk product, and it is not affiliated with
 Anthropic, OpenAI, GitHub, or Microsoft. Provider pages and APIs may change
 without notice.
 
+## Screenshots
+
+| Full panel | Compact pill | Settings |
+| --- | --- | --- |
+| ![Full panel](docs/screenshots/panel-full.png) | ![Compact pill](docs/screenshots/panel-compact.png) | ![Settings](docs/screenshots/settings.png) |
+
 ## Run from source
 
-```bash
+```powershell
 py -m venv .venv
 .venv\Scripts\pip install -e .[dev]
 .venv\Scripts\python -m aigauge
@@ -95,11 +108,17 @@ Windows may show a SmartScreen warning for downloaded executables. See
 
 ## Tests
 
-```bash
+```powershell
 .venv\Scripts\pytest
 ```
 
 Tests cover: config round-trip, Copilot REST helpers (with mocked HTTP), and snapshot models. Provider scrapers (Claude/Codex) require a live browser session and are validated manually.
+
+## Contributing
+
+Bug reports, provider-layout fixes, and PRs are welcome. See
+[CONTRIBUTING.md](CONTRIBUTING.md) for environment setup, test commands, and
+the issue templates to use.
 
 ## Notes / limitations
 

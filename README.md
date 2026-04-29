@@ -18,9 +18,22 @@ without notice.
 
 ## Screenshots
 
-| Full panel | Compact pill | Settings |
-| --- | --- | --- |
-| ![Full panel](docs/screenshots/panel-full.png) | ![Compact pill](docs/screenshots/panel-compact.png) | ![Settings](docs/screenshots/settings.png) |
+The widget pinned always-on-top, in full panel and collapsed pill modes:
+
+<p align="center">
+  <img src="docs/screenshots/panel-full.png" alt="AI Gauge full panel showing Claude, Codex, and Copilot tiles" width="320" />
+  &nbsp;&nbsp;
+  <img src="docs/screenshots/panel-compact.png" alt="AI Gauge collapsed pill mode" width="320" />
+</p>
+
+<details>
+<summary>Settings dialog</summary>
+
+<p align="center">
+  <img src="docs/screenshots/settings.png" alt="AI Gauge settings dialog with provider, refresh, and Copilot PAT options" width="640" />
+</p>
+
+</details>
 
 ## Run from source
 

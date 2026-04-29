@@ -1,13 +1,16 @@
 # AI Gauge
 
 [![test](https://github.com/jpajak/ai-gauge/actions/workflows/test.yml/badge.svg)](https://github.com/jpajak/ai-gauge/actions/workflows/test.yml)
-![Windows 10/11](https://img.shields.io/badge/platform-Windows%2010%2F11-0078d4)
+![Windows / macOS / Linux](https://img.shields.io/badge/platform-Windows%20%7C%20macOS%20%7C%20Linux-0078d4)
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-Compact always-on-top **Windows** monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, system tray, draggable frameless widget.
+Compact monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, with a platform-native UI on each OS:
 
-> **Requires Windows 10 or 11 and Python 3.11+.** AI Gauge depends on Windows-only APIs (DPAPI for secret encryption, Credential Manager, the Windows registry for Start-with-Windows, and `%APPDATA%`). It does not run on macOS or Linux.
+- **Windows / Linux** — always-on-top draggable frameless widget plus a system-tray icon.
+- **macOS** — Stats-style menu-bar item (`● 42% ● 78% ● 15%`); the panel opens as a popover when you click it.
+
+> **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Run key / LaunchAgent / `~/.config/autostart`).
 
 Current version: **0.5.0**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
@@ -37,10 +40,20 @@ The widget pinned always-on-top, in full panel and collapsed pill modes:
 
 ## Run from source
 
+**Windows (PowerShell):**
+
 ```powershell
 py -m venv .venv
 .venv\Scripts\pip install -e .[dev]
 .venv\Scripts\python -m aigauge
+```
+
+**macOS / Linux (bash):**
+
+```bash
+python3 -m venv .venv
+.venv/bin/pip install -e .[dev]
+.venv/bin/python -m aigauge
 ```
 
 The first launch opens the Settings dialog. Configure providers there.
@@ -53,7 +66,13 @@ The first launch opens the Settings dialog. Configure providers there.
 | **ChatGPT Codex**  | Same as Claude — use email + magic link in the embedded browser, or paste cookie.                                                                                                                                                                                                                                                                                                                                                           |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal Pro/Pro+, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly quota (Pro=300, Pro+=1500, Business=300, Enterprise=1000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
 
-Sessions persist between runs in `%APPDATA%/ai-gauge/profiles/{provider}/`. The GitHub PAT is stored in **Windows Credential Manager** when available, with the same DPAPI-encrypted file fallback used for pasted cookies at `%APPDATA%/ai-gauge/secrets.dat`.
+Sessions persist between runs under the per-OS app-data directory:
+
+| OS      | App data                                  | Secrets backend                           |
+| ------- | ----------------------------------------- | ----------------------------------------- |
+| Windows | `%APPDATA%/ai-gauge/`                     | Credential Manager (PAT) + DPAPI-encrypted `secrets.dat` (cookies, since the Credential Manager blob limit is too small for ChatGPT JWTs) |
+| macOS   | `~/Library/Application Support/ai-gauge/` | Login Keychain                            |
+| Linux   | `~/.config/ai-gauge/`                     | Secret Service (GNOME Keyring / KWallet)  |
 
 AI Gauge does not include telemetry or a backend service. Provider requests
 are made from the local app to the configured providers. See
@@ -75,54 +94,41 @@ Google blocks all embedded browsers from signing in. Workaround: copy your exist
 
 ## Daily use
 
-- The widget floats above other windows by default. Drag anywhere to move; close (✕) hides to tray.
-- Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
-- Right-click tray → Refresh / Settings / Quit. Left-click toggles widget visibility.
+- **Windows / Linux:** the widget floats above other windows by default. Drag anywhere to move; close (✕) hides to tray. Right-click the tray icon for Refresh / Settings / Quit. Left-click toggles widget visibility. Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
+- **macOS:** the menu-bar item shows one tinted dot + percent per enabled provider. Click it to open the panel as a popover; click outside to dismiss. Right-click for the same Refresh / Settings / Quit menu.
+- **Linux without a system tray** (stock GNOME): the floating widget stays visible and serves the same Show / Refresh / Settings / Quit menu via right-click on the widget.
 - Auto-refresh is adaptive: manual refresh or changed usage enters the active
   cadence, then unchanged results back off toward the configured max interval.
   Defaults are 5 min active and 60 min idle max.
-- Enable **Start with Windows** in Settings if you want it to run as a daily tray utility.
+- Enable **Start at login** in Settings if you want it to run as a daily utility.
 
-## Build a standalone .exe
+## Build a standalone binary
 
 No Python install required on the target machine.
 
-Recommended release build:
+| OS      | Command          | Output                       |
+| ------- | ---------------- | ---------------------------- |
+| Windows | `.\build.ps1`    | `dist/ai-gauge/ai-gauge.exe` |
+| macOS   | `./build.sh`     | `dist/ai-gauge.app`          |
+| Linux   | `./build.sh`     | `dist/ai-gauge/ai-gauge`     |
 
-```powershell
-.\build.ps1
-```
+Bundles are ~150-200 MB because the Chromium runtime ships inside. User data still lives outside the bundle, under the per-OS app-data directory.
 
-Output goes to `dist/ai-gauge/ai-gauge.exe` (~150-200 MB because the Chromium runtime is bundled). Distribute the whole `dist/ai-gauge` folder; user data still lives outside it under `%APPDATA%/ai-gauge/`.
+For a single-file binary (slower first launch), pass `-OneFile` (PowerShell) or `--onefile` (bash). On macOS the `.app` bundle is recommended over the single-file form.
 
-For a single-file binary (slower first launch):
+**First-launch warnings on signed-OS-bundle systems** — release artifacts are unsigned:
 
-```powershell
-.\build.ps1 -OneFile
-```
+- **Windows:** SmartScreen → "More info" → "Run anyway".
+- **macOS:** Gatekeeper blocks on first launch. Either right-click the `.app` → Open the first time, or run `xattr -dr com.apple.quarantine ai-gauge.app` once.
+- **Linux:** no signing layer; just make `ai-gauge` executable if it isn't already.
 
-The equivalent manual PyInstaller command is:
-
-```powershell
-.venv\Scripts\pip install pyinstaller
-.venv\Scripts\pyinstaller `
-    --windowed --name ai-gauge `
-    --paths src `
-    --collect-all PyQt6.QtWebEngineWidgets `
-    --collect-all PyQt6.QtWebEngineCore `
-    pyinstaller_entry.py
-```
-
-Add `--onefile` to the manual command only if you want the single-file build.
-
-Public release builds are expected to be unsigned unless noted otherwise, so
-Windows may show a SmartScreen warning for downloaded executables. See
-[RELEASING.md](RELEASING.md) for maintainer release steps.
+See [RELEASING.md](RELEASING.md) for maintainer release steps.
 
 ## Tests
 
 ```powershell
-.venv\Scripts\pytest
+.venv\Scripts\pytest          # Windows
+.venv/bin/pytest              # macOS / Linux
 ```
 
 Tests cover: config round-trip, Copilot REST helpers (with mocked HTTP), and snapshot models. Provider scrapers (Claude/Codex) require a live browser session and are validated manually.

@@ -1,8 +1,8 @@
 # Security
 
-AI Gauge is a personal open-source local Windows desktop utility. It is not
-an AloeDesk product, and it is not affiliated with Anthropic, OpenAI, GitHub,
-or Microsoft.
+AI Gauge is a personal open-source local desktop utility for Windows, macOS,
+and Linux. It is not an AloeDesk product, and it is not affiliated with
+Anthropic, OpenAI, GitHub, or Microsoft.
 
 ## Reporting a Vulnerability
 
@@ -25,46 +25,56 @@ snippets. Redacted examples are enough for initial triage.
 
 ## Secret Storage
 
-The app stores provider sessions locally on the user's machine:
+The app stores provider sessions locally on the user's machine. Each OS
+uses its native credential store; the threat model is the same shape on
+all three: same-user processes can decrypt the data, but other local users
+cannot.
 
-- Claude.ai and ChatGPT Codex session cookies are stored under
-  `%APPDATA%/ai-gauge/secrets.dat`.
-- GitHub Copilot personal access tokens are stored in Windows Credential
-  Manager when available.
-- Legacy token storage may be migrated out of `secrets.dat` when possible.
-- Embedded browser profiles are stored under
-  `%APPDATA%/ai-gauge/profiles/{provider}/`.
+| OS      | Cookies                                                      | GitHub PAT                |
+| ------- | ------------------------------------------------------------ | ------------------------- |
+| Windows | DPAPI-encrypted `%APPDATA%/ai-gauge/secrets.dat`             | Windows Credential Manager |
+| macOS   | Login Keychain                                               | Login Keychain            |
+| Linux   | Secret Service (GNOME Keyring / KWallet) via `keyring`       | same                      |
 
-`secrets.dat` is encrypted with Windows DPAPI (`CryptProtectData`).
+Embedded browser profiles live under `<app-data>/profiles/{provider}/` on
+every OS.
 
-### What DPAPI does and does not protect against
+### Why the split on Windows?
 
-DPAPI binds the ciphertext to the **Windows user account**, not to AI Gauge.
-That has two consequences worth being explicit about:
+Windows Credential Manager caps each blob at ~2.5 KB, which is fine for a
+GitHub PAT but smaller than ChatGPT's `__Secure-next-auth.session-token` JWT.
+On Windows we therefore keep cookies in `secrets.dat`, encrypted with DPAPI
+(`CryptProtectData`), and only the PAT in Credential Manager. macOS Keychain
+and the Linux Secret Service have no comparable size limit, so on those
+platforms everything goes through `keyring`.
 
-- **Same-user processes can decrypt it.** Any process running under the same
-  Windows user — including a malicious script, another browser extension
-  host, or a user-mode malware sample — can call `CryptUnprotectData` and
-  recover the plaintext. This is the same threat model Chrome's pre-v127
-  cookie storage used.
-- **Other Windows users on the same machine cannot decrypt it.** A different
-  local account or a service account running as `LOCAL SYSTEM` will not be
-  able to read `secrets.dat` without first impersonating the user.
+### What the OS credential stores do and do not protect against
+
+All three credential stores bind ciphertext to the **logged-in user
+account**, not to AI Gauge specifically:
+
+- **Same-user processes can decrypt the secrets.** Any process running under
+  the same OS user — a malicious script, a browser extension host, a
+  user-mode malware sample — can call the same APIs and recover the
+  plaintext. This is the same threat model browsers use for cookie storage.
+- **Other local users cannot decrypt them.** A different local account, a
+  service account, or another macOS user's session will not be able to read
+  AI Gauge's secrets without first impersonating the user.
 
 The secrets stored here are session tokens, not just passwords — recovery of
 a Claude or ChatGPT session cookie is functionally equivalent to taking over
-the account in a browser until the cookie expires. Treat your Windows user
+the account in a browser until the cookie expires. Treat your OS user
 profile accordingly.
 
-On non-Windows hosts (used for cross-platform development), the secret-store
-write path is **disabled by default**. Setting
+On non-Windows hosts the legacy `secret_storage` write path is **disabled
+by default** (cookies go through `keyring` instead). Setting
 `AIGAUGE_ALLOW_PLAINTEXT_SECRETS=1` opts into a plaintext fallback for
-testing purposes only; production code paths should never reach this branch.
+test fixtures only; production code paths should never reach this branch.
 
 ## Embedded Browser
 
 The sign-in window uses an in-process `QWebEngineView` with a per-provider
-profile under `%APPDATA%/ai-gauge/profiles/{provider}/`. Cookies it acquires
+profile under `<app-data>/profiles/{provider}/`. Cookies it acquires
 are kept inside that profile and are not shared with your real Chrome or
 Edge browser.
 
@@ -80,8 +90,8 @@ AI Gauge does not include telemetry or a backend service. Provider requests
 are made from the local app to Claude.ai, ChatGPT, and GitHub endpoints needed
 to read usage information.
 
-Diagnostic logs are written locally to
-`%APPDATA%/ai-gauge/ai-gauge.log`. Logs are intended to avoid recording
+Diagnostic logs are written locally to `<app-data>/ai-gauge.log`. Logs
+are intended to avoid recording
 raw cookies, personal access tokens, and sensitive response bodies. Review logs
 before sharing them in an issue.
 

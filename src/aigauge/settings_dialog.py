@@ -172,7 +172,7 @@ class SettingsDialog(QDialog):
         # Intentionally NOT stays-on-top or app-modal: users may need to switch
         # to their normal browser, and clicking the status panel should bring
         # this existing Settings window back to the foreground.
-        self.setWindowTitle("Usage View — Settings")
+        self.setWindowTitle("AI Gauge — Settings")
         self.setModal(False)
         self.resize(560, 650)
         self.setStyleSheet(_DARK_STYLESHEET)
@@ -387,7 +387,7 @@ class SettingsDialog(QDialog):
 
         log_btn = QPushButton("Open log folder")
         log_btn.setToolTip(
-            "Reveal usage-view.log in Explorer — useful when reporting a problem."
+            "Reveal ai-gauge.log in Explorer — useful when reporting a problem."
         )
         log_btn.clicked.connect(lambda: reveal_path(log_path()))
 
@@ -422,7 +422,7 @@ class SettingsDialog(QDialog):
                     self,
                     "PAT was not cleared",
                     "The token still appears to be available after clearing. "
-                    "Remove the 'usage-view' / 'github-pat' credential from "
+                    "Remove the 'ai-gauge' / 'github-pat' credential from "
                     "Windows Credential Manager.",
                 )
                 return

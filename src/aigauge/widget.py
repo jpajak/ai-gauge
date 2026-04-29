@@ -522,8 +522,8 @@ class UsageWidget(QWidget):
         self._always_on_top_suspensions = 0
 
         # Header bar
-        title = QLabel(f"usage view {__version__}")
-        title.setToolTip(f"usage-view {__version__}")
+        title = QLabel(f"AI Gauge {__version__}")
+        title.setToolTip(f"ai-gauge {__version__}")
         title.setStyleSheet("color:#9ca3af; font-size:10px; font-weight:600;")
 
         self.cadence_label = QLabel("")
@@ -587,7 +587,7 @@ class UsageWidget(QWidget):
         collapsed_header = QHBoxLayout()
         collapsed_header.setContentsMargins(0, 0, 0, 0)
         collapsed_header.setSpacing(4)
-        collapsed_title = QLabel(f"usage view {__version__}")
+        collapsed_title = QLabel(f"AI Gauge {__version__}")
         collapsed_title.setStyleSheet(
             "color:#9ca3af; font-size:10px; font-weight:600;"
         )

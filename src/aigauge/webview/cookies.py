@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 from http.cookies import SimpleCookie
 
 from PyQt6.QtCore import QByteArray, QDateTime, QUrl
@@ -12,6 +13,8 @@ from ..config import (
     get_provider_cookie,
 )
 from .profile import get_profile
+
+log = logging.getLogger("aigauge.webview.cookies")
 
 # 60-day expiry — Claude/ChatGPT session tokens last weeks; we re-set on each
 # launch anyway, so this is just to keep the cookie persistent across the
@@ -142,6 +145,19 @@ def hydrate_all_from_keyring() -> list[str]:
     loaded: list[str] = []
     for provider in COOKIE_NAMES:
         value = get_provider_cookie(provider)
-        if value and inject_session_cookie(provider, value):
+        pairs = _parse_cookie_pairs(provider, value) if value else []
+        names = sorted({name for name, _ in pairs})
+        has_auth = _has_auth_cookie(provider, pairs) if pairs else False
+        injected = bool(value and inject_session_cookie(provider, value))
+        log.info(
+            "cookie hydration provider=%s stored=%s parsed_cookie_names=%s "
+            "has_auth_cookie=%s injected=%s",
+            provider,
+            bool(value),
+            names,
+            has_auth,
+            injected,
+        )
+        if injected:
             loaded.append(provider)
     return loaded

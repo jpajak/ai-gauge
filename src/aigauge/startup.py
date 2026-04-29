@@ -4,7 +4,7 @@ import sys
 from pathlib import Path
 
 _RUN_KEY = r"Software\Microsoft\Windows\CurrentVersion\Run"
-_RUN_VALUE = "usage-view"
+_RUN_VALUE = "ai-gauge"
 
 
 def _startup_command() -> str:
@@ -14,7 +14,7 @@ def _startup_command() -> str:
     python = Path(sys.executable)
     pythonw = python.with_name("pythonw.exe")
     launcher = pythonw if pythonw.exists() else python
-    return f'"{launcher}" -m usage_view'
+    return f'"{launcher}" -m aigauge'
 
 
 def set_start_with_windows(enabled: bool) -> None:

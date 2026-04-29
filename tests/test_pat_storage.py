@@ -1,6 +1,6 @@
 import keyring
 
-from usage_view import config
+from aigauge import config
 
 
 def test_set_github_pat_uses_credential_manager_only(monkeypatch):
@@ -12,7 +12,7 @@ def test_set_github_pat_uses_credential_manager_only(monkeypatch):
         lambda service, account, value: keyring_calls.append((service, account, value)),
     )
     monkeypatch.setattr(
-        "usage_view.secret_storage.save_secret",
+        "aigauge.secret_storage.save_secret",
         lambda name, value: secret_calls.append((name, value)),
     )
 
@@ -31,9 +31,9 @@ def test_get_github_pat_migrates_legacy_secret_to_credential_manager(monkeypatch
         keyring_store["value"] = value
 
     monkeypatch.setattr(config.keyring, "set_password", set_password)
-    monkeypatch.setattr("usage_view.secret_storage.load_secret", lambda _name: "legacy")
+    monkeypatch.setattr("aigauge.secret_storage.load_secret", lambda _name: "legacy")
     monkeypatch.setattr(
-        "usage_view.secret_storage.save_secret",
+        "aigauge.secret_storage.save_secret",
         lambda name, value: secret_calls.append((name, value)),
     )
 
@@ -49,6 +49,6 @@ def test_get_github_pat_can_still_read_legacy_secret_if_keyring_unavailable(monk
         raise keyring.errors.KeyringError("no backend")
 
     monkeypatch.setattr(config.keyring, "set_password", raise_keyring_error)
-    monkeypatch.setattr("usage_view.secret_storage.load_secret", lambda _name: "legacy")
+    monkeypatch.setattr("aigauge.secret_storage.load_secret", lambda _name: "legacy")
 
     assert config.get_github_pat() == "legacy"

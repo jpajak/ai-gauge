@@ -8,8 +8,8 @@ from typing import Any
 import keyring
 from pydantic import BaseModel, Field
 
-APP_NAME = "usage-view"
-KEYRING_SERVICE = "usage-view"
+APP_NAME = "ai-gauge"
+KEYRING_SERVICE = "ai-gauge"
 KEYRING_GITHUB_PAT = "github-pat"
 WINDOW_WIDTH = 340
 WINDOW_MIN_HEIGHT = 80
@@ -41,7 +41,7 @@ COOKIE_DOMAINS = {
 
 
 def app_data_dir() -> Path:
-    """%APPDATA%/usage-view on Windows, ~/.config/usage-view elsewhere."""
+    """%APPDATA%/ai-gauge on Windows, ~/.config/ai-gauge elsewhere."""
     base = os.environ.get("APPDATA")
     if base:
         return Path(base) / APP_NAME

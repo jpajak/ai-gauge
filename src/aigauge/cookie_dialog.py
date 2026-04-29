@@ -17,7 +17,7 @@ from .config import get_provider_cookie
 from .webview.cookies import _parse_cookie_pairs, inject_session_cookie
 from .webview.verify import VERIFY_TARGETS, verify_session
 
-log = logging.getLogger("usage_view.cookie_dialog")
+log = logging.getLogger("aigauge.cookie_dialog")
 
 INSTRUCTIONS = {
     "claude": (

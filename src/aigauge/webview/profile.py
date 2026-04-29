@@ -1,8 +1,18 @@
 from __future__ import annotations
 
-from PyQt6.QtWebEngineCore import QWebEngineProfile
+import logging
+
+from PyQt6.QtCore import QT_VERSION_STR
+from PyQt6.QtWebEngineCore import (
+    QWebEngineProfile,
+    qWebEngineChromiumSecurityPatchVersion,
+    qWebEngineChromiumVersion,
+    qWebEngineVersion,
+)
 
 from ..config import webview_profile_dir
+
+log = logging.getLogger("aigauge.webview.profile")
 
 _REALISTIC_UA = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
@@ -25,13 +35,26 @@ def get_profile(provider: str) -> QWebEngineProfile:
     storage_dir = webview_profile_dir(provider)
     storage_dir.mkdir(parents=True, exist_ok=True)
 
-    profile = QWebEngineProfile(f"usage-view-{provider}")
+    profile = QWebEngineProfile(f"ai-gauge-{provider}")
     profile.setPersistentStoragePath(str(storage_dir))
     profile.setCachePath(str(storage_dir / "cache"))
     profile.setPersistentCookiesPolicy(
         QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
     )
     profile.setHttpUserAgent(_REALISTIC_UA)
+
+    log.info(
+        "webengine profile created provider=%s storage=%s cache=%s ua=%r "
+        "qt=%s webengine=%s chromium=%s chromium_patch=%s",
+        provider,
+        storage_dir,
+        storage_dir / "cache",
+        _REALISTIC_UA,
+        QT_VERSION_STR,
+        qWebEngineVersion(),
+        qWebEngineChromiumVersion(),
+        qWebEngineChromiumSecurityPatchVersion(),
+    )
 
     _profiles[provider] = profile
     return profile

@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from usage_view.models import SnapshotStatus, UsageMetric, UsageSnapshot
+from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 
 
 def test_snapshot_defaults():

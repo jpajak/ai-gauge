@@ -1,4 +1,4 @@
-from usage_view.app import main
+from aigauge.app import main
 
 
 if __name__ == "__main__":

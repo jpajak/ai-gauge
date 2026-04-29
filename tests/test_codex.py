@@ -1,7 +1,7 @@
 from datetime import datetime
 
-from usage_view.models import SnapshotStatus
-from usage_view.providers.codex import CODEX_USAGE_URL, _build_snapshot, _parse_reset_text
+from aigauge.models import SnapshotStatus
+from aigauge.providers.codex import CODEX_USAGE_URL, _build_snapshot, _parse_reset_text
 
 
 def test_parse_reset_text_handles_weekday_time():

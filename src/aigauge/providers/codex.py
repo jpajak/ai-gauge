@@ -15,7 +15,7 @@ from .idle import idle_reset_state
 
 CODEX_USAGE_URL = "https://chatgpt.com/codex/cloud/settings/analytics#usage"
 _EXPECTED_ROWS = ("session", "weekly")
-log = logging.getLogger("usage_view.providers.codex")
+log = logging.getLogger("aigauge.providers.codex")
 
 # Walks the rendered analytics page, finds the two "Balance" cards by their
 # headings, and reads the percentage + reset text out of each. Returns raw text

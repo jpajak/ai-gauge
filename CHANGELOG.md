@@ -75,7 +75,7 @@
 
 - Verify-on-paste: pasting a cookie now loads the actual usage page and reports back whether the session authenticates, naming likely causes when it doesn't.
 - Clickable error labels: provider tiles now show short reasons (`error · timeout`, `error · layout changed`, etc.) and open a details dialog with the raw payload, copy button, and shortcut to the log folder.
-- Rotating diagnostic log at `%APPDATA%/usage-view/usage-view.log` with an "Open log folder" button in Settings.
+- Rotating diagnostic log at `%APPDATA%/ai-gauge/ai-gauge.log` with an "Open log folder" button in Settings.
 - Refresh-cadence indicator in the widget header showing active vs idle mode and the current interval.
 - Loading state for provider tiles before their first snapshot arrives.
 - Per-period usage history: peak percent reached for each session/weekly/monthly window is appended to `history.jsonl` on rollover, with in-flight state in `current.json`. No UI yet — pure background record-keeping.

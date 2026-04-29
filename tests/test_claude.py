@@ -1,5 +1,5 @@
-from usage_view.models import SnapshotStatus
-from usage_view.providers.claude import CLAUDE_USAGE_URL, _build_snapshot
+from aigauge.models import SnapshotStatus
+from aigauge.providers.claude import CLAUDE_USAGE_URL, _build_snapshot
 
 
 def test_claude_cloudflare_payload_is_auth_required():

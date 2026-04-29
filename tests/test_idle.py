@@ -1,6 +1,6 @@
 from datetime import datetime, timedelta
 
-from usage_view.providers.idle import idle_reset_state
+from aigauge.providers.idle import idle_reset_state
 
 
 def test_idle_reset_state_hides_unused_far_future_reset():

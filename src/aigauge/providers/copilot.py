@@ -12,7 +12,7 @@ from .base import Provider
 
 GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2026-03-10"
-log = logging.getLogger("usage_view.providers.copilot")
+log = logging.getLogger("aigauge.providers.copilot")
 
 
 def _github_headers(pat: str) -> dict[str, str]:

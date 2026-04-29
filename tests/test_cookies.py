@@ -1,4 +1,5 @@
-from usage_view.webview.cookies import _parse_cookie_pairs
+from aigauge.webview.cookies import _parse_cookie_pairs
+from aigauge.webview import cookies
 
 
 def test_parse_codex_full_cookie_header_keeps_related_cookies():
@@ -66,3 +67,26 @@ def test_parse_claude_rejects_chatgpt_cookie_header():
 
 def test_parse_codex_rejects_unrelated_cookie_header():
     assert _parse_cookie_pairs("codex", "Cookie: unrelated=value; other=thing") == []
+
+
+def test_cookie_hydration_logs_names_without_values(monkeypatch, caplog):
+    def fake_get_provider_cookie(provider):
+        if provider == "claude":
+            return "Cookie: other=value; sessionKey=secret-session"
+        return None
+
+    injected = []
+    monkeypatch.setattr(cookies, "get_provider_cookie", fake_get_provider_cookie)
+    monkeypatch.setattr(
+        cookies,
+        "inject_session_cookie",
+        lambda provider, value: injected.append((provider, value)) or True,
+    )
+    caplog.set_level("INFO", logger="aigauge.webview.cookies")
+
+    assert cookies.hydrate_all_from_keyring() == ["claude"]
+
+    assert "provider=claude" in caplog.text
+    assert "sessionKey" in caplog.text
+    assert "secret-session" not in caplog.text
+    assert injected == [("claude", "Cookie: other=value; sessionKey=secret-session")]

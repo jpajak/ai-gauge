@@ -1,7 +1,7 @@
 # Releasing
 
 This document is for maintainers publishing a public GitHub release of
-usage-view.
+AI Gauge.
 
 ## What GitHub Releases Are
 
@@ -9,16 +9,16 @@ A GitHub Release is a named snapshot of the repository, usually tied to a Git
 tag such as `v0.4.2`. It gives users a stable page with release notes and
 downloadable files.
 
-For usage-view, the release page should include:
+For AI Gauge, the release page should include:
 
 - The source code snapshot that GitHub attaches automatically.
-- A Windows build artifact, preferably a zipped `dist/usage-view/` folder.
+- A Windows build artifact, preferably a zipped `dist/ai-gauge/` folder.
 - SHA256 checksums for downloadable artifacts.
 - A short note that the app is unsigned unless code signing has been added.
 
 ## Release Checklist
 
-1. Confirm `pyproject.toml`, `src/usage_view/__init__.py`, `README.md`, and
+1. Confirm `pyproject.toml`, `src/aigauge/__init__.py`, `README.md`, and
    `CHANGELOG.md` all show the same version.
 2. Run the test suite:
 
@@ -32,13 +32,13 @@ For usage-view, the release page should include:
    .\build.ps1
    ```
 
-4. Smoke-test `dist\usage-view\usage-view.exe` on the release machine.
-5. Zip the full `dist\usage-view\` folder. Do not upload only the executable
+4. Smoke-test `dist\ai-gauge\ai-gauge.exe` on the release machine.
+5. Zip the full `dist\ai-gauge\` folder. Do not upload only the executable
    from a one-folder build.
 6. Create checksums:
 
    ```powershell
-   Get-FileHash .\dist\usage-view.zip -Algorithm SHA256
+   Get-FileHash .\dist\ai-gauge.zip -Algorithm SHA256
    ```
 
 7. Commit the release prep changes.
@@ -58,7 +58,7 @@ For usage-view, the release page should include:
 ## Suggested Release Notes Shape
 
 ```markdown
-## usage-view 0.4.2
+## AI Gauge 0.4.2
 
 Compact always-on-top Windows monitor for Claude.ai, ChatGPT Codex, and GitHub
 Copilot usage limits.
@@ -69,8 +69,8 @@ Copilot usage limits.
 
 ### Download
 
-- `usage-view.zip` contains the Windows app folder.
-- Extract it and run `usage-view.exe`.
+- `ai-gauge.zip` contains the Windows app folder.
+- Extract it and run `ai-gauge.exe`.
 - Windows may show an unsigned-app warning.
 
 ### Verification

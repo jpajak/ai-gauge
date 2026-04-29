@@ -1,8 +1,8 @@
 from PyQt6.QtWidgets import QPushButton
 
-from usage_view import settings_dialog
-from usage_view.config import Config
-from usage_view.settings_dialog import SettingsDialog
+from aigauge import settings_dialog
+from aigauge.config import Config
+from aigauge.settings_dialog import SettingsDialog
 
 
 def _button(dialog: SettingsDialog, name: str) -> QPushButton:

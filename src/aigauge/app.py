@@ -26,7 +26,7 @@ from .webview.cookies import hydrate_all_from_keyring
 from .webview.login_window import LoginWindow
 from .widget import UsageWidget
 
-log = logging.getLogger("usage_view.app")
+log = logging.getLogger("aigauge.app")
 
 LOGIN_URLS = {
     "claude": ("https://claude.ai/login", "Sign in to Claude"),
@@ -121,7 +121,7 @@ def _raw_summary(raw: dict) -> str:
 
 
 def _acquire_instance_lock() -> QLockFile | None:
-    lock_path = app_data_dir() / "usage-view.lock"
+    lock_path = app_data_dir() / "ai-gauge.lock"
     lock_path.parent.mkdir(parents=True, exist_ok=True)
     lock = QLockFile(str(lock_path))
     if not lock.tryLock(100):
@@ -136,7 +136,7 @@ class App(QObject):
         super().__init__()
         setup_logging()
         log.info(
-            "usage-view %s starting frozen=%s executable=%s cwd=%s appdata=%s",
+            "ai-gauge %s starting frozen=%s executable=%s cwd=%s appdata=%s",
             __version__,
             bool(getattr(sys, "frozen", False)),
             sys.executable,
@@ -177,7 +177,7 @@ class App(QObject):
 
         # System tray
         self._tray = QSystemTrayIcon(_make_tray_icon())
-        self._tray.setToolTip(f"usage view {__version__}")
+        self._tray.setToolTip(f"AI Gauge {__version__}")
         menu = QMenu()
         menu.addAction("Show / Hide", self._toggle_widget)
         refresh_act = menu.addAction("Refresh now")
@@ -414,9 +414,9 @@ class App(QObject):
                 lines.append(f"{name} {m.label}: {m.percent_used:.0f}%")
         self._tray.setIcon(_make_tray_icon(max_pct))
         self._tray.setToolTip(
-            f"usage view {__version__}\n" + "\n".join(lines)
+            f"AI Gauge {__version__}\n" + "\n".join(lines)
             if lines
-            else f"usage view {__version__}"
+            else f"AI Gauge {__version__}"
         )
 
     # ----- Login / cookie paste -----
@@ -568,8 +568,8 @@ def main() -> int:
 
     QApplication.setQuitOnLastWindowClosed(False)
     qt_app = QApplication(sys.argv)
-    qt_app.setApplicationName("usage-view")
-    qt_app.setOrganizationName("usage-view")
+    qt_app.setApplicationName("ai-gauge")
+    qt_app.setOrganizationName("ai-gauge")
     qt_app.setApplicationVersion(__version__)
     _app = App()  # noqa: F841 - keeps refs alive
     _instance_lock = instance_lock  # noqa: F841 - keep the single-instance lock alive

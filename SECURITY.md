@@ -1,6 +1,6 @@
 # Security
 
-usage-view is a personal open-source local Windows desktop utility. It is not
+AI Gauge is a personal open-source local Windows desktop utility. It is not
 an AloeDesk product, and it is not affiliated with Anthropic, OpenAI, GitHub,
 or Microsoft.
 
@@ -25,12 +25,12 @@ snippets. Redacted examples are enough for initial triage.
 The app stores provider sessions locally on the user's machine:
 
 - Claude.ai and ChatGPT Codex session cookies are stored under
-  `%APPDATA%/usage-view/secrets.dat`.
+  `%APPDATA%/ai-gauge/secrets.dat`.
 - GitHub Copilot personal access tokens are stored in Windows Credential
   Manager when available.
 - Legacy token storage may be migrated out of `secrets.dat` when possible.
 - Embedded browser profiles are stored under
-  `%APPDATA%/usage-view/profiles/{provider}/`.
+  `%APPDATA%/ai-gauge/profiles/{provider}/`.
 
 `secrets.dat` uses Windows DPAPI when available, so it is intended to be
 readable only by the same Windows user account. If DPAPI is unavailable, the
@@ -38,12 +38,12 @@ app may fall back to local file storage for compatibility.
 
 ## Privacy
 
-usage-view does not include telemetry or a backend service. Provider requests
+AI Gauge does not include telemetry or a backend service. Provider requests
 are made from the local app to Claude.ai, ChatGPT, and GitHub endpoints needed
 to read usage information.
 
 Diagnostic logs are written locally to
-`%APPDATA%/usage-view/usage-view.log`. Logs are intended to avoid recording
+`%APPDATA%/ai-gauge/ai-gauge.log`. Logs are intended to avoid recording
 raw cookies, personal access tokens, and sensitive response bodies. Review logs
 before sharing them in an issue.
 

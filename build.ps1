@@ -20,12 +20,12 @@ if (-not (Test-Path $venvPython)) {
 & $venvPython -m pip install --quiet pyinstaller
 
 if ($OneFile) {
-    $targetExe = Join-Path $PSScriptRoot "dist\usage-view.exe"
+    $targetExe = Join-Path $PSScriptRoot "dist\ai-gauge.exe"
     if (Test-Path $targetExe) {
         try {
             Remove-Item -LiteralPath $targetExe -Force -ErrorAction Stop
         } catch {
-            Write-Error "Cannot replace dist\usage-view.exe. Close any running usage-view.exe process, then build again."
+            Write-Error "Cannot replace dist\ai-gauge.exe. Close any running ai-gauge.exe process, then build again."
         }
     }
 }
@@ -36,7 +36,7 @@ $args = @(
     "--clean",
     "--windowed",
     "--noupx",
-    "--name", "usage-view",
+    "--name", "ai-gauge",
     "--paths", "src",
     "--collect-all", "PyQt6.QtWebEngineWidgets",
     "--collect-all", "PyQt6.QtWebEngineCore",
@@ -49,7 +49,7 @@ if ($OneFile) { $args += "--onefile" }
 Write-Host ""
 Write-Host "Build complete." -ForegroundColor Green
 if ($OneFile) {
-    Write-Host "Binary: dist\usage-view.exe"
+    Write-Host "Binary: dist\ai-gauge.exe"
 } else {
-    Write-Host "Folder: dist\usage-view\  (run usage-view.exe inside)"
+    Write-Host "Folder: dist\ai-gauge\  (run ai-gauge.exe inside)"
 }

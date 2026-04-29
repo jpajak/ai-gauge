@@ -2,9 +2,9 @@ from datetime import datetime, timedelta
 
 from PyQt6.QtCore import Qt
 
-from usage_view.config import Config
-from usage_view.models import SnapshotStatus, UsageMetric, UsageSnapshot
-from usage_view.widget import UsageWidget
+from aigauge.config import Config
+from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
+from aigauge.widget import UsageWidget
 
 
 def _tile_order(widget: UsageWidget) -> list[str]:

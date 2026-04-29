@@ -2,7 +2,7 @@ import sys
 
 import pytest
 
-from usage_view.secret_storage import load_secret, save_secret
+from aigauge.secret_storage import load_secret, save_secret
 
 
 def test_round_trip_short():

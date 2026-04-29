@@ -10,7 +10,7 @@ from typing import Iterable
 from .config import app_data_dir
 from .models import SnapshotStatus, UsageSnapshot
 
-log = logging.getLogger("usage_view.history")
+log = logging.getLogger("aigauge.history")
 
 # A new resets_at must be at least this much later than the prior one to count
 # as a period rollover rather than minute-level jitter from the rendered text

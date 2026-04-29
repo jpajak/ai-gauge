@@ -4,7 +4,7 @@ Windows Credential Manager caps the credential blob at ~2560 bytes, which is fin
 for short tokens (GitHub PAT) but fails for long session JWTs (ChatGPT's
 __Secure-next-auth.session-token can be 5-10KB).
 
-We store these in %APPDATA%/usage-view/secrets.dat, encrypted with DPAPI
+We store these in %APPDATA%/ai-gauge/secrets.dat, encrypted with DPAPI
 (CryptProtectData) — same per-user encryption that pre-v127 Chrome used. No
 new Python dependencies; calls into crypt32.dll via ctypes.
 """

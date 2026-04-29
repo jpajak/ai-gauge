@@ -1,4 +1,4 @@
-from usage_view.config import (
+from aigauge.config import (
     Config,
     app_data_dir,
     config_path,

@@ -3,9 +3,9 @@ from datetime import datetime
 import pytest
 import responses
 
-from usage_view.config import Config
-from usage_view.models import SnapshotStatus
-from usage_view.providers.copilot import (
+from aigauge.config import Config
+from aigauge.models import SnapshotStatus
+from aigauge.providers.copilot import (
     GITHUB_API,
     GITHUB_API_VERSION,
     _build_snapshot,
@@ -58,7 +58,7 @@ def test_build_snapshot_treats_missing_net_quantity_as_zero():
 
 @responses.activate
 def test_fetch_premium_usage_calls_correct_endpoint():
-    from usage_view.providers.copilot import _fetch_premium_usage
+    from aigauge.providers.copilot import _fetch_premium_usage
 
     responses.add(
         responses.GET,
@@ -77,7 +77,7 @@ def test_fetch_premium_usage_calls_correct_endpoint():
 
 @responses.activate
 def test_fetch_org_premium_usage_calls_correct_endpoint():
-    from usage_view.providers.copilot import _fetch_org_premium_usage
+    from aigauge.providers.copilot import _fetch_org_premium_usage
 
     responses.add(
         responses.GET,
@@ -97,7 +97,7 @@ def test_fetch_org_premium_usage_calls_correct_endpoint():
 
 @responses.activate
 def test_resolve_username_from_pat():
-    from usage_view.providers.copilot import _resolve_username
+    from aigauge.providers.copilot import _resolve_username
 
     responses.add(
         responses.GET,
@@ -109,7 +109,7 @@ def test_resolve_username_from_pat():
 
 
 def test_resolve_username_uses_configured_if_set():
-    from usage_view.providers.copilot import _resolve_username
+    from aigauge.providers.copilot import _resolve_username
 
     # No HTTP call should happen — configured value short-circuits.
     assert _resolve_username("anything", configured="myname") == "myname"
@@ -117,7 +117,7 @@ def test_resolve_username_uses_configured_if_set():
 
 def test_config_smoke():
     # Ensures provider class can be constructed
-    from usage_view.providers.copilot import CopilotProvider
+    from aigauge.providers.copilot import CopilotProvider
 
     cfg = Config()
     # Don't actually call refresh — needs Qt event loop.

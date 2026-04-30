@@ -1,8 +1,8 @@
 # Security
 
-AI Gauge is a personal open-source local desktop utility for Windows, macOS,
-and Linux. It is not an AloeDesk product, and it is not affiliated with
-Anthropic, OpenAI, GitHub, or Microsoft.
+AI Gauge is an independent open-source local desktop utility for Windows,
+macOS, and Linux. It is not affiliated with Anthropic, OpenAI, GitHub,
+Microsoft, or any other provider.
 
 ## Reporting a Vulnerability
 

@@ -11,15 +11,15 @@ body:
     id: version
     attributes:
       label: AI Gauge version
-      description: Find this in the widget header or via `python -m aigauge --version` (if available).
+      description: Find this in the widget header.
       placeholder: "e.g. 0.5.0"
     validations:
       required: true
   - type: input
-    id: windows
+    id: os
     attributes:
-      label: Windows version
-      placeholder: "e.g. Windows 11 23H2"
+      label: Operating system
+      placeholder: "e.g. Windows 11 23H2, macOS 15.4, Ubuntu 24.04"
     validations:
       required: true
   - type: dropdown
@@ -27,7 +27,7 @@ body:
     attributes:
       label: How are you running AI Gauge?
       options:
-        - Standalone .exe (PyInstaller build)
+        - Standalone release build
         - From source (`python -m aigauge`)
         - Other (describe below)
     validations:
@@ -60,6 +60,6 @@ body:
     attributes:
       label: Relevant log lines
       description: |
-        Logs live at `%APPDATA%/ai-gauge/ai-gauge.log`. Paste only the relevant
-        excerpt and redact any cookie/token values.
+        Logs live in the per-OS app-data directory as `ai-gauge.log`. Paste
+        only the relevant excerpt and redact any cookie/token values.
       render: text

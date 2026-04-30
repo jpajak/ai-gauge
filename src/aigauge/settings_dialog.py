@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -23,6 +25,8 @@ from .error_dialog import reveal_path
 from .logging_setup import log_path
 from .startup import set_start_at_login
 
+
+log = logging.getLogger("aigauge.settings_dialog")
 
 _COPILOT_PLAN_QUOTAS = (
     ("Pro", 300),
@@ -445,7 +449,7 @@ class SettingsDialog(QDialog):
                     "different user/elevated account.",
                 )
                 return
-            print("Saved GitHub PAT to system keychain.")
+            log.info("Saved GitHub PAT to system keychain.")
         self.accept()
 
     def _set_quota_selection(self, quota: int) -> None:

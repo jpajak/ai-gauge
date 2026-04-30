@@ -188,7 +188,7 @@ jobs:
           tag_name: ${{ needs.resolve-version.outputs.tag }}
           generate_release_notes: true
           body: |
-            See [CHANGELOG.md](https://github.com/jpajak/ai-gauge/blob/${{ needs.resolve-version.outputs.tag }}/CHANGELOG.md) for full notes.
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ needs.resolve-version.outputs.tag }}/CHANGELOG.md) for full notes.
 
             **Downloads** — pick the artifact for your OS, extract, and run.
             - Windows: `ai-gauge-${{ needs.resolve-version.outputs.version }}-windows.zip` → run `ai-gauge.exe`

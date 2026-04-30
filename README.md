@@ -14,10 +14,9 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usa
 
 Current version: **0.5.0**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
-AI Gauge is a personal open-source project and unofficial local desktop
-utility. It is not an AloeDesk product, and it is not affiliated with
-Anthropic, OpenAI, GitHub, or Microsoft. Provider pages and APIs may change
-without notice.
+AI Gauge is an independent open-source project and unofficial local desktop
+utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft, or
+any other provider. Provider pages and APIs may change without notice.
 
 ## Screenshots
 

@@ -44,7 +44,11 @@ def test_claude_signed_in_empty_usage_payload_is_idle_zero():
             "weekly_design": None,
             "title": "Claude",
             "url": CLAUDE_USAGE_URL,
-            "body_text": "New chat Search Chats Projects Recents",
+            "body_text": (
+                "New chat Search Chats Projects Recents Plan usage limits "
+                "Current session Resets when you next use this limit "
+                "All models Resets when you next use this limit"
+            ),
         }
     )
 
@@ -53,6 +57,26 @@ def test_claude_signed_in_empty_usage_payload_is_idle_zero():
         ("Session", 0.0, "idle"),
         ("Weekly", 0.0, "idle"),
     ]
+
+
+def test_claude_partial_render_payload_is_layout_error():
+    # Sidebar-only body (main usage pane hasn't populated yet) must NOT be
+    # classified as idle — it should surface as an error so the provider
+    # retries instead of showing a confident 0/0.
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly_all": None,
+            "weekly_design": None,
+            "title": "Claude",
+            "url": CLAUDE_USAGE_URL,
+            "body_text": "New chat Search Chats Projects Recents",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "layout may have changed" in (snapshot.error or "")
 
 
 def test_claude_unparsed_usage_payload_still_reports_layout_error():

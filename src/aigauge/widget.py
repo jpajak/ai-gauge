@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import math
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import (
     QEasingCurve,
     QPoint,
+    QPointF,
     QPropertyAnimation,
     QRectF,
     QSize,
@@ -12,7 +14,16 @@ from PyQt6.QtCore import (
     QTimer,
     pyqtSignal,
 )
-from PyQt6.QtGui import QColor, QMouseEvent, QPainter, QPainterPath, QPen
+from PyQt6.QtGui import (
+    QColor,
+    QIcon,
+    QMouseEvent,
+    QPainter,
+    QPainterPath,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PyQt6.QtWidgets import (
     QFrame,
     QGraphicsOpacityEffect,
@@ -36,6 +47,9 @@ from .config import (
 from .models import SnapshotStatus, UsageSnapshot
 
 ROW_BAR_HEIGHT = 8
+PACE_TICK_OVERHANG = 2
+CHIP_NOTCH_HEIGHT = 4
+CHIP_NOTCH_HALF_WIDTH = 3.5
 PROVIDER_ORDER = ("claude", "codex", "copilot")
 
 
@@ -88,6 +102,57 @@ def _format_countdown(dt: datetime) -> str:
         return f"{(secs + 59) // 60}m"
     h, m = divmod((secs + 59) // 60, 60)
     return f"{h}h {m:02d}m" if m else f"{h}h"
+
+
+def _time_elapsed_percent(
+    resets_at: datetime | None,
+    window: timedelta | None,
+) -> float | None:
+    if resets_at is None or window is None or window.total_seconds() <= 0:
+        return None
+    started = resets_at - window
+    elapsed = (datetime.now() - started).total_seconds()
+    pct = elapsed / window.total_seconds() * 100.0
+    return max(0.0, min(100.0, pct))
+
+
+def _format_duration_short(duration: timedelta, *, total: bool = False) -> str:
+    secs = max(0, int(duration.total_seconds()))
+    if secs >= 86400:
+        days = secs / 86400
+        value = max(1, round(days)) if secs else 0
+        return f"{value}d"
+    mins = (secs + 59) // 60
+    if mins < 60:
+        return f"{mins}m"
+    h, m = divmod(mins, 60)
+    if total or not m:
+        return f"{h}h"
+    return f"{h}h {m:02d}m"
+
+
+def _format_window_remaining(
+    resets_at: datetime | None,
+    window: timedelta | None,
+) -> str | None:
+    if resets_at is None or window is None or window.total_seconds() <= 0:
+        return None
+    remaining = max(timedelta(0), resets_at - datetime.now())
+    return (
+        f"{_format_duration_short(remaining)} of "
+        f"{_format_duration_short(window, total=True)}"
+    )
+
+
+def _pace_tooltip_line(
+    resets_at: datetime | None,
+    window: timedelta | None,
+) -> str | None:
+    pace = _time_elapsed_percent(resets_at, window)
+    remaining = _format_window_remaining(resets_at, window)
+    if pace is None or remaining is None:
+        return None
+    return f"Time elapsed: {pace:.0f}% ({remaining})"
 
 
 # Severity bands are shared between the expanded row bars and the compact
@@ -147,6 +212,73 @@ def _short_error_reason(error: str | None) -> str:
     return "error"
 
 
+def _render_refresh_pixmap(color: str, size: int) -> QPixmap:
+    """Hand-drawn refresh icon: ~300° arc with an arrowhead at the gap.
+
+    Drawing it ourselves (instead of relying on a system icon) keeps the
+    weight, gap, and arrowhead consistent across platforms and lets us
+    match the header's color / hover scheme exactly.
+    """
+    pm = QPixmap(size, size)
+    pm.fill(Qt.GlobalColor.transparent)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.RenderHint.Antialiasing)
+
+    qcolor = QColor(color)
+    cx = cy = size / 2.0
+    radius = size * 0.32
+    line_w = max(1.4, size / 8.5)
+
+    # Arc travels clockwise (negative span in Qt) from 70° to 130°,
+    # leaving a 60° gap at the top. CW direction matches the conventional
+    # "refresh" rotation metaphor.
+    start_deg = 70.0
+    span_deg = -285.0
+    end_deg = (start_deg + span_deg) % 360.0  # = 130°
+
+    pen = QPen(qcolor)
+    pen.setWidthF(line_w)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    p.setPen(pen)
+    p.setBrush(Qt.BrushStyle.NoBrush)
+
+    rect = QRectF(cx - radius, cy - radius, 2 * radius, 2 * radius)
+    p.drawArc(rect, int(start_deg * 16), int(span_deg * 16))
+
+    # Arrowhead at the end of the arc (130°), pointing in the CW tangent
+    # direction so the eye reads "loop continues into the gap".
+    end_rad = math.radians(end_deg)
+    end_x = cx + radius * math.cos(end_rad)
+    end_y = cy - radius * math.sin(end_rad)  # Qt y-axis points down
+    # CW tangent in Qt screen coords:
+    tx = math.sin(end_rad)
+    ty = math.cos(end_rad)
+    # Outward radial (perpendicular, away from center):
+    rx = math.cos(end_rad)
+    ry = -math.sin(end_rad)
+
+    arrow_len = line_w * 2.4
+    half_w = line_w * 1.3
+    tip = QPointF(end_x + tx * arrow_len, end_y + ty * arrow_len)
+    base_outer = QPointF(end_x + rx * half_w, end_y + ry * half_w)
+    base_inner = QPointF(end_x - rx * half_w, end_y - ry * half_w)
+
+    p.setPen(Qt.PenStyle.NoPen)
+    p.setBrush(qcolor)
+    p.drawPolygon(QPolygonF([tip, base_outer, base_inner]))
+
+    p.end()
+    return pm
+
+
+def _refresh_icon(*, normal: str, active: str, size: int) -> QIcon:
+    icon = QIcon()
+    icon.addPixmap(_render_refresh_pixmap(normal, size), QIcon.Mode.Normal)
+    icon.addPixmap(_render_refresh_pixmap(active, size), QIcon.Mode.Active)
+    icon.addPixmap(_render_refresh_pixmap(active, size), QIcon.Mode.Selected)
+    return icon
+
+
 class _SummaryChip(QWidget):
     """Pill-shaped chip with a colored fill bar showing usage percent.
 
@@ -160,17 +292,19 @@ class _SummaryChip(QWidget):
     _TEXT = QColor("#f9fafb")
     _NEUTRAL_FILL = QColor("#374151")
     _AUTH_FILL = QColor("#92400e")  # amber-800 — wants action
+    _PACE = QColor(229, 231, 235, 230)
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
         self._text = ""
         self._percent: float | None = None
+        self._pace_pct: float | None = None
         self._fill_color = self._NEUTRAL_FILL
         font = self.font()
         font.setPixelSize(11)
         font.setBold(True)
         self.setFont(font)
-        self.setFixedHeight(18)
+        self.setFixedHeight(18 + CHIP_NOTCH_HEIGHT)
         self.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
 
     def text(self) -> str:
@@ -181,9 +315,11 @@ class _SummaryChip(QWidget):
         text: str,
         percent: float | None,
         kind: str,
+        pace: float | None = None,
     ) -> None:
         """kind ∈ {"ok", "loading", "auth", "error"}."""
         self._text = text
+        self._pace_pct = max(0.0, min(100.0, pace)) if pace is not None else None
         if kind == "ok":
             self._percent = percent
             self._fill_color = QColor(_chip_fill_for_percent(percent))
@@ -200,7 +336,12 @@ class _SummaryChip(QWidget):
     def paintEvent(self, event):  # noqa: N802
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-        rect = QRectF(self.rect())
+        rect = QRectF(
+            0,
+            CHIP_NOTCH_HEIGHT,
+            self.width(),
+            self.height() - CHIP_NOTCH_HEIGHT,
+        )
         radius = rect.height() / 2
 
         path = QPainterPath()
@@ -222,13 +363,107 @@ class _SummaryChip(QWidget):
         pen.setWidth(1)
         painter.setPen(pen)
         painter.setBrush(Qt.BrushStyle.NoBrush)
-        painter.drawRoundedRect(
-            rect.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius
-        )
+        painter.drawRoundedRect(rect.adjusted(0.5, 0.5, -0.5, -0.5), radius, radius)
 
         # Text
         painter.setPen(self._TEXT)
-        painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
+        painter.drawText(
+            rect.toRect(),
+            Qt.AlignmentFlag.AlignCenter,
+            self._text,
+        )
+
+        # Pace notch — downward-pointing triangle sitting on the top edge.
+        # Drawn last so it isn't clipped by the rounded body or covered by
+        # the fill. Stays in negative space against the dark widget
+        # background, so it reads cleanly over any chip fill color.
+        if self._pace_pct is not None:
+            tip_x = rect.x() + (self._pace_pct / 100.0) * rect.width()
+            tip_x = max(
+                rect.x() + CHIP_NOTCH_HALF_WIDTH,
+                min(rect.right() - CHIP_NOTCH_HALF_WIDTH, tip_x),
+            )
+            notch = QPolygonF(
+                [
+                    QPointF(tip_x - CHIP_NOTCH_HALF_WIDTH, 0.0),
+                    QPointF(tip_x + CHIP_NOTCH_HALF_WIDTH, 0.0),
+                    QPointF(tip_x, float(CHIP_NOTCH_HEIGHT)),
+                ]
+            )
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(self._PACE)
+            painter.drawPolygon(notch)
+
+
+class _PaceTickOverlay(QWidget):
+    _PACE = QColor(243, 244, 246, 180)
+    _PACE_SHADOW = QColor(17, 24, 39, 120)
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._pace_pct: float | None = None
+        self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
+
+    def set_pace(self, pct: float | None) -> None:
+        self._pace_pct = max(0.0, min(100.0, pct)) if pct is not None else None
+        self.update()
+
+    def paintEvent(self, event):  # noqa: N802
+        super().paintEvent(event)
+        if self._pace_pct is None:
+            return
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, False)
+        x = (self._pace_pct / 100.0) * self.width()
+        for color, width in ((self._PACE_SHADOW, 4), (self._PACE, 2)):
+            pen = QPen(color)
+            pen.setWidth(width)
+            painter.setPen(pen)
+            painter.drawLine(
+                int(round(x)),
+                0,
+                int(round(x)),
+                self.height(),
+            )
+
+
+class _PaceProgressBar(QWidget):
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._bar = QProgressBar(self)
+        self._bar.setGeometry(0, PACE_TICK_OVERHANG, 0, ROW_BAR_HEIGHT)
+        self._tick = _PaceTickOverlay(self)
+        self._pace_pct: float | None = None
+
+    def set_pace(self, pct: float | None) -> None:
+        self._pace_pct = max(0.0, min(100.0, pct)) if pct is not None else None
+        self._tick.set_pace(self._pace_pct)
+
+    def setRange(self, minimum: int, maximum: int) -> None:  # noqa: N802
+        self._bar.setRange(minimum, maximum)
+
+    def maximum(self) -> int:
+        return self._bar.maximum()
+
+    def setValue(self, value: int) -> None:  # noqa: N802
+        self._bar.setValue(value)
+
+    def setTextVisible(self, visible: bool) -> None:  # noqa: N802
+        self._bar.setTextVisible(visible)
+
+    def setStyleSheet(self, style_sheet: str) -> None:  # noqa: N802
+        self._bar.setStyleSheet(style_sheet)
+
+    def resizeEvent(self, event):  # noqa: N802
+        self._bar.setGeometry(
+            0,
+            PACE_TICK_OVERHANG,
+            self.width(),
+            ROW_BAR_HEIGHT,
+        )
+        self._tick.setGeometry(0, 0, self.width(), self.height())
+        self._tick.raise_()
+        super().resizeEvent(event)
 
 
 class _MetricRow(QWidget):
@@ -239,11 +474,13 @@ class _MetricRow(QWidget):
         self.label = QLabel()
         self.label.setStyleSheet("color: #d1d5db; font-size: 11px;")
         self.label.setMinimumWidth(70)
+        self._resets_at: datetime | None = None
+        self._window: timedelta | None = None
 
-        self.bar = QProgressBar()
+        self.bar = _PaceProgressBar()
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
-        self.bar.setFixedHeight(ROW_BAR_HEIGHT)
+        self.bar.setFixedHeight(ROW_BAR_HEIGHT + PACE_TICK_OVERHANG * 2)
         self.bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.pct = QLabel("--")
@@ -275,9 +512,13 @@ class _MetricRow(QWidget):
         resets_at: datetime | None,
         reset_label: str | None = None,
         note: str | None = None,
+        window: timedelta | None = None,
     ) -> None:
         self.label.setText(label)
         self.setToolTip(note or "")
+        self._resets_at = resets_at
+        self._window = window
+        self.refresh_pace()
         # Restore determinate range in case this row was previously a skeleton.
         if self.bar.maximum() == 0:
             self.bar.setRange(0, 100)
@@ -300,6 +541,15 @@ class _MetricRow(QWidget):
             self.reset.setToolTip(resets_at.strftime("%Y-%m-%d %H:%M"))
         else:
             self.reset.setToolTip("")
+        pace_line = _pace_tooltip_line(resets_at, window)
+        if pace_line:
+            tooltip = note or ""
+            self.bar.setToolTip((tooltip + "\n\n" if tooltip else "") + pace_line)
+        else:
+            self.bar.setToolTip(note or "")
+
+    def refresh_pace(self) -> None:
+        self.bar.set_pace(_time_elapsed_percent(self._resets_at, self._window))
 
     def set_skeleton(self, label: str = "Session") -> None:
         """Indeterminate placeholder while waiting for first data.
@@ -309,7 +559,10 @@ class _MetricRow(QWidget):
         """
         self.label.setText(label)
         self.setToolTip("")
+        self._resets_at = None
+        self._window = None
         self.bar.setRange(0, 0)
+        self.bar.set_pace(None)
         self.bar.setStyleSheet(
             "QProgressBar { background:#1f2937; border:none; border-radius:3px; }"
             "QProgressBar::chunk { background:#4b5563; border-radius:3px; }"
@@ -378,9 +631,7 @@ class _ProviderTile(QFrame):
         self._opacity_effect = QGraphicsOpacityEffect(self)
         self._opacity_effect.setOpacity(1.0)
         self.setGraphicsEffect(self._opacity_effect)
-        self._opacity_anim = QPropertyAnimation(
-            self._opacity_effect, b"opacity", self
-        )
+        self._opacity_anim = QPropertyAnimation(self._opacity_effect, b"opacity", self)
         self._opacity_anim.setDuration(200)
         self._opacity_anim.setEasingCurve(QEasingCurve.Type.InOutQuad)
 
@@ -446,14 +697,23 @@ class _ProviderTile(QFrame):
         self.action_btn.setVisible(False)
         self._set_rows(
             [
-                (m.label, m.percent_used, m.resets_at, m.reset_label, m.note)
+                (m.label, m.percent_used, m.resets_at, m.reset_label, m.note, m.window)
                 for m in snapshot.metrics
             ]
         )
 
     def _set_rows(
         self,
-        rows: list[tuple[str, float | None, datetime | None, str | None, str | None]],
+        rows: list[
+            tuple[
+                str,
+                float | None,
+                datetime | None,
+                str | None,
+                str | None,
+                timedelta | None,
+            ]
+        ],
     ) -> None:
         # Grow / shrink the row pool to match
         while len(self._rows) < len(rows):
@@ -466,8 +726,11 @@ class _ProviderTile(QFrame):
             r.hide()
             r.setParent(None)
             r.deleteLater()
-        for row, (label, pct, reset, reset_label, note) in zip(self._rows, rows):
-            row.set_metric(label, pct, reset, reset_label, note)
+        for row, (label, pct, reset, reset_label, note, window) in zip(
+            self._rows,
+            rows,
+        ):
+            row.set_metric(label, pct, reset, reset_label, note, window)
         self._layout.invalidate()
         self.updateGeometry()
 
@@ -530,7 +793,11 @@ class UsageWidget(QWidget):
         self.cadence_label.setStyleSheet("color:#6b7280; font-size:10px;")
         self.cadence_label.setToolTip("")
 
-        self.refresh_btn = self._mini_button("↻", "Refresh now")
+        self.refresh_btn = self._mini_button("", "Refresh now")
+        self.refresh_btn.setIcon(
+            _refresh_icon(normal="#9ca3af", active="#f3f4f6", size=16)
+        )
+        self.refresh_btn.setIconSize(QSize(16, 16))
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
 
         self.collapse_btn = self._mini_button("−", "Collapse to compact view")
@@ -588,9 +855,7 @@ class UsageWidget(QWidget):
         collapsed_header.setContentsMargins(0, 0, 0, 0)
         collapsed_header.setSpacing(4)
         collapsed_title = QLabel(f"AI Gauge {__version__}")
-        collapsed_title.setStyleSheet(
-            "color:#9ca3af; font-size:10px; font-weight:600;"
-        )
+        collapsed_title.setStyleSheet("color:#9ca3af; font-size:10px; font-weight:600;")
         collapsed_header.addWidget(collapsed_title)
         self._collapsed_cadence_label = QLabel("")
         self._collapsed_cadence_label.setStyleSheet("color:#6b7280; font-size:10px;")
@@ -772,6 +1037,9 @@ class UsageWidget(QWidget):
     def _refresh_header_labels(self) -> None:
         self._refresh_age_label()
         self._refresh_cadence_label()
+        for tile in self._tiles.values():
+            for row in tile._rows:
+                row.refresh_pace()
         self._refresh_collapsed_summary()
 
     def _refresh_age_label(self) -> None:
@@ -848,6 +1116,7 @@ class UsageWidget(QWidget):
         }.get(provider, provider.title())
         snapshot = self._snapshots.get(provider)
         percent: float | None = None
+        pace: float | None = None
         text = f"{display} --"
         tooltip = ""
         kind = "loading"
@@ -867,12 +1136,20 @@ class UsageWidget(QWidget):
                 snapshot.metrics[0] if snapshot.metrics else None,
             )
             percent = metric.percent_used if metric else None
+            pace = _time_elapsed_percent(
+                metric.resets_at if metric else None,
+                metric.window if metric else None,
+            )
             text = f"{display} {_format_summary_percent(percent)}"
             tooltip = metric.note if metric and metric.note else ""
+            if metric:
+                pace_line = _pace_tooltip_line(metric.resets_at, metric.window)
+                if pace_line:
+                    tooltip = (tooltip + "\n\n" if tooltip else "") + pace_line
             kind = "ok"
 
         chip = _SummaryChip()
-        chip.set_state(text, percent, kind)
+        chip.set_state(text, percent, kind, pace)
         chip.setToolTip(tooltip)
         return chip
 
@@ -939,8 +1216,7 @@ class UsageWidget(QWidget):
         was_visible = self.isVisible()
         self.setWindowOpacity(self._config.window.opacity)
         self._apply_always_on_top(
-            self._config.window.always_on_top
-            and not self._always_on_top_suspensions
+            self._config.window.always_on_top and not self._always_on_top_suspensions
         )
         self._collapsed = self._config.window.collapsed
         self._apply_collapsed_state(save=False)
@@ -955,9 +1231,7 @@ class UsageWidget(QWidget):
         own X button still hides it; settings dialogs still spawn correctly
         because they're separate top-level windows.
         """
-        self.setWindowFlags(
-            Qt.WindowType.FramelessWindowHint | Qt.WindowType.Popup
-        )
+        self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Popup)
         self.setWindowOpacity(self._config.window.opacity)
         self._refit_height()
         # Anchor: top of widget aligned just below the menu bar at the icon.
@@ -967,7 +1241,9 @@ class UsageWidget(QWidget):
         target_x = anchor_global_x - self.width() // 2
         if screen is not None:
             geo = screen.availableGeometry()
-            target_x = max(geo.left() + 4, min(target_x, geo.right() - self.width() - 4))
+            target_x = max(
+                geo.left() + 4, min(target_x, geo.right() - self.width() - 4)
+            )
         self.move(target_x, anchor_global_y + 4)
         self.show()
         self.raise_()

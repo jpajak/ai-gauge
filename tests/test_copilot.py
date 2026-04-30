@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta, timezone
 
 import pytest
 import responses
@@ -9,18 +9,50 @@ from aigauge.providers.copilot import (
     GITHUB_API,
     GITHUB_API_VERSION,
     _build_snapshot,
-    _next_month_start,
+    _next_month_start_utc,
+    _this_month_start_utc,
 )
 
 
-def test_next_month_start_normal():
-    d = _next_month_start(datetime(2026, 4, 27))
-    assert d == datetime(2026, 5, 1)
+def test_next_month_start_utc_normal():
+    d = _next_month_start_utc(datetime(2026, 4, 27, tzinfo=timezone.utc))
+    assert d == datetime(2026, 5, 1, tzinfo=timezone.utc)
+    assert d.tzinfo == timezone.utc
 
 
-def test_next_month_start_december_rolls_year():
-    d = _next_month_start(datetime(2026, 12, 15))
-    assert d == datetime(2027, 1, 1)
+def test_next_month_start_utc_december_rolls_year():
+    d = _next_month_start_utc(datetime(2026, 12, 15, tzinfo=timezone.utc))
+    assert d == datetime(2027, 1, 1, tzinfo=timezone.utc)
+    assert d.tzinfo == timezone.utc
+
+
+def test_this_month_start_utc():
+    d = _this_month_start_utc(datetime(2026, 4, 27, tzinfo=timezone.utc))
+    assert d == datetime(2026, 4, 1, tzinfo=timezone.utc)
+    assert d.tzinfo == timezone.utc
+
+
+def test_build_snapshot_uses_utc_month_boundary(monkeypatch):
+    import aigauge.providers.copilot as copilot
+
+    real_datetime = datetime
+    now = real_datetime(2026, 4, 30, 23, 30, tzinfo=timezone.utc)
+
+    class FrozenDatetime(real_datetime):
+        @classmethod
+        def now(cls, tz=None):  # noqa: ANN001
+            if tz is timezone.utc:
+                return now
+            return now.astimezone().replace(tzinfo=None)
+
+    monkeypatch.setattr(copilot, "datetime", FrozenDatetime)
+
+    snap = _build_snapshot({"usageItems": []}, quota=300)
+    metric = snap.metrics[0]
+    next_utc = _next_month_start_utc(now)
+    assert metric.resets_at == next_utc.astimezone().replace(tzinfo=None)
+    assert metric.resets_at - FrozenDatetime.now() < timedelta(hours=1)
+    assert metric.window == next_utc - _this_month_start_utc(now)
 
 
 def test_build_snapshot_sums_gross_quantity_for_included_allowance():
@@ -36,7 +68,8 @@ def test_build_snapshot_sums_gross_quantity_for_included_allowance():
     m = snap.metrics[0]
     assert m.percent_used == pytest.approx(70 / 300 * 100)
     assert "70/300" in m.label
-    assert m.resets_at is not None and m.resets_at.day == 1
+    assert m.resets_at is not None
+    assert m.window is not None and timedelta(days=28) <= m.window <= timedelta(days=31)
 
 
 def test_build_snapshot_falls_back_to_net_quantity():

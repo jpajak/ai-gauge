@@ -1,5 +1,5 @@
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from enum import Enum
 from typing import Any
 
@@ -19,6 +19,7 @@ class UsageMetric:
     resets_at: datetime | None = None
     reset_label: str | None = None
     note: str | None = None
+    window: timedelta | None = None
 
 
 @dataclass

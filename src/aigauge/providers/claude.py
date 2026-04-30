@@ -234,6 +234,7 @@ def _build_snapshot(
                 resets_at=resets_at,
                 reset_label=reset_label,
                 note=idle_note or card.get("reset_text"),
+                window=reset_window,
             )
         )
 

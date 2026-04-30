@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import logging
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Callable
 
 import requests
@@ -24,18 +24,23 @@ def _github_headers(pat: str) -> dict[str, str]:
 
 
 def _usage_params(username: str | None = None) -> dict[str, int | str]:
-    now = datetime.now()
+    now = datetime.now(timezone.utc)
     params: dict[str, int | str] = {"year": now.year, "month": now.month}
     if username:
         params["user"] = username
     return params
 
 
-def _next_month_start(now: datetime) -> datetime:
+def _this_month_start_utc(now_utc: datetime) -> datetime:
+    """First day of this calendar month in UTC."""
+    return datetime(now_utc.year, now_utc.month, 1, tzinfo=timezone.utc)
+
+
+def _next_month_start_utc(now_utc: datetime) -> datetime:
     """First day of next calendar month — Copilot premium requests reset monthly."""
-    if now.month == 12:
-        return datetime(now.year + 1, 1, 1)
-    return datetime(now.year, now.month + 1, 1)
+    if now_utc.month == 12:
+        return datetime(now_utc.year + 1, 1, 1, tzinfo=timezone.utc)
+    return datetime(now_utc.year, now_utc.month + 1, 1, tzinfo=timezone.utc)
 
 
 def _resolve_username(pat: str, configured: str | None) -> str | None:
@@ -104,11 +109,15 @@ def _build_snapshot(payload: dict, quota: int) -> UsageSnapshot:
     used = sum(_item_quantity(item) for item in items)
     billed = sum(_net_quantity(item) for item in items)
     percent = (used / quota * 100.0) if quota > 0 else None
+    now_utc = datetime.now(timezone.utc)
+    this_utc = _this_month_start_utc(now_utc)
+    next_utc = _next_month_start_utc(now_utc)
+    window = next_utc - this_utc
 
     metric = UsageMetric(
         label=f"Premium ({int(used)}/{quota})",
         percent_used=percent,
-        resets_at=_next_month_start(datetime.now()),
+        resets_at=next_utc.astimezone().replace(tzinfo=None),
         note=(
             f"{billed:g} billable premium requests beyond included allowance."
             if items
@@ -116,6 +125,7 @@ def _build_snapshot(payload: dict, quota: int) -> UsageSnapshot:
             "through an organization or enterprise, GitHub omits it from this "
             "user-level endpoint."
         ),
+        window=window,
     )
     return UsageSnapshot(
         provider="copilot",

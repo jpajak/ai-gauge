@@ -13,9 +13,12 @@ from aigauge.menubar import (
     OK_COLORS,
     NEUTRAL_COLOR,
     PIXMAP_HEIGHT,
+    PIXMAP_WIDTH,
     SIDE_PADDING,
+    SETUP_COLOR,
     measure_pixmap_width,
     render_menubar_pixmap,
+    status_items,
 )
 from aigauge.models import (
     SnapshotStatus,
@@ -77,7 +80,8 @@ def test_width_grows_with_provider_count(qtbot):
     }
     one = measure_pixmap_width(snaps, ("claude",))
     three = measure_pixmap_width(snaps, ("claude", "codex", "copilot"))
-    assert three > one * 2  # rough sanity — 3 providers wider than 2× one
+    assert one == PIXMAP_WIDTH
+    assert three == PIXMAP_WIDTH
 
 
 def test_pixmap_uses_device_pixel_ratio_for_retina(qtbot):
@@ -85,10 +89,40 @@ def test_pixmap_uses_device_pixel_ratio_for_retina(qtbot):
     assert pix.devicePixelRatio() == 2.0
     # Logical height is fixed; raw buffer is height * dpr.
     assert pix.height() == PIXMAP_HEIGHT * 2
+    assert pix.width() == PIXMAP_WIDTH * 2
 
 
-def test_auth_required_snapshot_is_neutral(qtbot):
+def test_auth_required_snapshot_shows_setup_state(qtbot):
     snap = UsageSnapshot(provider="claude", status=SnapshotStatus.AUTH_REQUIRED)
     pix = render_menubar_pixmap({"claude": snap}, ("claude",))
     color = _color_at(pix, SIDE_PADDING + DOT_DIAMETER // 2, PIXMAP_HEIGHT // 2)
+    assert color.name().lower() == SETUP_COLOR.lower()
+    assert measure_pixmap_width({"claude": snap}, ("claude",)) == PIXMAP_WIDTH
+
+
+def test_all_missing_snapshots_render_as_loading_summary(qtbot):
+    one = measure_pixmap_width({}, ("claude",))
+    three = measure_pixmap_width({}, ("claude", "codex", "copilot"))
+    assert one == three
+    pix = render_menubar_pixmap({}, ("claude", "codex", "copilot"))
+    color = _color_at(pix, SIDE_PADDING + DOT_DIAMETER // 2, PIXMAP_HEIGHT // 2)
     assert color.name().lower() == NEUTRAL_COLOR.lower()
+
+
+def test_status_items_use_compact_provider_labels():
+    items = status_items(
+        {
+            "claude": UsageSnapshot(
+                provider="claude",
+                status=SnapshotStatus.AUTH_REQUIRED,
+            ),
+            "codex": _ok_snap("codex", 57),
+        },
+        ("claude", "codex", "copilot"),
+    )
+
+    assert items == [
+        ("Cl", "!", SETUP_COLOR),
+        ("Cx", "57%", OK_COLORS["low"]),
+        ("Cp", "...", NEUTRAL_COLOR),
+    ]

@@ -6,8 +6,8 @@ import os
 import sys
 from datetime import datetime, timedelta
 
-from PyQt6.QtCore import QObject, QLockFile, Qt, QTimer
-from PyQt6.QtGui import QAction, QColor, QIcon, QPainter, QPixmap
+from PyQt6.QtCore import QObject, QLockFile, QPoint, Qt, QTimer
+from PyQt6.QtGui import QAction, QColor, QCursor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QSystemTrayIcon
 
 from . import __version__
@@ -199,11 +199,37 @@ class App(QObject):
             self._ui_mode = "floating_widget"
 
         self._app_menu = self._build_app_menu()
+        self._native_status = None
 
-        if tray_available:
+        if self._ui_mode == "menubar":
+            try:
+                from .macos_status_item import NativeMacStatusItem
+
+                self._native_status = NativeMacStatusItem(
+                    on_activate=self._toggle_widget,
+                    on_context=self._show_tray_menu,
+                )
+                self._native_status.update(
+                    self._snapshots,
+                    _enabled_providers(self._config),
+                )
+                self._native_status.set_tooltip(f"AI Gauge {__version__}")
+                self._tray = None
+                log.info("using native macOS status item")
+            except Exception as exc:  # noqa: BLE001
+                log.warning(
+                    "native macOS status item unavailable; falling back to Qt tray: %s",
+                    exc,
+                )
+                self._native_status = None
+
+        if self._native_status is not None:
+            pass
+        elif tray_available:
             self._tray = QSystemTrayIcon(self._render_tray_icon())
             self._tray.setToolTip(f"AI Gauge {__version__}")
-            self._tray.setContextMenu(self._app_menu)
+            if self._ui_mode != "menubar":
+                self._tray.setContextMenu(self._app_menu)
             self._tray.activated.connect(self._on_tray_activated)
             self._tray.show()
         else:
@@ -426,23 +452,37 @@ class App(QObject):
         return self._cycle_signatures != self._last_cycle_signatures
 
     def _update_tray(self) -> None:
-        if self._tray is None:
-            return
         lines: list[str] = []
         for name in ("claude", "codex", "copilot"):
             snap = self._snapshots.get(name)
-            if not snap or snap.status != SnapshotStatus.OK:
+            if not snap:
+                continue
+            if snap.status == SnapshotStatus.AUTH_REQUIRED:
+                lines.append(f"{name}: setup needed")
+                continue
+            if snap.status == SnapshotStatus.ERROR:
+                lines.append(f"{name}: error")
                 continue
             for m in snap.metrics:
                 if m.percent_used is None:
                     continue
                 lines.append(f"{name} {m.label}: {m.percent_used:.0f}%")
-        self._tray.setIcon(self._render_tray_icon())
-        self._tray.setToolTip(
+        tooltip = (
             f"AI Gauge {__version__}\n" + "\n".join(lines)
             if lines
             else f"AI Gauge {__version__}"
         )
+        if self._native_status is not None:
+            self._native_status.update(
+                self._snapshots,
+                _enabled_providers(self._config),
+            )
+            self._native_status.set_tooltip(tooltip)
+            return
+        if self._tray is None:
+            return
+        self._tray.setIcon(self._render_tray_icon())
+        self._tray.setToolTip(tooltip)
 
     def _build_app_menu(self) -> QMenu:
         menu = QMenu()
@@ -595,22 +635,36 @@ class App(QObject):
     def _on_tray_activated(self, reason: QSystemTrayIcon.ActivationReason) -> None:
         if reason == QSystemTrayIcon.ActivationReason.Trigger:
             self._toggle_widget()
+        elif (
+            self._ui_mode == "menubar"
+            and reason == QSystemTrayIcon.ActivationReason.Context
+        ):
+            self._show_tray_menu()
+
+    def _tray_anchor(self) -> QPoint:
+        if self._native_status is not None:
+            return self._native_status.anchor_point()
+        if self._tray is not None:
+            geo = self._tray.geometry()
+            if not geo.isEmpty():
+                return geo.bottomLeft()
+        screen_geo = QApplication.primaryScreen().availableGeometry()
+        return QPoint(screen_geo.right() - 220, screen_geo.top() + 22)
+
+    def _show_tray_menu(self) -> None:
+        anchor = self._tray_anchor()
+        if anchor.isNull():
+            anchor = QCursor.pos()
+        self._app_menu.exec(anchor)
 
     def _toggle_widget(self) -> None:
         if self._widget.isVisible():
             self._widget.hide()
             return
-        if self._ui_mode == "menubar" and self._tray is not None:
-            geo = self._tray.geometry()
-            if geo.isEmpty():
-                # Some macOS Qt builds return an empty rect; fall back to the
-                # top-right of the screen near the menu bar.
-                screen_geo = QApplication.primaryScreen().availableGeometry()
-                anchor_x = screen_geo.right() - 80
-                anchor_y = screen_geo.top()
-            else:
-                anchor_x = geo.center().x()
-                anchor_y = geo.bottom()
+        if self._ui_mode == "menubar":
+            anchor = self._tray_anchor()
+            anchor_x = anchor.x()
+            anchor_y = anchor.y()
             self._widget.show_as_popover(anchor_x, anchor_y)
             return
         self._widget.show()

@@ -282,60 +282,60 @@ class ClaudeProvider(Provider):
         self._parent = parent
         self._scraper: HeadlessScraper | None = None
         self._show_design = show_design
-        self._build_attempts = 0
-        self._on_done: Callable[[UsageSnapshot], None] | None = None
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
-        self._on_done = on_done
-        self._build_attempts = 0
-        self._start_scrape()
+        # Connect via a closure rather than a bound method on `self`. PyQt6's
+        # frozen Windows build was observed to drop bound-method temporaries
+        # on non-QObject receivers, breaking the `done` signal silently —
+        # CodexProvider uses the same closure shape for the same reason.
+        attempts = [0]
 
-    def _start_scrape(self) -> None:
-        self._build_attempts += 1
-        self._scraper = HeadlessScraper(
-            provider="claude",
-            url=CLAUDE_USAGE_URL,
-            extractor_js=EXTRACTOR_JS,
-            wait_ms=5000,
-            max_attempts=2,
-            parent=self._parent,
-        )
-        self._scraper.done.connect(self._handle)
-
-    def _handle(self, result: Any, error: str) -> None:
-        self._scraper = None
-        on_done = self._on_done
-        if on_done is None:
-            return
-        if error or not isinstance(result, dict):
-            snapshot = UsageSnapshot(
-                provider="claude",
-                status=SnapshotStatus.ERROR,
-                error=error or "no data extracted",
-            )
-            log.warning(
-                "provider snapshot error provider=claude reason=%s", snapshot.error
-            )
-            self._on_done = None
+        def _handle(result: Any, error: str) -> None:
+            self._scraper = None
+            if error or not isinstance(result, dict):
+                snapshot = UsageSnapshot(
+                    provider="claude",
+                    status=SnapshotStatus.ERROR,
+                    error=error or "no data extracted",
+                )
+                log.warning(
+                    "provider snapshot error provider=claude reason=%s",
+                    snapshot.error,
+                )
+                on_done(snapshot)
+                return
+            snapshot = _build_snapshot(result, show_design=self._show_design)
+            if (
+                snapshot.status == SnapshotStatus.ERROR
+                and attempts[0] < self._MAX_BUILD_ATTEMPTS
+            ):
+                # The page loaded but the usage panel hadn't populated.
+                # Retry the whole scrape — usually the second attempt sees
+                # the rendered DOM.
+                log.warning(
+                    "provider transient error provider=claude attempt=%s reason=%s — retrying",
+                    attempts[0],
+                    snapshot.error,
+                )
+                _start_scrape()
+                return
+            if snapshot.status == SnapshotStatus.ERROR:
+                log.warning(
+                    "provider snapshot error provider=claude reason=%s",
+                    snapshot.error,
+                )
             on_done(snapshot)
-            return
-        snapshot = _build_snapshot(result, show_design=self._show_design)
-        if (
-            snapshot.status == SnapshotStatus.ERROR
-            and self._build_attempts < self._MAX_BUILD_ATTEMPTS
-        ):
-            # The page loaded but the usage panel hadn't populated. Retry the
-            # whole scrape — usually the second attempt sees the rendered DOM.
-            log.warning(
-                "provider transient error provider=claude attempt=%s reason=%s — retrying",
-                self._build_attempts,
-                snapshot.error,
+
+        def _start_scrape() -> None:
+            attempts[0] += 1
+            self._scraper = HeadlessScraper(
+                provider="claude",
+                url=CLAUDE_USAGE_URL,
+                extractor_js=EXTRACTOR_JS,
+                wait_ms=5000,
+                max_attempts=2,
+                parent=self._parent,
             )
-            self._start_scrape()
-            return
-        if snapshot.status == SnapshotStatus.ERROR:
-            log.warning(
-                "provider snapshot error provider=claude reason=%s", snapshot.error
-            )
-        self._on_done = None
-        on_done(snapshot)
+            self._scraper.done.connect(_handle)
+
+        _start_scrape()

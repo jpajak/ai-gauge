@@ -139,28 +139,45 @@ def get_github_pat() -> str | None:
             return pat
     except keyring.errors.KeyringError:
         pass
-    legacy_pat = get_platform().load_secret(KEYRING_GITHUB_PAT)
+    legacy_pat = _load_legacy_github_pat()
     if not legacy_pat:
         return None
     try:
         keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, legacy_pat)
     except keyring.errors.KeyringError:
         return legacy_pat
-    get_platform().save_secret(KEYRING_GITHUB_PAT, None)
+    _delete_legacy_github_pat()
     return legacy_pat
 
 
 def set_github_pat(pat: str | None) -> None:
-    platform = get_platform()
     if pat:
         keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, pat)
-        platform.save_secret(KEYRING_GITHUB_PAT, None)
+        _delete_legacy_github_pat()
     else:
         try:
             keyring.delete_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT)
-        except keyring.errors.PasswordDeleteError:
+        except keyring.errors.KeyringError:
             pass
-        platform.save_secret(KEYRING_GITHUB_PAT, None)
+        _delete_legacy_github_pat()
+
+
+def _load_legacy_github_pat() -> str | None:
+    from . import secret_storage
+
+    return secret_storage.load_secret(KEYRING_GITHUB_PAT)
+
+
+def _delete_legacy_github_pat() -> None:
+    from . import secret_storage
+
+    try:
+        secret_storage.save_secret(KEYRING_GITHUB_PAT, None)
+    except RuntimeError:
+        # Non-Windows production hosts refuse to write plaintext secrets.dat.
+        # PAT storage itself has already used the system keyring; this cleanup
+        # is only for the old sidecar-file migration path.
+        pass
 
 
 def _cookie_key(provider: str) -> str:

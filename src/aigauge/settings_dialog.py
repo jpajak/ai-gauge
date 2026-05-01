@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import logging
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
@@ -21,8 +23,10 @@ from PyQt6.QtWidgets import (
 from .config import Config, get_github_pat, set_github_pat
 from .error_dialog import reveal_path
 from .logging_setup import log_path
-from .startup import set_start_with_windows
+from .startup import set_start_at_login
 
+
+log = logging.getLogger("aigauge.settings_dialog")
 
 _COPILOT_PLAN_QUOTAS = (
     ("Pro", 300),
@@ -210,8 +214,8 @@ class SettingsDialog(QDialog):
         self.always_on_top_cb.setChecked(config.window.always_on_top)
         general_form.addRow("", self.always_on_top_cb)
 
-        self.startup_cb = QCheckBox("Start with Windows")
-        self.startup_cb.setChecked(config.start_with_windows)
+        self.startup_cb = QCheckBox("Start at login")
+        self.startup_cb.setChecked(config.start_at_login)
         general_form.addRow("", self.startup_cb)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
@@ -323,7 +327,7 @@ class SettingsDialog(QDialog):
 
         self.clear_pat_cb = QCheckBox("Clear saved GitHub PAT")
         self.clear_pat_cb.setToolTip(
-            "Remove the token from Windows Credential Manager."
+            "Remove the token from the system keychain."
         )
         self.clear_pat_cb.setVisible(self._had_existing_pat)
         copilot_form.addRow("", self.clear_pat_cb)
@@ -423,7 +427,7 @@ class SettingsDialog(QDialog):
                     "PAT was not cleared",
                     "The token still appears to be available after clearing. "
                     "Remove the 'ai-gauge' / 'github-pat' credential from "
-                    "Windows Credential Manager.",
+                    "your system keychain.",
                 )
                 return
         if new_pat:
@@ -433,19 +437,19 @@ class SettingsDialog(QDialog):
                 QMessageBox.warning(
                     self,
                     "PAT was not saved",
-                    f"Windows Credential Manager rejected the token:\n{exc}",
+                    f"The system keychain rejected the token:\n{exc}",
                 )
                 return
             if get_github_pat() != new_pat:
                 QMessageBox.warning(
                     self,
                     "PAT was not saved",
-                    "The token could not be read back from Windows Credential "
-                    "Manager. Try running the app normally rather than as a "
+                    "The token could not be read back from the system "
+                    "keychain. Try running the app normally rather than as a "
                     "different user/elevated account.",
                 )
                 return
-            print("Saved GitHub PAT to Windows Credential Manager.")
+            log.info("Saved GitHub PAT to system keychain.")
         self.accept()
 
     def _set_quota_selection(self, quota: int) -> None:
@@ -469,7 +473,7 @@ class SettingsDialog(QDialog):
             self.active_refresh_spin.value(),
             config.refresh_interval_minutes,
         )
-        config.start_with_windows = self.startup_cb.isChecked()
+        config.start_at_login = self.startup_cb.isChecked()
         config.window.always_on_top = self.always_on_top_cb.isChecked()
         config.window.opacity = self.opacity_slider.value() / 100.0
         config.providers.claude = self.claude_cb.isChecked()
@@ -484,6 +488,6 @@ class SettingsDialog(QDialog):
         config.copilot.monthly_quota = (
             int(selected_quota) if selected_quota is not None else self.gh_quota.value()
         )
-        set_start_with_windows(config.start_with_windows)
+        set_start_at_login(config.start_at_login)
 
         config.save()

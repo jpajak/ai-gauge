@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aigauge.models import SnapshotStatus
 from aigauge.providers.codex import CODEX_USAGE_URL, _build_snapshot, _parse_reset_text
@@ -61,6 +61,7 @@ def test_codex_signed_in_empty_usage_payload_is_idle_zero():
         ("Session", 0.0, "idle"),
         ("Weekly", 0.0, "idle"),
     ]
+    assert all(metric.window is None for metric in snapshot.metrics)
 
 
 def test_codex_unparsed_usage_payload_still_reports_layout_error():
@@ -77,3 +78,22 @@ def test_codex_unparsed_usage_payload_still_reports_layout_error():
 
     assert snapshot.status == SnapshotStatus.ERROR
     assert "layout may have changed" in (snapshot.error or "")
+
+
+def test_codex_metrics_carry_windows():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": {"percent": 10, "kind": "used", "reset_text": "4 hr 30 min"},
+            "weekly": {"percent": 20, "kind": "used", "reset_text": "Mon 6:00 PM"},
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": "5 hour usage limit 10% Weekly usage limit 20%",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.window for metric in snapshot.metrics] == [
+        timedelta(hours=5),
+        timedelta(days=7),
+    ]

@@ -258,6 +258,7 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
                 resets_at=resets_at,
                 reset_label=reset_label,
                 note=note,
+                window=reset_window,
             )
         )
 

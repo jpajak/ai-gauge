@@ -14,7 +14,7 @@ def test_defaults():
     assert c.providers.claude_design is False
     assert c.providers.codex is True
     assert c.providers.copilot is True
-    assert c.start_with_windows is False
+    assert c.start_at_login is False
     assert c.copilot.monthly_quota == 300
     assert c.window.always_on_top is True
     assert c.window.collapsed is False
@@ -24,7 +24,7 @@ def test_round_trip(tmp_path, monkeypatch):
     c = Config()
     c.active_refresh_interval_minutes = 2
     c.refresh_interval_minutes = 10
-    c.start_with_windows = True
+    c.start_at_login = True
     c.providers.codex = False
     c.copilot.username = "octocat"
     c.copilot.billing_org = "my-org"
@@ -36,7 +36,7 @@ def test_round_trip(tmp_path, monkeypatch):
     loaded = Config.load()
     assert loaded.active_refresh_interval_minutes == 2
     assert loaded.refresh_interval_minutes == 10
-    assert loaded.start_with_windows is True
+    assert loaded.start_at_login is True
     assert loaded.providers.codex is False
     assert loaded.providers.claude is True
     assert loaded.copilot.username == "octocat"
@@ -73,6 +73,16 @@ def test_load_migrates_old_refresh_interval_to_active_rate():
     c = Config.load()
     assert c.active_refresh_interval_minutes == 5
     assert c.refresh_interval_minutes == 60
+
+
+def test_load_migrates_start_with_windows_to_start_at_login():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"start_with_windows": true}',
+        encoding="utf-8",
+    )
+    c = Config.load()
+    assert c.start_at_login is True
 
 
 def test_load_clamps_saved_window_size():

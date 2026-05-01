@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from aigauge.models import SnapshotStatus
 from aigauge.providers.claude import CLAUDE_USAGE_URL, _build_snapshot
 
@@ -57,6 +59,7 @@ def test_claude_signed_in_empty_usage_payload_is_idle_zero():
         ("Session", 0.0, "idle"),
         ("Weekly", 0.0, "idle"),
     ]
+    assert all(metric.window is None for metric in snapshot.metrics)
 
 
 def test_claude_partial_render_payload_is_layout_error():
@@ -128,6 +131,10 @@ def test_claude_design_limit_is_hidden_by_default():
 
     assert snapshot.status == SnapshotStatus.OK
     assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly"]
+    assert [metric.window for metric in snapshot.metrics] == [
+        timedelta(hours=5),
+        timedelta(days=7),
+    ]
 
 
 def test_claude_zero_weekly_usage_keeps_weekday_reset():
@@ -164,3 +171,8 @@ def test_claude_design_limit_can_be_shown():
 
     assert snapshot.status == SnapshotStatus.OK
     assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly", "Design"]
+    assert [metric.window for metric in snapshot.metrics] == [
+        timedelta(hours=5),
+        timedelta(days=7),
+        timedelta(days=7),
+    ]

@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta
 
+import pytest
 from PyQt6.QtCore import Qt
 
 from aigauge.config import Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
-from aigauge.widget import UsageWidget
+from aigauge.widget import UsageWidget, _MetricRow, _SummaryChip
 
 
 def _tile_order(widget: UsageWidget) -> list[str]:
@@ -276,3 +277,27 @@ def test_always_on_top_suspension_is_reference_counted(qtbot):
 
     widget.restore_always_on_top()
     assert widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+
+def test_metric_row_sets_pace_from_window(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+
+    row.set_metric(
+        "Session",
+        47.0,
+        datetime.now() + timedelta(hours=1),
+        window=timedelta(hours=5),
+    )
+
+    assert row.bar._pace_pct == pytest.approx(80, abs=1)  # noqa: SLF001
+    assert "Time elapsed:" in row.bar.toolTip()
+
+
+def test_summary_chip_stores_pace(qtbot):
+    chip = _SummaryChip()
+    qtbot.addWidget(chip)
+
+    chip.set_state("Claude 37%", 37.0, "ok", pace=37)
+
+    assert chip._pace_pct == 37  # noqa: SLF001

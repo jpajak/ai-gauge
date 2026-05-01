@@ -7,7 +7,8 @@ body:
       value: |
         Please open a feature request before writing code, especially for new
         providers or anything that changes the panel layout. AI Gauge tries to
-        stay small and Windows-tray-shaped, so not every idea will fit.
+        stay small and unobtrusive on all supported desktops, so not every idea
+        will fit.
   - type: textarea
     id: problem
     attributes:
@@ -31,5 +32,5 @@ body:
     attributes:
       label: Scope check
       options:
-        - label: This is a Windows desktop feature (cross-platform requests are unlikely to land — see README).
+        - label: This fits AI Gauge's compact desktop utility scope on at least one supported OS.
         - label: I'm willing to send a PR if we agree on the design.

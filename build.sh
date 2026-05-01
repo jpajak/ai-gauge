@@ -57,6 +57,26 @@ fi
 # On macOS, mark the bundle as a menu-bar-only agent so it doesn't show a
 # Dock icon. Tradeoff: the floating-widget mode (off by default on Mac)
 # also won't appear in Cmd-Tab while LSUIElement is set.
+# PyInstaller mis-lays-out QtWebEngineCore.framework on macOS: it puts the
+# Helpers directory and the WebEngine resource files at
+# Versions/Resources/{Helpers,Resources} instead of Versions/A/{Helpers,Resources},
+# so the top-level Helpers and Resources symlinks (which target
+# Versions/Current/...) dangle and Qt can't find QtWebEngineProcess or
+# icudtl.dat / *.pak.  Relocate them into the proper Versions/A layout.
+if [ "$(uname -s)" = "Darwin" ] && [ "$ONEFILE" -eq 0 ]; then
+    FWDIR="dist/ai-gauge.app/Contents/Frameworks/PyQt6/Qt6/lib/QtWebEngineCore.framework"
+    STRAY="$FWDIR/Versions/Resources"
+    if [ -d "$STRAY/Helpers" ] && [ ! -d "$FWDIR/Versions/A/Helpers" ]; then
+        mv "$STRAY/Helpers" "$FWDIR/Versions/A/Helpers"
+    fi
+    if [ -d "$STRAY/Resources" ]; then
+        cp -R "$STRAY/Resources/." "$FWDIR/Versions/A/Resources/"
+    fi
+    if [ -d "$STRAY" ]; then
+        rm -rf "$STRAY"
+    fi
+fi
+
 if [ "$(uname -s)" = "Darwin" ] && [ "$ONEFILE" -eq 0 ] \
         && [ -f "dist/ai-gauge.app/Contents/Info.plist" ]; then
     /usr/libexec/PlistBuddy -c "Add :LSUIElement bool true" \

@@ -188,14 +188,18 @@ jobs:
           tag_name: ${{ needs.resolve-version.outputs.tag }}
           generate_release_notes: true
           body: |
+            ## Highlights
+
+            _Replace this section with 3-5 user-facing highlights for this release before publishing the draft._
+
             See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ needs.resolve-version.outputs.tag }}/CHANGELOG.md) for full notes.
 
-            **Downloads** — pick the artifact for your OS, extract, and run.
-            - Windows: `ai-gauge-${{ needs.resolve-version.outputs.version }}-windows.zip` → run `ai-gauge.exe`
-            - macOS:   `ai-gauge-${{ needs.resolve-version.outputs.version }}-macos.tar.gz` → drag `ai-gauge.app` to Applications
-            - Linux:   `ai-gauge-${{ needs.resolve-version.outputs.version }}-linux.tar.gz` → run `./ai-gauge/ai-gauge`
+            **Downloads** (pick the artifact for your OS, extract, and run):
+            - Windows: `ai-gauge-${{ needs.resolve-version.outputs.version }}-windows.zip`, run `ai-gauge.exe`
+            - macOS:   `ai-gauge-${{ needs.resolve-version.outputs.version }}-macos.tar.gz`, drag `ai-gauge.app` to Applications
+            - Linux:   `ai-gauge-${{ needs.resolve-version.outputs.version }}-linux.tar.gz`, run `./ai-gauge/ai-gauge`
 
             **Verify:** SHA256 sums live next to each archive.
 
-            Builds are unsigned. Windows SmartScreen and macOS Gatekeeper may warn on first launch — see the README for the per-OS first-launch steps.
+            Builds are unsigned. Windows SmartScreen and macOS Gatekeeper may warn on first launch; see the README for the per-OS first-launch steps.
           files: release/*

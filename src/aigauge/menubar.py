@@ -52,6 +52,9 @@ def _color_for_percent(percent: float | None) -> str:
 def _provider_max_percent(snapshot: UsageSnapshot | None) -> float | None:
     if snapshot is None or snapshot.status != SnapshotStatus.OK:
         return None
+    for metric in snapshot.metrics:
+        if metric.label.lower() == "session" and metric.percent_used is not None:
+            return metric.percent_used
     best: float | None = None
     for metric in snapshot.metrics:
         if metric.percent_used is None:

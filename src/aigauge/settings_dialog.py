@@ -9,15 +9,19 @@ from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
 from .config import Config, get_github_pat, set_github_pat
@@ -48,15 +52,15 @@ QLabel {
 }
 QLabel[hint="true"] {
     color: #9ca3af;
-    font-size: 11px;
+    font-size: 10px;
 }
 QGroupBox {
     color: #f3f4f6;
     font-weight: 600;
     border: 1px solid #374151;
     border-radius: 6px;
-    margin-top: 14px;
-    padding: 14px 10px 10px 10px;
+    margin-top: 10px;
+    padding: 10px 10px 8px 10px;
     background: transparent;
 }
 QGroupBox::title {
@@ -64,6 +68,25 @@ QGroupBox::title {
     subcontrol-position: top left;
     left: 10px;
     padding: 0 6px;
+    background: #1f2937;
+    color: #f3f4f6;
+}
+QTabWidget::pane {
+    border: 1px solid #374151;
+    border-radius: 6px;
+    top: -1px;
+}
+QTabBar::tab {
+    background: #111827;
+    color: #cbd5e1;
+    border: 1px solid #374151;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    padding: 6px 14px;
+    margin-right: 2px;
+}
+QTabBar::tab:selected {
     background: #1f2937;
     color: #f3f4f6;
 }
@@ -178,17 +201,18 @@ class SettingsDialog(QDialog):
         # this existing Settings window back to the foreground.
         self.setWindowTitle("AI Gauge — Settings")
         self.setModal(False)
-        self.resize(560, 650)
+        self.resize(540, 470)
+        self.setMinimumSize(460, 360)
         self.setStyleSheet(_DARK_STYLESHEET)
         self._config = config
 
         # ----- General -----
         general = QGroupBox("General")
-        general_form = QFormLayout(general)
-        general_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        general_form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        general_form.setHorizontalSpacing(12)
-        general_form.setVerticalSpacing(10)
+        general_grid = QGridLayout(general)
+        general_grid.setColumnStretch(1, 1)
+        general_grid.setColumnStretch(3, 1)
+        general_grid.setHorizontalSpacing(10)
+        general_grid.setVerticalSpacing(8)
 
         self.active_refresh_spin = QSpinBox()
         self.active_refresh_spin.setRange(1, 180)
@@ -198,7 +222,8 @@ class SettingsDialog(QDialog):
         self.active_refresh_spin.setToolTip(
             "Refresh cadence after a manual refresh or when usage is changing."
         )
-        general_form.addRow("Active refresh:", self.active_refresh_spin)
+        general_grid.addWidget(QLabel("Active refresh:"), 0, 0)
+        general_grid.addWidget(self.active_refresh_spin, 0, 1)
 
         self.refresh_spin = QSpinBox()
         self.refresh_spin.setRange(1, 180)
@@ -208,15 +233,16 @@ class SettingsDialog(QDialog):
         self.refresh_spin.setToolTip(
             "Slowest refresh cadence after repeated unchanged readings."
         )
-        general_form.addRow("Idle max refresh:", self.refresh_spin)
+        general_grid.addWidget(QLabel("Idle max:"), 0, 2)
+        general_grid.addWidget(self.refresh_spin, 0, 3)
 
         self.always_on_top_cb = QCheckBox("Always on top")
         self.always_on_top_cb.setChecked(config.window.always_on_top)
-        general_form.addRow("", self.always_on_top_cb)
+        general_grid.addWidget(self.always_on_top_cb, 1, 0, 1, 2)
 
         self.startup_cb = QCheckBox("Start at login")
         self.startup_cb.setChecked(config.start_at_login)
-        general_form.addRow("", self.startup_cb)
+        general_grid.addWidget(self.startup_cb, 1, 2, 1, 2)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(30, 100)
@@ -227,20 +253,24 @@ class SettingsDialog(QDialog):
             lambda v: self.opacity_value.setText(f"{v}%")
         )
         op_row = QHBoxLayout()
+        op_row.setContentsMargins(0, 0, 0, 0)
         op_row.addWidget(self.opacity_slider, 1)
         op_row.addWidget(self.opacity_value)
-        general_form.addRow("Opacity:", op_row)
+        general_grid.addWidget(QLabel("Opacity:"), 2, 0)
+        general_grid.addLayout(op_row, 2, 1, 1, 3)
 
         # ----- Providers -----
         providers = QGroupBox("Providers")
-        providers_layout = QVBoxLayout(providers)
-        providers_layout.setSpacing(8)
+        providers_grid = QGridLayout(providers)
+        providers_grid.setColumnStretch(0, 1)
+        providers_grid.setHorizontalSpacing(8)
+        providers_grid.setVerticalSpacing(6)
 
         providers_hint = _hint_label(
             "Uncheck a provider to hide its tile from the widget. The panel "
             "shrinks to fit only what's enabled."
         )
-        providers_layout.addWidget(providers_hint)
+        providers_grid.addWidget(providers_hint, 0, 0, 1, 3)
 
         self.claude_cb = QCheckBox("Claude.ai")
         self.claude_cb.setToolTip("Show the Claude.ai usage tile in the panel.")
@@ -258,18 +288,16 @@ class SettingsDialog(QDialog):
             "Paste the sessionKey cookie from your real browser (Google sign-in path)."
         )
         claude_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("claude"))
-        claude_row = QHBoxLayout()
-        claude_row.addWidget(self.claude_cb, 1)
-        claude_row.addWidget(claude_signin)
-        claude_row.addWidget(claude_paste)
-        providers_layout.addLayout(claude_row)
+        providers_grid.addWidget(self.claude_cb, 1, 0)
+        providers_grid.addWidget(claude_signin, 1, 1)
+        providers_grid.addWidget(claude_paste, 1, 2)
 
         self.claude_design_cb = QCheckBox("Show Claude Design limit")
         self.claude_design_cb.setToolTip(
             "Show Claude's separate design-generation usage limit when Claude exposes it."
         )
         self.claude_design_cb.setChecked(config.providers.claude_design)
-        providers_layout.addWidget(self.claude_design_cb)
+        providers_grid.addWidget(self.claude_design_cb, 2, 0, 1, 3)
 
         self.codex_cb = QCheckBox("ChatGPT Codex")
         self.codex_cb.setToolTip("Show the ChatGPT Codex usage tile in the panel.")
@@ -286,22 +314,20 @@ class SettingsDialog(QDialog):
             "Paste the __Secure-next-auth.session-token cookie from your real browser."
         )
         codex_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("codex"))
-        codex_row = QHBoxLayout()
-        codex_row.addWidget(self.codex_cb, 1)
-        codex_row.addWidget(codex_signin)
-        codex_row.addWidget(codex_paste)
-        providers_layout.addLayout(codex_row)
+        providers_grid.addWidget(self.codex_cb, 3, 0)
+        providers_grid.addWidget(codex_signin, 3, 1)
+        providers_grid.addWidget(codex_paste, 3, 2)
 
         google_hint = _hint_label(
             "If you sign in with <b>Google</b>, use <b>Paste cookie</b> — "
             "Google blocks embedded browsers."
         )
-        providers_layout.addWidget(google_hint)
+        providers_grid.addWidget(google_hint, 4, 0, 1, 3)
 
         self.copilot_cb = QCheckBox("GitHub Copilot")
         self.copilot_cb.setToolTip("Show the GitHub Copilot usage tile in the panel.")
         self.copilot_cb.setChecked(config.providers.copilot)
-        providers_layout.addWidget(self.copilot_cb)
+        providers_grid.addWidget(self.copilot_cb, 5, 0, 1, 3)
 
         # ----- Copilot details -----
         copilot = QGroupBox("GitHub Copilot")
@@ -330,11 +356,11 @@ class SettingsDialog(QDialog):
             "Remove the token from the system keychain."
         )
         self.clear_pat_cb.setVisible(self._had_existing_pat)
-        copilot_form.addRow("", self.clear_pat_cb)
+        if self._had_existing_pat:
+            copilot_form.addRow("", self.clear_pat_cb)
 
         pat_help = _hint_label(
-            "Use a <b>fine-grained PAT</b>. Add <b>Account permissions → Plan → Read</b> "
-            "(scroll down in the 'Add permissions' dropdown).<br/>"
+            "Fine-grained PAT: add <b>Account permissions → Plan → Read</b>. "
             "<a style='color:#60a5fa;' "
             "href='https://github.com/settings/personal-access-tokens/new'>"
             "Create one →</a>"
@@ -376,11 +402,30 @@ class SettingsDialog(QDialog):
         self._set_quota_selection(config.copilot.monthly_quota)
 
         quota_hint = _hint_label(
-            "GitHub does not currently expose a reliable personal-plan quota "
-            "field through the API. Choose your plan here; use Custom if your "
-            "account has a different allowance."
+            "GitHub does not expose a reliable personal-plan quota through the API; "
+            "choose your plan here or Custom for a different allowance."
         )
         copilot_form.addRow("", quota_hint)
+
+        general_tab = QWidget()
+        general_tab_layout = QVBoxLayout(general_tab)
+        general_tab_layout.setContentsMargins(10, 10, 10, 10)
+        general_tab_layout.setSpacing(10)
+        general_tab_layout.addWidget(general)
+        general_tab_layout.addWidget(providers)
+        general_tab_layout.addStretch(1)
+
+        copilot_tab = QWidget()
+        copilot_tab_layout = QVBoxLayout(copilot_tab)
+        copilot_tab_layout.setContentsMargins(10, 10, 10, 10)
+        copilot_tab_layout.setSpacing(10)
+        copilot_tab_layout.addWidget(copilot)
+        copilot_tab_layout.addStretch(1)
+
+        tabs = QTabWidget()
+        tabs.addTab(general_tab, "General")
+        tabs.addTab(copilot_tab, "GitHub Copilot")
+        tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # ----- Buttons -----
         buttons = QDialogButtonBox(
@@ -401,12 +446,9 @@ class SettingsDialog(QDialog):
         button_row.addWidget(buttons)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 12)
-        layout.setSpacing(12)
-        layout.addWidget(general)
-        layout.addWidget(providers)
-        layout.addWidget(copilot)
-        layout.addStretch(1)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(10)
+        layout.addWidget(tabs, 1)
         layout.addLayout(button_row)
 
     def _accept(self) -> None:

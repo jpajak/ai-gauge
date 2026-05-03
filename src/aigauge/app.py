@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import atexit
 import json
 import logging
 import os
@@ -36,6 +37,7 @@ LOGIN_URLS = {
 }
 
 _ACTIVE_MODE_MINUTES = 30
+_HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 _LOG_VALUE_LIMIT = 300
 
 
@@ -142,6 +144,14 @@ def _acquire_instance_lock() -> QLockFile | None:
     return lock
 
 
+def _flush_log_handlers() -> None:
+    for handler in logging.getLogger("aigauge").handlers:
+        try:
+            handler.flush()
+        except Exception:  # noqa: BLE001
+            pass
+
+
 class App(QObject):
     """Main application controller — owns the widget, providers, refresh timer, tray."""
 
@@ -157,6 +167,7 @@ class App(QObject):
             os.getcwd(),
             app_data_dir(),
         )
+        self._started_at = datetime.now()
         self._config = Config.load()
         self._snapshots: dict[str, UsageSnapshot] = {}
         self._history = HistoryStore()
@@ -171,6 +182,7 @@ class App(QObject):
         self._current_refresh_manual = False
         self._settings_dialog: SettingsDialog | None = None
         self._settings_old_copilot_quota: int | None = None
+        self._install_lifecycle_logging()
 
         # Push any saved session cookies into the WebEngine profiles before any
         # scrape runs, so the headless page loads as signed-in.
@@ -257,6 +269,81 @@ class App(QObject):
             self._widget.show()
 
     # ----- Lifecycle helpers -----
+
+    def _install_lifecycle_logging(self) -> None:
+        qt_app = QApplication.instance()
+        if qt_app is not None:
+            qt_app.aboutToQuit.connect(self._log_about_to_quit)
+        atexit.register(self._log_atexit)
+
+        self._heartbeat = QTimer(self)
+        self._heartbeat.setInterval(_HEARTBEAT_INTERVAL_MS)
+        self._heartbeat.timeout.connect(self._log_heartbeat)
+        self._heartbeat.start()
+        log.info("heartbeat enabled interval_s=%s", _HEARTBEAT_INTERVAL_MS // 1000)
+
+    def _uptime_seconds(self) -> int:
+        return max(0, int((datetime.now() - self._started_at).total_seconds()))
+
+    def _next_refresh_seconds(self) -> int | None:
+        try:
+            if not hasattr(self, "_timer"):
+                return None
+            if not self._timer.isActive():
+                return None
+            return max(0, int(self._timer.remainingTime() / 1000))
+        except RuntimeError:
+            return None
+
+    def _widget_visible_for_log(self) -> bool | None:
+        try:
+            if not hasattr(self, "_widget"):
+                return None
+            return self._widget.isVisible()
+        except RuntimeError:
+            return None
+
+    def _lifecycle_context(self) -> dict[str, object]:
+        return {
+            "uptime_s": self._uptime_seconds(),
+            "ui_mode": getattr(self, "_ui_mode", None),
+            "widget_visible": self._widget_visible_for_log(),
+            "providers": ",".join(_enabled_providers(self._config)),
+            "inflight": ",".join(sorted(self._inflight)),
+            "queue": ",".join(self._refresh_queue),
+            "next_refresh_s": self._next_refresh_seconds(),
+            "unchanged_cycles": self._unchanged_cycles,
+        }
+
+    def _log_lifecycle_event(self, event: str) -> None:
+        try:
+            context = self._lifecycle_context()
+            log.info(
+                "%s uptime_s=%s ui_mode=%s widget_visible=%s providers=%s "
+                "inflight=%s queue=%s next_refresh_s=%s unchanged_cycles=%s",
+                event,
+                context["uptime_s"],
+                context["ui_mode"],
+                context["widget_visible"],
+                context["providers"],
+                context["inflight"],
+                context["queue"],
+                context["next_refresh_s"],
+                context["unchanged_cycles"],
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("%s logging failed", event)
+        finally:
+            _flush_log_handlers()
+
+    def _log_heartbeat(self) -> None:
+        self._log_lifecycle_event("heartbeat")
+
+    def _log_about_to_quit(self) -> None:
+        self._log_lifecycle_event("qt aboutToQuit")
+
+    def _log_atexit(self) -> None:
+        self._log_lifecycle_event("python atexit")
 
     def _build_providers(self) -> None:
         # Tear down any existing providers (no shared state to clean up beyond refs)

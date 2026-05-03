@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+## 0.5.2 - 2026-05-03
+
+### Added
+
+- Lifecycle diagnostics: AI Gauge now writes a five-minute heartbeat plus explicit Qt `aboutToQuit` and Python `atexit` log lines with uptime, UI mode, enabled providers, in-flight refreshes, queued providers, next refresh delay, and idle-backoff count. This should make future unexplained exits easier to distinguish from clean quits, OS shutdowns, and mid-refresh process termination.
+
+### Changed
+
+- Settings is now more compact: general/window/provider controls share a shorter tab, GitHub Copilot details live on their own tab, and long helper text was tightened so the dialog fits more comfortably on smaller displays.
+
 ## 0.5.1 - 2026-04-30
 
 ### Added

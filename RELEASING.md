@@ -101,7 +101,7 @@ PyInstaller cross-compilation isn't supported.
 ```markdown
 ## AI Gauge 0.5.0
 
-Compact monitor for Claude.ai, ChatGPT Codex, and GitHub Copilot usage limits.
+Compact monitor for Claude.ai, ChatGPT Codex, GitHub Copilot, and OpenRouter usage.
 Native UI per OS: floating widget on Windows / Linux, menu-bar item on macOS.
 
 ### Highlights

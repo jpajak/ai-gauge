@@ -5,9 +5,9 @@
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-If you pay for multiple AI subscriptions and frequently check your usage, AI Gauge might help. It shows session and weekly usage plus reset times in a compact always-visible view, so you can get the most out of what you're paying for.
+If you pay for multiple AI subscriptions and frequently check your usage, AI Gauge might help. It shows session and weekly usage, reset times, account balances, and spend in a compact always-visible view, so you can get the most out of what you're paying for.
 
-Compact monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usage limits. Manual + auto refresh, with a platform-native UI on each OS:
+Compact monitor for **Claude.ai**, **ChatGPT Codex**, **GitHub Copilot**, and **OpenRouter** usage. Manual + auto refresh, with a platform-native UI on each OS:
 
 - **Windows / Linux** — always-on-top draggable frameless widget plus a system-tray icon.
 - **macOS** — Stats-style menu-bar item (`● 42% ● 78% ● 15%`); the panel opens as a popover when you click it.
@@ -17,8 +17,9 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, and **GitHub Copilot** usa
 Current version: **0.5.3**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
-utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft, or
-any other provider. Provider pages and APIs may change without notice.
+utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
+OpenRouter, or any other provider. Provider pages and APIs may change without
+notice.
 
 ## Screenshots
 
@@ -77,7 +78,7 @@ python3 -m venv .venv
 .venv/bin/python -m aigauge
 ```
 
-On first launch the widget appears with each enabled provider showing a **Sign in** button. Click one to start the auth flow, or open Settings to disable providers you don't use.
+On first launch the widget appears with enabled provider tiles. Claude and Codex use a **Sign in** flow; GitHub Copilot and OpenRouter are configured from Settings with API credentials. Open Settings to disable providers you don't use.
 
 ## First-time setup per provider
 
@@ -86,12 +87,13 @@ On first launch the widget appears with each enabled provider showing a **Sign i
 | **Claude.ai**      | **Sign in (recommended):** opens an embedded browser. <b>Don't click "Continue with Google"</b> — Google refuses to authenticate inside embedded browsers. If your account is Google-linked, just type that same email into the **Enter your email** box and use the **magic link** sent to your inbox. **Paste cookie:** fallback if magic-link is unavailable; see below.                                                                |
 | **ChatGPT Codex**  | Same as Claude — use email + magic link in the embedded browser, or paste cookie as a fallback.                                                                                                                                                                                                                                                                                                                                             |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal Pro/Pro+, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly quota (Pro=300, Pro+=1500, Business=300, Enterprise=1000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
+| **OpenRouter**     | Create an inference API key at <https://openrouter.ai/keys> and paste it into Settings. To show account balance and model activity, also create a management key at <https://openrouter.ai/settings/provisioning-keys>. Management keys cannot be used for inference; AI Gauge stores it separately and only uses it for OpenRouter management endpoints. Daily spend budget is optional.                                                    |
 
 Sessions persist between runs under the per-OS app-data directory:
 
 | OS      | App data                                  | Secrets backend                           |
 | ------- | ----------------------------------------- | ----------------------------------------- |
-| Windows | `%APPDATA%/ai-gauge/`                     | Credential Manager (PAT) + DPAPI-encrypted `secrets.dat` (cookies, since the Credential Manager blob limit is too small for ChatGPT JWTs) |
+| Windows | `%APPDATA%/ai-gauge/`                     | Credential Manager (GitHub PAT + OpenRouter keys) + DPAPI-encrypted `secrets.dat` (cookies, since the Credential Manager blob limit is too small for ChatGPT JWTs) |
 | macOS   | `~/Library/Application Support/ai-gauge/` | Login Keychain                            |
 | Linux   | `~/.config/ai-gauge/`                     | Secret Service (GNOME Keyring / KWallet)  |
 
@@ -119,7 +121,7 @@ If the embedded-browser sign-in doesn't work for you (e.g. your account requires
 - **macOS:** the menu-bar item shows one tinted dot + percent per enabled provider. Click it to open the panel as a popover; click outside to dismiss. Right-click for the same Refresh / Settings / Quit menu.
 - **Linux without a system tray** (stock GNOME): the floating widget stays visible and serves the same Show / Refresh / Settings / Quit menu via right-click on the widget.
 - **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view (one colored dot + percent per provider). Click the pill to expand back to the full panel.
-- **Hide unused providers:** uncheck Claude / Codex / Copilot in Settings to remove their tile from the widget — useful if you only use one or two of them.
+- **Hide unused providers:** uncheck Claude / Codex / Copilot / OpenRouter in Settings to remove their tile from the widget — useful if you only use one or two of them.
 - Auto-refresh is adaptive: manual refresh or changed usage enters the active
   cadence, then unchanged results back off toward the configured max interval.
   Defaults are 5 min active and 60 min idle max.
@@ -156,7 +158,7 @@ See [RELEASING.md](RELEASING.md) for maintainer release steps.
 .venv/bin/pytest              # macOS / Linux
 ```
 
-Tests cover: config round-trip, Copilot REST helpers (with mocked HTTP), and snapshot models. Provider scrapers (Claude/Codex) require a live browser session and are validated manually.
+Tests cover: config round-trip, Copilot and OpenRouter REST helpers (with mocked HTTP), widget behavior, and snapshot models. Provider scrapers (Claude/Codex) require a live browser session and are validated manually.
 
 ## Contributing
 
@@ -171,3 +173,5 @@ the issue templates to use.
 - The Copilot REST endpoint returns the _current calendar month_ of premium-request usage. The widget tracks gross premium requests consumed against the included allowance; net quantity is only the billable overage. Reset is computed as the 1st of the next month. GitHub does not currently expose a reliable personal-plan quota field, so Settings uses a plan dropdown with a Custom fallback.
 - **Copilot usage lags upstream.** The Copilot REST endpoint updates noticeably slower than Claude or Codex — premium-request counts can take hours to reflect recent activity. The widget shows the most recent value GitHub returns; treat the Copilot tile as a trailing indicator, not real-time.
 - **Copilot pricing model changes June 1, 2026.** GitHub is moving Copilot from per-request quotas to token-based usage. Once the switch lands, the request-count display and plan-quota dropdown will need to be reworked to track tokens instead — until then, the Copilot tile may show stale or mismatched values. Open an issue if you see this after the changeover.
+- **OpenRouter uses two key types.** The inference key is used for `/key` spend data. The management key is required for `/credits` account balance and `/activity` model history. Without a management key, AI Gauge still shows key-level spend but cannot show balance or model activity.
+- **OpenRouter time windows are UTC.** Today/month spend come from OpenRouter's current UTC day and month fields. Model activity comes from OpenRouter's default `/activity` history window: the last 30 completed UTC days, excluding the current UTC day.

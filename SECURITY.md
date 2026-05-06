@@ -2,12 +2,12 @@
 
 AI Gauge is an independent open-source local desktop utility for Windows,
 macOS, and Linux. It is not affiliated with Anthropic, OpenAI, GitHub,
-Microsoft, or any other provider.
+Microsoft, OpenRouter, or any other provider.
 
 ## Reporting a Vulnerability
 
 Please do not open a public issue for a vulnerability that exposes session
-cookies, GitHub tokens, or other secrets.
+cookies, GitHub tokens, OpenRouter keys, or other secrets.
 
 Preferred channel: open a private security advisory at
 <https://github.com/jpajak/ai-gauge/security/advisories/new>.
@@ -30,11 +30,11 @@ uses its native credential store; the threat model is the same shape on
 all three: same-user processes can decrypt the data, but other local users
 cannot.
 
-| OS      | Cookies                                                      | GitHub PAT                |
-| ------- | ------------------------------------------------------------ | ------------------------- |
-| Windows | DPAPI-encrypted `%APPDATA%/ai-gauge/secrets.dat`             | Windows Credential Manager |
-| macOS   | Login Keychain                                               | Login Keychain            |
-| Linux   | Secret Service (GNOME Keyring / KWallet) via `keyring`       | same                      |
+| OS      | Cookies                                                      | GitHub PAT / OpenRouter keys |
+| ------- | ------------------------------------------------------------ | ---------------------------- |
+| Windows | DPAPI-encrypted `%APPDATA%/ai-gauge/secrets.dat`             | Windows Credential Manager   |
+| macOS   | Login Keychain                                               | Login Keychain               |
+| Linux   | Secret Service (GNOME Keyring / KWallet) via `keyring`       | same                         |
 
 Embedded browser profiles live under `<app-data>/profiles/{provider}/` on
 every OS.
@@ -42,11 +42,13 @@ every OS.
 ### Why the split on Windows?
 
 Windows Credential Manager caps each blob at ~2.5 KB, which is fine for a
-GitHub PAT but smaller than ChatGPT's `__Secure-next-auth.session-token` JWT.
+GitHub PAT or OpenRouter key but smaller than ChatGPT's
+`__Secure-next-auth.session-token` JWT.
 On Windows we therefore keep cookies in `secrets.dat`, encrypted with DPAPI
-(`CryptProtectData`), and only the PAT in Credential Manager. macOS Keychain
-and the Linux Secret Service have no comparable size limit, so on those
-platforms everything goes through `keyring`.
+(`CryptProtectData`), and keep the GitHub PAT and OpenRouter keys in
+Credential Manager. macOS Keychain and the Linux Secret Service have no
+comparable size limit, so on those platforms everything goes through
+`keyring`.
 
 ### What the OS credential stores do and do not protect against
 
@@ -61,10 +63,11 @@ account**, not to AI Gauge specifically:
   service account, or another macOS user's session will not be able to read
   AI Gauge's secrets without first impersonating the user.
 
-The secrets stored here are session tokens, not just passwords — recovery of
-a Claude or ChatGPT session cookie is functionally equivalent to taking over
-the account in a browser until the cookie expires. Treat your OS user
-profile accordingly.
+The secrets stored here are session tokens and API keys, not just passwords.
+Recovery of a Claude or ChatGPT session cookie is functionally equivalent to
+taking over the account in a browser until the cookie expires. Recovery of a
+GitHub PAT or OpenRouter key can allow API access within that token's scope.
+Treat your OS user profile accordingly.
 
 On non-Windows hosts the legacy `secret_storage` write path is **disabled
 by default** (cookies go through `keyring` instead). Setting
@@ -87,13 +90,13 @@ sending the embedded browser to an arbitrary URL.
 ## Privacy
 
 AI Gauge does not include telemetry or a backend service. Provider requests
-are made from the local app to Claude.ai, ChatGPT, and GitHub endpoints needed
-to read usage information.
+are made from the local app to Claude.ai, ChatGPT, GitHub, and OpenRouter
+endpoints needed to read usage information.
 
 Diagnostic logs are written locally to `<app-data>/ai-gauge.log`. Logs
 are intended to avoid recording
-raw cookies, personal access tokens, and sensitive response bodies. Review logs
-before sharing them in an issue.
+raw cookies, personal access tokens, OpenRouter keys, and sensitive response
+bodies. Review logs before sharing them in an issue.
 
 ## Scope and Limitations
 

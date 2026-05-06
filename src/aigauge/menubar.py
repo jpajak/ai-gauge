@@ -27,6 +27,7 @@ PROVIDER_LABELS = {
     "claude": "Cl",
     "codex": "Cx",
     "copilot": "Cp",
+    "openrouter": "OR",
 }
 
 OK_COLORS = {

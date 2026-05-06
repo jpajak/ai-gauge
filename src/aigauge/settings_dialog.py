@@ -8,6 +8,7 @@ from PyQt6.QtWidgets import (
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
     QGridLayout,
     QGroupBox,
@@ -24,7 +25,15 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
-from .config import Config, get_github_pat, set_github_pat
+from .config import (
+    Config,
+    get_github_pat,
+    get_openrouter_key,
+    get_openrouter_mgmt_key,
+    set_github_pat,
+    set_openrouter_key,
+    set_openrouter_mgmt_key,
+)
 from .error_dialog import reveal_path
 from .logging_setup import log_path
 from .startup import set_start_at_login
@@ -329,6 +338,11 @@ class SettingsDialog(QDialog):
         self.copilot_cb.setChecked(config.providers.copilot)
         providers_grid.addWidget(self.copilot_cb, 5, 0, 1, 3)
 
+        self.openrouter_cb = QCheckBox("OpenRouter")
+        self.openrouter_cb.setToolTip("Show the OpenRouter usage tile in the panel.")
+        self.openrouter_cb.setChecked(config.providers.openrouter)
+        providers_grid.addWidget(self.openrouter_cb, 6, 0, 1, 3)
+
         # ----- Copilot details -----
         copilot = QGroupBox("GitHub Copilot")
         copilot_form = QFormLayout(copilot)
@@ -407,6 +421,92 @@ class SettingsDialog(QDialog):
         )
         copilot_form.addRow("", quota_hint)
 
+        # ----- OpenRouter details -----
+        openrouter = QGroupBox("OpenRouter")
+        openrouter_form = QFormLayout(openrouter)
+        openrouter_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        openrouter_form.setHorizontalSpacing(12)
+        openrouter_form.setVerticalSpacing(8)
+        openrouter_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+
+        self.or_key_edit = QLineEdit()
+        self.or_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        existing_or_key = get_openrouter_key()
+        self._had_existing_or_key = bool(existing_or_key)
+        if existing_or_key:
+            self.or_key_edit.setPlaceholderText(
+                "•••••••••• (saved — leave blank to keep)"
+            )
+        else:
+            self.or_key_edit.setPlaceholderText("sk-or-...")
+        openrouter_form.addRow("Inference key:", self.or_key_edit)
+
+        self.clear_or_key_cb = QCheckBox("Clear saved inference key")
+        self.clear_or_key_cb.setToolTip(
+            "Remove the inference key from the system keychain."
+        )
+        self.clear_or_key_cb.setVisible(self._had_existing_or_key)
+        if self._had_existing_or_key:
+            openrouter_form.addRow("", self.clear_or_key_cb)
+
+        or_key_help = _hint_label(
+            "Your regular API key from <a style='color:#60a5fa;' "
+            "href='https://openrouter.ai/keys'>openrouter.ai/keys</a> — the same "
+            "one your apps use for chat completions. <b>Required</b> for daily "
+            "spend."
+        )
+        openrouter_form.addRow("", or_key_help)
+
+        self.or_mgmt_key_edit = QLineEdit()
+        self.or_mgmt_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        existing_or_mgmt_key = get_openrouter_mgmt_key()
+        self._had_existing_or_mgmt_key = bool(existing_or_mgmt_key)
+        if existing_or_mgmt_key:
+            self.or_mgmt_key_edit.setPlaceholderText(
+                "•••••••••• (saved — leave blank to keep)"
+            )
+        else:
+            self.or_mgmt_key_edit.setPlaceholderText("sk-or-v1-... (optional)")
+        openrouter_form.addRow("Management key:", self.or_mgmt_key_edit)
+
+        self.clear_or_mgmt_key_cb = QCheckBox("Clear saved management key")
+        self.clear_or_mgmt_key_cb.setToolTip(
+            "Remove the management key from the system keychain."
+        )
+        self.clear_or_mgmt_key_cb.setVisible(self._had_existing_or_mgmt_key)
+        if self._had_existing_or_mgmt_key:
+            openrouter_form.addRow("", self.clear_or_mgmt_key_cb)
+
+        or_mgmt_key_help = _hint_label(
+            "<b>Optional</b>, but needed to show your <b>account-wide remaining "
+            "balance</b> and <b>model activity</b>. Create a separate management key at "
+            "<a style='color:#60a5fa;' "
+            "href='https://openrouter.ai/settings/provisioning-keys'>"
+            "openrouter.ai/settings/provisioning-keys</a>. Management keys can't "
+            "make inference calls, so this is in addition to the inference key "
+            "above, not a replacement."
+        )
+        openrouter_form.addRow("", or_mgmt_key_help)
+
+        self.or_daily_budget = QDoubleSpinBox()
+        self.or_daily_budget.setRange(0.0, 10000.0)
+        self.or_daily_budget.setDecimals(2)
+        self.or_daily_budget.setSingleStep(1.0)
+        self.or_daily_budget.setPrefix("$ ")
+        self.or_daily_budget.setSpecialValueText("(no gauge)")
+        self.or_daily_budget.setValue(
+            float(config.openrouter.daily_budget or 0.0)
+        )
+        openrouter_form.addRow("Daily budget:", self.or_daily_budget)
+
+        budget_hint = _hint_label(
+            "Optional. If set, the Daily row shows a colored gauge against this "
+            "budget. Leave at $0.00 to show only the dollar amount."
+        )
+        openrouter_form.addRow("", budget_hint)
+
         general_tab = QWidget()
         general_tab_layout = QVBoxLayout(general_tab)
         general_tab_layout.setContentsMargins(10, 10, 10, 10)
@@ -422,9 +522,17 @@ class SettingsDialog(QDialog):
         copilot_tab_layout.addWidget(copilot)
         copilot_tab_layout.addStretch(1)
 
+        openrouter_tab = QWidget()
+        openrouter_tab_layout = QVBoxLayout(openrouter_tab)
+        openrouter_tab_layout.setContentsMargins(10, 10, 10, 10)
+        openrouter_tab_layout.setSpacing(10)
+        openrouter_tab_layout.addWidget(openrouter)
+        openrouter_tab_layout.addStretch(1)
+
         tabs = QTabWidget()
         tabs.addTab(general_tab, "General")
         tabs.addTab(copilot_tab, "GitHub Copilot")
+        tabs.addTab(openrouter_tab, "OpenRouter")
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # ----- Buttons -----
@@ -492,6 +600,89 @@ class SettingsDialog(QDialog):
                 )
                 return
             log.info("Saved GitHub PAT to system keychain.")
+
+        new_or_key = self.or_key_edit.text().strip()
+        if self.clear_or_key_cb.isChecked() and not new_or_key:
+            try:
+                set_openrouter_key(None)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter inference key was not cleared",
+                    f"The saved key could not be cleared:\n{exc}",
+                )
+                return
+            if get_openrouter_key():
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter inference key was not cleared",
+                    "The key still appears to be available after clearing. "
+                    "Remove the 'ai-gauge' / 'openrouter-key' credential from "
+                    "your system keychain.",
+                )
+                return
+        if new_or_key:
+            try:
+                set_openrouter_key(new_or_key)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter inference key was not saved",
+                    f"The system keychain rejected the key:\n{exc}",
+                )
+                return
+            if get_openrouter_key() != new_or_key:
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter inference key was not saved",
+                    "The key could not be read back from the system "
+                    "keychain. Try running the app normally rather than as a "
+                    "different user/elevated account.",
+                )
+                return
+            log.info("Saved OpenRouter inference key to system keychain.")
+
+        new_or_mgmt_key = self.or_mgmt_key_edit.text().strip()
+        if self.clear_or_mgmt_key_cb.isChecked() and not new_or_mgmt_key:
+            try:
+                set_openrouter_mgmt_key(None)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter management key was not cleared",
+                    f"The saved key could not be cleared:\n{exc}",
+                )
+                return
+            if get_openrouter_mgmt_key():
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter management key was not cleared",
+                    "The key still appears to be available after clearing. "
+                    "Remove the 'ai-gauge' / 'openrouter-mgmt-key' credential "
+                    "from your system keychain.",
+                )
+                return
+        if new_or_mgmt_key:
+            try:
+                set_openrouter_mgmt_key(new_or_mgmt_key)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter management key was not saved",
+                    f"The system keychain rejected the key:\n{exc}",
+                )
+                return
+            if get_openrouter_mgmt_key() != new_or_mgmt_key:
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter management key was not saved",
+                    "The key could not be read back from the system "
+                    "keychain. Try running the app normally rather than as a "
+                    "different user/elevated account.",
+                )
+                return
+            log.info("Saved OpenRouter management key to system keychain.")
+
         self.accept()
 
     def _set_quota_selection(self, quota: int) -> None:
@@ -522,6 +713,7 @@ class SettingsDialog(QDialog):
         config.providers.claude_design = self.claude_design_cb.isChecked()
         config.providers.codex = self.codex_cb.isChecked()
         config.providers.copilot = self.copilot_cb.isChecked()
+        config.providers.openrouter = self.openrouter_cb.isChecked()
         username = self.gh_username.text().strip()
         config.copilot.username = username or None
         billing_org = self.gh_billing_org.text().strip()
@@ -530,6 +722,8 @@ class SettingsDialog(QDialog):
         config.copilot.monthly_quota = (
             int(selected_quota) if selected_quota is not None else self.gh_quota.value()
         )
+        budget = self.or_daily_budget.value()
+        config.openrouter.daily_budget = budget if budget > 0 else None
         set_start_at_login(config.start_at_login)
 
         config.save()

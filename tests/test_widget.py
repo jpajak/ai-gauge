@@ -236,6 +236,47 @@ def test_collapsed_mode_shows_session_summary(qtbot):
     assert all("Weekly" not in text for text in _collapsed_chip_texts(widget))
 
 
+def test_collapsed_mode_shows_openrouter_balance(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="openrouter",
+            status=SnapshotStatus.OK,
+            metrics=[UsageMetric("Balance $11.50 left · Today $1.31", None)],
+        ),
+        "OpenRouter",
+    )
+
+    widget.set_collapsed(True)
+
+    assert _collapsed_chip_texts(widget) == ["OpenRouter $11.50"]
+
+
+def test_collapsed_mode_shows_openrouter_today_without_balance(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="openrouter",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric(
+                    "Spend today $1.31 / month $21.90",
+                    None,
+                )
+            ],
+        ),
+        "OpenRouter",
+    )
+
+    widget.set_collapsed(True)
+
+    assert _collapsed_chip_texts(widget) == ["OpenRouter today $1.31"]
+
+
 def test_collapsed_mode_resizes_immediately(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
@@ -292,6 +333,55 @@ def test_metric_row_sets_pace_from_window(qtbot):
 
     assert row.bar._pace_pct == pytest.approx(80, abs=1)  # noqa: SLF001
     assert "Time elapsed:" in row.bar.toolTip()
+
+
+def test_metric_row_renders_note_only_metric_without_empty_gauge(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+
+    row.set_metric("Models: none", None, None, note="No activity.")
+
+    assert row.label.text() == "Models: none"
+    assert row.bar.isHidden()
+    assert row.pct.isHidden()
+    assert row.reset.isHidden()
+
+
+def test_metric_row_right_aligns_split_note_metric(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+
+    row.set_metric(
+        "Balance $11.50 left · Spend today $0.00 / month $0.00",
+        None,
+        None,
+        note="OpenRouter summary.",
+    )
+
+    assert row.label.text() == "Balance $11.50 left"
+    assert row.reset.text() == "Spend today $0.00 / month $0.00"
+    assert row.reset.width() > 92
+    assert row.reset.toolTip() == ""
+    assert "#d1d5db" in row.reset.styleSheet()
+    assert row.bar.isHidden()
+    assert row.pct.isHidden()
+    assert not row.reset.isHidden()
+
+
+def test_metric_row_keeps_timeline_bar_without_missing_percent(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+
+    row.set_metric(
+        "Today ($0.00/$5.00)",
+        None,
+        datetime.now() + timedelta(hours=8),
+        window=timedelta(days=1),
+    )
+
+    assert not row.bar.isHidden()
+    assert row.pct.isHidden()
+    assert not row.reset.isHidden()
 
 
 def test_summary_chip_stores_pace(qtbot):

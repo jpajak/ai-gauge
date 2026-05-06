@@ -5,6 +5,7 @@ from aigauge.app import (
     App,
     _acquire_instance_lock,
     _adaptive_refresh_minutes,
+    _refresh_provider_order,
     _raw_summary,
 )
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
@@ -176,6 +177,22 @@ def test_scheduled_refresh_keeps_existing_tiles_visible():
     assert app._unchanged_cycles == 3  # noqa: SLF001
 
 
+def test_refresh_order_prioritizes_openrouter_without_reordering_tiles():
+    providers = {
+        "claude": object(),
+        "codex": object(),
+        "copilot": object(),
+        "openrouter": object(),
+    }
+
+    assert _refresh_provider_order(providers) == [
+        "openrouter",
+        "claude",
+        "codex",
+        "copilot",
+    ]
+
+
 def test_widget_activation_raises_open_settings_dialog():
     app = App.__new__(App)
     dialog = _Dialog()
@@ -211,7 +228,9 @@ def test_lifecycle_context_includes_refresh_state():
     app._ui_mode = "floating_widget"  # noqa: SLF001
     app._widget = _Widget()  # noqa: SLF001
     app._config = SimpleNamespace(  # noqa: SLF001
-        providers=SimpleNamespace(claude=True, codex=False, copilot=True)
+        providers=SimpleNamespace(
+            claude=True, codex=False, copilot=True, openrouter=False
+        )
     )
     app._inflight = {"claude"}  # noqa: SLF001
     app._refresh_queue = ["copilot"]  # noqa: SLF001

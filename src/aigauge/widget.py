@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import math
+import re
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import (
@@ -50,7 +51,7 @@ ROW_BAR_HEIGHT = 8
 PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
-PROVIDER_ORDER = ("claude", "codex", "copilot")
+PROVIDER_ORDER = ("claude", "codex", "copilot", "openrouter")
 
 
 def _clamp_height(value: int) -> int:
@@ -186,6 +187,23 @@ def _chip_fill_for_percent(p: float | None) -> str:
 
 def _format_summary_percent(p: float | None) -> str:
     return "--" if p is None else f"{p:.0f}%"
+
+
+def _openrouter_compact_text(snapshot: UsageSnapshot) -> tuple[str, str]:
+    summary = snapshot.metrics[0] if snapshot.metrics else None
+    label = summary.label if summary else ""
+    tooltip = label
+    balance_match = re.search(r"\bBalance\s+\$([0-9][0-9,]*(?:\.[0-9]{2})?)", label)
+    if balance_match:
+        return f"OpenRouter ${balance_match.group(1)}", tooltip
+    today_match = re.search(
+        r"\btoday\s+\$([0-9][0-9,]*(?:\.[0-9]{2})?)",
+        label,
+        re.IGNORECASE,
+    )
+    if today_match:
+        return f"OpenRouter today ${today_match.group(1)}", tooltip
+    return "OpenRouter --", tooltip
 
 
 def _short_error_reason(error: str | None) -> str:
@@ -514,7 +532,20 @@ class _MetricRow(QWidget):
         note: str | None = None,
         window: timedelta | None = None,
     ) -> None:
-        self.label.setText(label)
+        split_note = (
+            percent is None
+            and resets_at is None
+            and window is None
+            and reset_label is None
+            and " · " in label
+        )
+        if split_note:
+            left, right = label.split(" · ", 1)
+            self.label.setText(left)
+            self.reset.setStyleSheet("color: #d1d5db; font-size: 11px;")
+        else:
+            self.label.setText(label)
+            self.reset.setStyleSheet("color: #9ca3af; font-size: 10px;")
         self.setToolTip(note or "")
         self._resets_at = resets_at
         self._window = window
@@ -522,24 +553,38 @@ class _MetricRow(QWidget):
         # Restore determinate range in case this row was previously a skeleton.
         if self.bar.maximum() == 0:
             self.bar.setRange(0, 100)
+        rel = reset_label if reset_label is not None else _format_relative(resets_at)
+        has_timeline = resets_at is not None or window is not None
         if percent is None:
             self.bar.setValue(0)
-            self.pct.setText("--")
+            self.pct.setText("")
+            self.pct.setVisible(False)
+            self.bar.setVisible(has_timeline)
         else:
             self.bar.setValue(int(round(percent)))
             self.pct.setText(f"{percent:.0f}%")
+            self.pct.setVisible(True)
+            self.bar.setVisible(True)
         color = _color_for_percent(percent)
         self.bar.setStyleSheet(
             f"QProgressBar {{ background:#374151; border:none; border-radius:3px; }}"
             f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
         )
-        rel = reset_label if reset_label is not None else _format_relative(resets_at)
-        self.reset.setText(rel)
+        if split_note:
+            self.reset.setText(right)
+            self.reset.setVisible(True)
+            right_width = self.reset.fontMetrics().horizontalAdvance(right) + 4
+            self.reset.setFixedWidth(max(92, min(190, right_width)))
+            self.reset.setToolTip("")
+        else:
+            self.reset.setText(rel)
+            self.reset.setVisible(bool(rel))
+            self.reset.setFixedWidth(58)
         if reset_label:
             self.reset.setToolTip(note or reset_label)
         elif resets_at:
             self.reset.setToolTip(resets_at.strftime("%Y-%m-%d %H:%M"))
-        else:
+        elif not split_note:
             self.reset.setToolTip("")
         pace_line = _pace_tooltip_line(resets_at, window)
         if pace_line:
@@ -567,6 +612,9 @@ class _MetricRow(QWidget):
             "QProgressBar { background:#1f2937; border:none; border-radius:3px; }"
             "QProgressBar::chunk { background:#4b5563; border-radius:3px; }"
         )
+        self.bar.setVisible(True)
+        self.pct.setVisible(True)
+        self.reset.setVisible(True)
         self.pct.setText("")
         self.reset.setText("")
         self.reset.setToolTip("")
@@ -577,6 +625,7 @@ class _ProviderTile(QFrame):
 
     sign_in_requested = pyqtSignal(str)  # provider name
     details_requested = pyqtSignal(str)  # provider name (when error label is clicked)
+    expanded_changed = pyqtSignal(str, bool)  # provider name, expanded
 
     def __init__(self, provider: str, display_name: str, parent: QWidget | None = None):
         super().__init__(parent)
@@ -611,14 +660,29 @@ class _ProviderTile(QFrame):
             lambda: self.sign_in_requested.emit(self.provider)
         )
 
+        self.expand_btn = QPushButton("▸")  # right-pointing chevron
+        self.expand_btn.setVisible(False)
+        self.expand_btn.setFixedSize(16, 16)
+        self.expand_btn.setStyleSheet(
+            "QPushButton { background:transparent; color:#9ca3af; border:none; "
+            "font-size:10px; padding:0; }"
+            "QPushButton:hover { color:#f3f4f6; }"
+        )
+        self.expand_btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.expand_btn.setToolTip("Show top models")
+        self.expand_btn.clicked.connect(self._on_expand_clicked)
+
         header_row = QHBoxLayout()
         header_row.setContentsMargins(0, 0, 0, 0)
+        header_row.addWidget(self.expand_btn)
         header_row.addWidget(self.header)
         header_row.addStretch(1)
         header_row.addWidget(self.action_btn)
         header_row.addWidget(self.status)
 
         self._rows: list[_MetricRow] = []
+        self._expanded = False
+        self._latest_snapshot: UsageSnapshot | None = None
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 4, 6, 4)
@@ -649,6 +713,7 @@ class _ProviderTile(QFrame):
         self._opacity_anim.start()
 
     def set_snapshot(self, snapshot: UsageSnapshot | None) -> None:
+        self._latest_snapshot = snapshot
         if snapshot is None:
             self.status.setText("loading…")
             self.status.setStyleSheet(
@@ -657,6 +722,7 @@ class _ProviderTile(QFrame):
             self.status.setToolTip("")
             self.status.setCursor(Qt.CursorShape.ArrowCursor)
             self.action_btn.setVisible(False)
+            self.expand_btn.setVisible(False)
             self._set_skeleton(["Session"])
             return
 
@@ -668,6 +734,7 @@ class _ProviderTile(QFrame):
             self.status.setToolTip(snapshot.error or "")
             self.status.setCursor(Qt.CursorShape.ArrowCursor)
             self.action_btn.setVisible(self.provider in ("claude", "codex"))
+            self.expand_btn.setVisible(False)
             self._set_rows([])
             return
 
@@ -684,6 +751,7 @@ class _ProviderTile(QFrame):
             )
             self.status.setCursor(Qt.CursorShape.PointingHandCursor)
             self.action_btn.setVisible(False)
+            self.expand_btn.setVisible(False)
             self._set_rows([])
             return
 
@@ -695,11 +763,37 @@ class _ProviderTile(QFrame):
         self.status.setToolTip("")
         self.status.setCursor(Qt.CursorShape.ArrowCursor)
         self.action_btn.setVisible(False)
+        has_breakdown = any(m.tag for m in snapshot.metrics)
+        self.expand_btn.setVisible(has_breakdown)
+        self._update_expand_btn_glyph()
+        visible = [
+            m for m in snapshot.metrics if not m.tag or self._expanded
+        ]
         self._set_rows(
             [
                 (m.label, m.percent_used, m.resets_at, m.reset_label, m.note, m.window)
-                for m in snapshot.metrics
+                for m in visible
             ]
+        )
+
+    def set_expanded(self, expanded: bool, *, emit: bool = True) -> None:
+        if self._expanded == expanded:
+            return
+        self._expanded = expanded
+        self._update_expand_btn_glyph()
+        # Re-render rows from the latest snapshot to add/remove breakdown rows.
+        if self._latest_snapshot is not None:
+            self.set_snapshot(self._latest_snapshot)
+        if emit:
+            self.expanded_changed.emit(self.provider, expanded)
+
+    def _on_expand_clicked(self) -> None:
+        self.set_expanded(not self._expanded, emit=True)
+
+    def _update_expand_btn_glyph(self) -> None:
+        self.expand_btn.setText("▾" if self._expanded else "▸")
+        self.expand_btn.setToolTip(
+            "Hide top models" if self._expanded else "Show top models"
         )
 
     def _set_rows(
@@ -758,6 +852,7 @@ class UsageWidget(QWidget):
     settings_requested = pyqtSignal()
     sign_in_requested = pyqtSignal(str)
     details_requested = pyqtSignal(str)
+    tile_expanded_changed = pyqtSignal(str, bool)
     activated_requested = pyqtSignal()
     closed = pyqtSignal()
 
@@ -930,6 +1025,9 @@ class UsageWidget(QWidget):
             tile = _ProviderTile(provider, display_name, self)
             tile.sign_in_requested.connect(self.sign_in_requested.emit)
             tile.details_requested.connect(self.details_requested.emit)
+            tile.expanded_changed.connect(self.tile_expanded_changed.emit)
+            if provider in (self._config.expanded_tiles or []):
+                tile.set_expanded(True, emit=False)
             self._tiles[provider] = tile
             self._insert_tile_in_provider_order(provider, tile)
             self._refit_height()
@@ -1113,6 +1211,7 @@ class UsageWidget(QWidget):
             "claude": "Claude",
             "codex": "Codex",
             "copilot": "Copilot",
+            "openrouter": "OpenRouter",
         }.get(provider, provider.title())
         snapshot = self._snapshots.get(provider)
         percent: float | None = None
@@ -1130,6 +1229,9 @@ class UsageWidget(QWidget):
             text = f"{display} error"
             tooltip = snapshot.error or "Refresh failed."
             kind = "error"
+        elif provider == "openrouter":
+            text, tooltip = _openrouter_compact_text(snapshot)
+            kind = "ok"
         else:
             metric = next(
                 (m for m in snapshot.metrics if m.label.lower() == "session"),

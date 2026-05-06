@@ -20,6 +20,7 @@ class UsageMetric:
     reset_label: str | None = None
     note: str | None = None
     window: timedelta | None = None
+    tag: str | None = None
 
 
 @dataclass

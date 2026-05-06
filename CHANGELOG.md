@@ -2,6 +2,27 @@
 
 ## Unreleased
 
+## 0.5.3 - 2026-05-06
+
+### Added
+
+- OpenRouter support with separate storage for the standard inference key and management key, plus settings for enabling the provider and optionally setting a daily spend budget.
+- OpenRouter diagnostics now log non-secret endpoint status for `/credits`, `/key`, and `/activity`, including whether each key type is configured, payload field names, and activity row counts.
+
+### Changed
+
+- OpenRouter balance and spend now render as a single split row, e.g. `Balance $11.16 left` with `Spend today $0.00 / month $0.00` right-aligned; UTC details moved to the tooltip.
+- OpenRouter daily spend only renders as a gauge when a daily budget is configured.
+- OpenRouter model breakdown now uses the default `/activity` history window, shows up to six models, and labels it explicitly as `Models: last 30 completed UTC days`.
+- OpenRouter refreshes before browser-scraped providers so its API-backed tile does not wait behind Claude/Codex page loads.
+- Note-only OpenRouter rows, such as empty completed-day model activity, no longer render as empty gauges with `--`.
+- Routine successful OpenRouter refresh diagnostics now log at debug level instead of filling the normal log on every refresh.
+
+### Fixed
+
+- OpenRouter `/activity` now uses the management key, matching OpenRouter's current API requirements, instead of incorrectly using the standard inference key and receiving HTTP 403 responses.
+- OpenRouter management endpoints are skipped when no management key is configured, with visible tile guidance instead of failed background calls.
+
 ## 0.5.2 - 2026-05-03
 
 ### Added

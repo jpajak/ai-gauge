@@ -11,6 +11,8 @@ from .platforms import APP_NAME, get_platform
 
 KEYRING_SERVICE = "ai-gauge"
 KEYRING_GITHUB_PAT = "github-pat"
+KEYRING_OPENROUTER_KEY = "openrouter-key"
+KEYRING_OPENROUTER_MGMT_KEY = "openrouter-mgmt-key"
 WINDOW_WIDTH = 340
 WINDOW_MIN_HEIGHT = 80
 WINDOW_MAX_HEIGHT = 420
@@ -73,6 +75,7 @@ class ProviderToggles(BaseModel):
     claude_design: bool = False
     codex: bool = True
     copilot: bool = True
+    openrouter: bool = False
 
 
 class CopilotConfig(BaseModel):
@@ -81,12 +84,18 @@ class CopilotConfig(BaseModel):
     monthly_quota: int = Field(default=300, ge=1)  # Pro=300, Pro+=1500, Business=300
 
 
+class OpenRouterConfig(BaseModel):
+    daily_budget: float | None = Field(default=None, ge=0)
+
+
 class Config(BaseModel):
     active_refresh_interval_minutes: int = Field(default=5, ge=1, le=180)
     refresh_interval_minutes: int = Field(default=60, ge=1, le=180)
     start_at_login: bool = False
     providers: ProviderToggles = Field(default_factory=ProviderToggles)
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
+    openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
+    expanded_tiles: list[str] = Field(default_factory=list)
     window: WindowState = Field(default_factory=WindowState)
 
     @classmethod
@@ -178,6 +187,46 @@ def _delete_legacy_github_pat() -> None:
         # PAT storage itself has already used the system keyring; this cleanup
         # is only for the old sidecar-file migration path.
         pass
+
+
+def get_openrouter_key() -> str | None:
+    try:
+        key = keyring.get_password(KEYRING_SERVICE, KEYRING_OPENROUTER_KEY)
+        if key:
+            return key
+    except keyring.errors.KeyringError:
+        pass
+    return None
+
+
+def set_openrouter_key(key: str | None) -> None:
+    if key:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_OPENROUTER_KEY, key)
+    else:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, KEYRING_OPENROUTER_KEY)
+        except keyring.errors.KeyringError:
+            pass
+
+
+def get_openrouter_mgmt_key() -> str | None:
+    try:
+        key = keyring.get_password(KEYRING_SERVICE, KEYRING_OPENROUTER_MGMT_KEY)
+        if key:
+            return key
+    except keyring.errors.KeyringError:
+        pass
+    return None
+
+
+def set_openrouter_mgmt_key(key: str | None) -> None:
+    if key:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_OPENROUTER_MGMT_KEY, key)
+    else:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, KEYRING_OPENROUTER_MGMT_KEY)
+        except keyring.errors.KeyringError:
+            pass
 
 
 def _cookie_key(provider: str) -> str:

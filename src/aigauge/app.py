@@ -24,6 +24,7 @@ from .providers.base import Provider, ProviderSignals
 from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
 from .providers.copilot import CopilotProvider
+from .providers.openrouter import OpenRouterProvider
 from .settings_dialog import SettingsDialog
 from .webview.cookies import hydrate_all_from_keyring
 from .webview.login_window import LoginWindow
@@ -68,7 +69,18 @@ def _enabled_providers(config: Config) -> tuple[str, ...]:
         out.append("codex")
     if config.providers.copilot:
         out.append("copilot")
+    if config.providers.openrouter:
+        out.append("openrouter")
     return tuple(out)
+
+
+def _refresh_provider_order(providers: dict[str, Provider]) -> list[str]:
+    names = list(providers)
+    positions = {name: index for index, name in enumerate(names)}
+    return sorted(
+        names,
+        key=lambda name: (0 if name == "openrouter" else 1, positions[name]),
+    )
 
 
 def _adaptive_refresh_minutes(
@@ -194,6 +206,7 @@ class App(QObject):
         self._widget.settings_requested.connect(self.open_settings)
         self._widget.sign_in_requested.connect(self.open_login)
         self._widget.details_requested.connect(self.open_error_details)
+        self._widget.tile_expanded_changed.connect(self._on_tile_expanded_changed)
         self._widget.activated_requested.connect(self._on_widget_activated)
         self._widget.closed.connect(self._on_widget_closed)
 
@@ -366,6 +379,11 @@ class App(QObject):
             self._widget.ensure_tile("copilot", "Copilot")
         else:
             self._widget.remove_tile("copilot")
+        if self._config.providers.openrouter:
+            self._providers["openrouter"] = OpenRouterProvider(self._config)
+            self._widget.ensure_tile("openrouter", "OpenRouter")
+        else:
+            self._widget.remove_tile("openrouter")
 
     def _restart_timer(self) -> None:
         self._timer.stop()
@@ -447,7 +465,7 @@ class App(QObject):
         self._current_refresh_manual = manual
         self._cycle_signatures = {}
         self._widget.set_refreshing(True)
-        self._refresh_queue = list(self._providers)
+        self._refresh_queue = _refresh_provider_order(self._providers)
         if manual:
             self._widget.mark_loading(
                 {
@@ -455,6 +473,7 @@ class App(QObject):
                         "claude": "Claude",
                         "codex": "Codex",
                         "copilot": "Copilot",
+                        "openrouter": "OpenRouter",
                     }.get(name, name)
                     for name in self._refresh_queue
                 }
@@ -513,6 +532,7 @@ class App(QObject):
             "claude": "Claude",
             "codex": "Codex",
             "copilot": "Copilot",
+            "openrouter": "OpenRouter",
         }.get(snapshot.provider, snapshot.provider)
         self._widget.update_snapshot(snapshot, display_name)
 
@@ -540,7 +560,7 @@ class App(QObject):
 
     def _update_tray(self) -> None:
         lines: list[str] = []
-        for name in ("claude", "codex", "copilot"):
+        for name in ("claude", "codex", "copilot", "openrouter"):
             snap = self._snapshots.get(name)
             if not snap:
                 continue
@@ -552,6 +572,8 @@ class App(QObject):
                 continue
             for m in snap.metrics:
                 if m.percent_used is None:
+                    continue
+                if m.tag:
                     continue
                 lines.append(f"{name} {m.label}: {m.percent_used:.0f}%")
         tooltip = (
@@ -637,6 +659,7 @@ class App(QObject):
             "claude": "Claude",
             "codex": "Codex",
             "copilot": "Copilot",
+            "openrouter": "OpenRouter",
         }.get(provider, provider)
         dlg = ErrorDetailsDialog(provider, display_name, snapshot, parent=self._widget)
         dlg.exec()
@@ -648,14 +671,15 @@ class App(QObject):
             self._raise_settings_dialog()
             return
         old_copilot_quota = self._config.copilot.monthly_quota
+        old_openrouter_budget = self._config.openrouter.daily_budget
         dlg = SettingsDialog(self._config, parent=self._widget)
         dlg.setModal(False)
         dlg.setWindowModality(Qt.WindowModality.NonModal)
         dlg.sign_in_clicked.connect(self.open_login)
         dlg.paste_cookie_clicked.connect(self.open_cookie_paste)
         dlg.finished.connect(
-            lambda result, dialog=dlg, old_quota=old_copilot_quota: (
-                self._on_settings_finished(dialog, result, old_quota)
+            lambda result, dialog=dlg, old_quota=old_copilot_quota, old_budget=old_openrouter_budget: (
+                self._on_settings_finished(dialog, result, old_quota, old_budget)
             )
         )
         self._settings_dialog = dlg
@@ -680,6 +704,7 @@ class App(QObject):
         dlg: SettingsDialog,
         result: int,
         old_copilot_quota: int,
+        old_openrouter_budget: float | None,
     ) -> None:
         if self._settings_dialog is not dlg:
             return
@@ -698,6 +723,9 @@ class App(QObject):
             new_copilot_quota = self._config.copilot.monthly_quota
             if old_copilot_quota != new_copilot_quota:
                 self._rerender_copilot(new_copilot_quota)
+            new_openrouter_budget = self._config.openrouter.daily_budget
+            if old_openrouter_budget != new_openrouter_budget:
+                self._rerender_openrouter(new_openrouter_budget)
             self._restart_timer()
             self.refresh_now(manual=True)
         dlg.deleteLater()
@@ -705,6 +733,20 @@ class App(QObject):
     def _on_widget_activated(self) -> None:
         if self._settings_dialog is not None:
             self._raise_settings_dialog()
+
+    def _on_tile_expanded_changed(self, provider: str, expanded: bool) -> None:
+        current = list(self._config.expanded_tiles or [])
+        if expanded and provider not in current:
+            current.append(provider)
+        elif not expanded and provider in current:
+            current.remove(provider)
+        else:
+            return
+        self._config.expanded_tiles = current
+        try:
+            self._config.save()
+        except Exception:  # noqa: BLE001
+            log.exception("failed to persist expanded_tiles")
 
     def _rerender_copilot(self, quota: int) -> None:
         cached = self._snapshots.get("copilot")
@@ -716,6 +758,34 @@ class App(QObject):
             self._on_snapshot(_build_snapshot(cached.raw, quota))
         except Exception:  # noqa: BLE001
             log.exception("failed to re-render copilot snapshot with new quota")
+
+    def _rerender_openrouter(self, daily_budget: float | None) -> None:
+        cached = self._snapshots.get("openrouter")
+        if cached is None or cached.status != SnapshotStatus.OK or not cached.raw:
+            return
+        from .providers.openrouter import _build_snapshot
+
+        raw = cached.raw
+        top_models = [
+            (str(name), float(cost))
+            for name, cost in (raw.get("top_models") or [])
+        ]
+        try:
+            self._on_snapshot(
+                _build_snapshot(
+                    raw.get("credits"),
+                    raw.get("key", {}) or {},
+                    top_models,
+                    daily_budget,
+                    mgmt_key_configured=bool(raw.get("mgmt_key_configured")),
+                    activity_error=raw.get("activity_error"),
+                    activity_date=raw.get("activity_date"),
+                )
+            )
+        except Exception:  # noqa: BLE001
+            log.exception(
+                "failed to re-render openrouter snapshot with new daily budget"
+            )
 
     # ----- Tray -----
 

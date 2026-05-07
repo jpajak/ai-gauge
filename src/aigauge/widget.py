@@ -45,6 +45,7 @@ from .config import (
     WINDOW_MAX_HEIGHT,
     WINDOW_MIN_HEIGHT,
     WINDOW_WIDTH,
+    browser_account,
     display_name_for_account,
 )
 from .models import SnapshotStatus, UsageSnapshot
@@ -54,6 +55,7 @@ PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
 PROVIDER_ORDER = ("claude", "codex", "copilot", "openrouter")
+COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_HEIGHT
 
 
 def _clamp_height(value: int) -> int:
@@ -974,11 +976,10 @@ class UsageWidget(QWidget):
         collapsed_header.addWidget(self._collapsed_age_label)
         collapsed_header.addWidget(self._expand_btn)
 
-        self._collapsed_summary_layout = QHBoxLayout()
+        self._collapsed_summary_layout = QVBoxLayout()
         self._collapsed_summary_layout.setContentsMargins(0, 0, 0, 0)
-        self._collapsed_summary_layout.setSpacing(5)
+        self._collapsed_summary_layout.setSpacing(3)
         self._collapsed_summary_layout.addWidget(self._collapsed_label)
-        self._collapsed_summary_layout.addStretch(1)
 
         collapsed_outer.addLayout(collapsed_header)
         collapsed_outer.addLayout(self._collapsed_summary_layout)
@@ -1152,8 +1153,12 @@ class UsageWidget(QWidget):
 
     def _do_refit_height(self) -> None:
         if self._collapsed:
-            if self.height() != WINDOW_COLLAPSED_HEIGHT or self.width() != WINDOW_WIDTH:
-                self.resize(WINDOW_WIDTH, WINDOW_COLLAPSED_HEIGHT)
+            target_height = max(
+                COLLAPSED_MIN_HEIGHT,
+                min(WINDOW_MAX_HEIGHT, self._collapsed_widget.sizeHint().height()),
+            )
+            if self.height() != target_height or self.width() != WINDOW_WIDTH:
+                self.resize(WINDOW_WIDTH, target_height)
             return
         self._tile_layout.invalidate()
         self._tile_container.updateGeometry()
@@ -1247,39 +1252,34 @@ class UsageWidget(QWidget):
         self._collapsed_label.setText("")
         self._collapsed_label.hide()
         providers = sorted(self._tiles, key=self._tile_sort_key)
-        chips = [self._summary_chip(provider) for provider in providers]
-        available_width = WINDOW_WIDTH - 18
-        used_width = 0
-        visible_count = 0
-        for index, chip in enumerate(chips):
-            remaining = len(chips) - index
-            overflow_width = 0
-            if remaining > 1:
-                overflow = self._overflow_chip(remaining)
-                overflow_width = overflow.width() + 5
-                overflow.deleteLater()
-            next_width = chip.width() + (5 if visible_count else 0)
-            if used_width + next_width + overflow_width > available_width:
-                break
-            self._collapsed_summary_layout.insertWidget(
-                max(0, self._collapsed_summary_layout.count() - 1),
-                chip,
-            )
-            used_width += next_width
-            visible_count += 1
-        hidden = chips[visible_count:]
-        for chip in hidden:
-            chip.deleteLater()
-        if hidden:
-            overflow = self._overflow_chip(len(hidden))
-            overflow.setToolTip("\n".join(self._session_summary_for(p) for p in providers[visible_count:]))
-            self._collapsed_summary_layout.insertWidget(
-                max(0, self._collapsed_summary_layout.count() - 1),
-                overflow,
-            )
+        available_width = WINDOW_WIDTH - 16
+        row_widget: QWidget | None = None
+        row_layout: QHBoxLayout | None = None
+        row_width = 0
+        spacing = 5
+        for provider in providers:
+            chip = self._summary_chip(provider)
+            chip_width = chip.width()
+            needed = chip_width if row_layout is None else chip_width + spacing
+            if row_layout is None or row_width + needed > available_width:
+                if row_layout is not None:
+                    row_layout.addStretch(1)
+                row_widget = QWidget(self._collapsed_widget)
+                row_layout = QHBoxLayout(row_widget)
+                row_layout.setContentsMargins(0, 0, 0, 0)
+                row_layout.setSpacing(spacing)
+                self._collapsed_summary_layout.addWidget(row_widget)
+                row_width = 0
+                needed = chip_width
+            row_layout.addWidget(chip)
+            row_width += needed
+        if row_layout is not None:
+            row_layout.addStretch(1)
+        if self._collapsed:
+            self._refit_height()
 
     def _clear_collapsed_summary(self) -> None:
-        while self._collapsed_summary_layout.count() > 1:
+        while self._collapsed_summary_layout.count():
             item = self._collapsed_summary_layout.takeAt(0)
             widget = item.widget()
             if widget is not None and widget is not self._collapsed_label:
@@ -1287,7 +1287,15 @@ class UsageWidget(QWidget):
         self._collapsed_label.show()
 
     def _summary_chip(self, provider: str) -> _SummaryChip:
-        display = display_name_for_account(self._config, provider)
+        account = browser_account(self._config, provider)
+        display = (
+            account.name.strip()
+            if account is not None
+            and provider not in ("claude", "codex")
+            and account.name
+            and account.name.strip()
+            else display_name_for_account(self._config, provider)
+        )
         snapshot = self._snapshots.get(provider)
         percent: float | None = None
         pace: float | None = None
@@ -1330,11 +1338,6 @@ class UsageWidget(QWidget):
         chip.setToolTip(tooltip)
         return chip
 
-    def _overflow_chip(self, count: int) -> _SummaryChip:
-        chip = _SummaryChip()
-        chip.set_state(f"+{count}", None, "loading")
-        return chip
-
     def set_collapsed(self, collapsed: bool) -> None:
         if self._collapsed == collapsed:
             return
@@ -1353,7 +1356,10 @@ class UsageWidget(QWidget):
         self._tile_container.setVisible(not self._collapsed)
         self._refresh_collapsed_summary()
         if self._collapsed:
-            self.setFixedSize(WINDOW_WIDTH, WINDOW_COLLAPSED_HEIGHT)
+            self.setFixedWidth(WINDOW_WIDTH)
+            self.setMinimumHeight(COLLAPSED_MIN_HEIGHT)
+            self.setMaximumHeight(WINDOW_MAX_HEIGHT)
+            self._do_refit_height()
         else:
             self.setFixedWidth(WINDOW_WIDTH)
             self.setMinimumHeight(WINDOW_MIN_HEIGHT)

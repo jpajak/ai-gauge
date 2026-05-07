@@ -11,7 +11,7 @@
 
 ### Changed
 
-- The main widget now groups multiple Claude accounts before Codex accounts, keeps secondary account names visible in expanded and compact views, and uses a scrollable dark tile area when many accounts are shown.
+- The main widget now groups multiple Claude accounts before Codex accounts, keeps secondary account names visible in expanded and compact views, wraps compact chips onto additional rows when needed, and uses a scrollable dark tile area when many accounts are shown.
 - Codex/OpenAI sign-in guidance now explicitly calls out Google and passkey accounts: use Paste cookie when the embedded browser cannot complete the Google/passkey flow.
 
 ### Fixed

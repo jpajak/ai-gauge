@@ -17,12 +17,17 @@ def _tile_order(widget: UsageWidget) -> list[str]:
 
 def _collapsed_chip_texts(widget: UsageWidget) -> list[str]:
     texts = []
-    layout = widget._collapsed_summary_layout  # noqa: SLF001
-    for i in range(layout.count()):
-        item = layout.itemAt(i)
-        child = item.widget()
-        if child is not None and child is not widget._collapsed_label:  # noqa: SLF001
-            texts.append(child.text())
+    stack = [widget._collapsed_summary_layout]  # noqa: SLF001
+    while stack:
+        layout = stack.pop(0)
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            child = item.widget()
+            if child is not None and child is not widget._collapsed_label:  # noqa: SLF001
+                if hasattr(child, "text"):
+                    texts.append(child.text())
+                if child.layout() is not None:
+                    stack.append(child.layout())
     return texts
 
 
@@ -333,6 +338,36 @@ def test_collapsed_mode_resizes_immediately(qtbot):
     widget.set_collapsed(True)
 
     assert widget.height() == 58
+
+
+def test_collapsed_mode_wraps_all_account_chips_without_overflow(qtbot):
+    config = Config()
+    for i in range(2, 6):
+        config.browser_accounts.append(
+            BrowserAccount(id=f"codex-{i}", kind="codex", name=f"Account {i}")
+        )
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    for account in config.browser_accounts:
+        widget.update_snapshot(
+            UsageSnapshot(
+                provider=account.id,
+                status=SnapshotStatus.OK,
+                metrics=[UsageMetric("Session", 25.0, None)],
+            ),
+            f"Codex ({account.name})" if account.name else "Codex",
+        )
+
+    widget.set_collapsed(True)
+    widget._do_refit_height()  # noqa: SLF001
+
+    texts = _collapsed_chip_texts(widget)
+    assert "+4" not in texts
+    assert len(texts) == len(config.browser_accounts)
+    assert "Account 2 25%" in texts
+    assert all("Codex (Account" not in text for text in texts)
+    assert widget.height() > 58
 
 
 def test_collapsed_mode_persists_and_expands(qtbot):

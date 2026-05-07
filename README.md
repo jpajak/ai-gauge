@@ -126,7 +126,7 @@ If the embedded-browser sign-in doesn't work for you (e.g. your account requires
 - **Windows / Linux:** the widget floats above other windows by default. Drag anywhere to move; close (✕) hides to tray. Right-click the tray icon for Refresh / Settings / Quit. Left-click toggles widget visibility. Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
 - **macOS:** the menu-bar item shows tinted status dots for enabled provider/account tiles. Click it to open the panel as a popover; click outside to dismiss. Right-click for the same Refresh / Settings / Quit menu.
 - **Linux without a system tray** (stock GNOME): the floating widget stays visible and serves the same Show / Refresh / Settings / Quit menu via right-click on the widget.
-- **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view. Each enabled provider/account gets a compact chip when space allows; overflow is summarized as `+N`.
+- **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view. Enabled provider/account chips wrap onto additional rows when needed, with named secondary Claude/Codex accounts using just the account name to save space.
 - **Hide unused providers:** uncheck Claude / Codex / Copilot / OpenRouter in Settings to remove their group from the widget — useful if you only use one or two of them.
 - Auto-refresh is adaptive: manual refresh or changed usage enters the active
   cadence, then unchanged results back off toward the configured max interval.

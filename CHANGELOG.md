@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+## 0.5.5 - 2026-05-07
+
+### Changed
+
+- OpenRouter model breakdown rows now strip the provider prefix (e.g. `anthropic/`, `openai/`, `google/`) from the displayed name and truncate names longer than 20 characters with an ellipsis. The full original slug is preserved in the row tooltip.
+- OpenRouter model breakdown bars now line up at the same x position by sizing all model rows to a uniform label column width.
+
 ## 0.5.4 - 2026-05-07
 
 ### Added

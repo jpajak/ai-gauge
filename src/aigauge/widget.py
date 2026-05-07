@@ -545,6 +545,9 @@ class _MetricRow(QWidget):
         note: str | None = None,
         window: timedelta | None = None,
     ) -> None:
+        # Reset to flexible width; group alignment in _set_rows may pin it after.
+        self.label.setMinimumWidth(70)
+        self.label.setMaximumWidth(16777215)
         split_note = (
             percent is None
             and resets_at is None
@@ -786,7 +789,15 @@ class _ProviderTile(QFrame):
         ]
         self._set_rows(
             [
-                (m.label, m.percent_used, m.resets_at, m.reset_label, m.note, m.window)
+                (
+                    m.label,
+                    m.percent_used,
+                    m.resets_at,
+                    m.reset_label,
+                    m.note,
+                    m.window,
+                    m.tag,
+                )
                 for m in visible
             ]
         )
@@ -821,6 +832,7 @@ class _ProviderTile(QFrame):
                 str | None,
                 str | None,
                 timedelta | None,
+                str | None,
             ]
         ],
     ) -> None:
@@ -835,11 +847,22 @@ class _ProviderTile(QFrame):
             r.hide()
             r.setParent(None)
             r.deleteLater()
-        for row, (label, pct, reset, reset_label, note, window) in zip(
+        grouped: dict[str, list[QLabel]] = {}
+        for row, (label, pct, reset, reset_label, note, window, tag) in zip(
             self._rows,
             rows,
         ):
             row.set_metric(label, pct, reset, reset_label, note, window)
+            if tag and pct is not None:
+                grouped.setdefault(tag, []).append(row.label)
+        for labels in grouped.values():
+            if len(labels) <= 1:
+                continue
+            max_w = max(
+                lbl.fontMetrics().horizontalAdvance(lbl.text()) for lbl in labels
+            )
+            for lbl in labels:
+                lbl.setFixedWidth(max_w + 4)
         self._layout.invalidate()
         self.updateGeometry()
 

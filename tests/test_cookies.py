@@ -18,6 +18,34 @@ def test_parse_codex_full_cookie_header_keeps_related_cookies():
     ]
 
 
+def test_parse_codex_full_cookie_header_with_json_cookie_keeps_related_cookies():
+    pasted = (
+        'Cookie: __cflb=load-balancer; g_state={"i_l":0}; '
+        'oai-chat-web-route="route-value"; '
+        "__Secure-next-auth.session-token=session"
+    )
+    assert _parse_cookie_pairs("codex", pasted) == [
+        ("__cflb", "load-balancer"),
+        ("g_state", '{"i_l":0}'),
+        ("oai-chat-web-route", "route-value"),
+        ("__Secure-next-auth.session-token", "session"),
+    ]
+
+
+def test_parse_codex_bare_cookie_header_value_with_json_cookie_keeps_related_cookies():
+    pasted = (
+        '__cflb=load-balancer; g_state={"i_l":0}; '
+        'oai-chat-web-route="route-value"; '
+        "__Secure-next-auth.session-token=session"
+    )
+    assert _parse_cookie_pairs("codex", pasted) == [
+        ("__cflb", "load-balancer"),
+        ("g_state", '{"i_l":0}'),
+        ("oai-chat-web-route", "route-value"),
+        ("__Secure-next-auth.session-token", "session"),
+    ]
+
+
 def test_parse_codex_split_name_value_lines():
     pasted = (
         "__Secure-next-auth.session-token.0=first\n"

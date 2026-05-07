@@ -17,6 +17,7 @@ log = logging.getLogger("aigauge.providers.openrouter")
 MODEL_BREAKDOWN_TAG = "model_breakdown"
 ACTIVITY_LABEL = "Models"
 MAX_MODEL_BREAKDOWN_ROWS = 6
+MODEL_DISPLAY_MAX_LEN = 20
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -263,11 +264,19 @@ def _build_model_metrics(
     ]
     for model, cost in top_models[:MAX_MODEL_BREAKDOWN_ROWS]:
         percent = (cost / activity_total * 100.0) if activity_total > 0 else None
+        display = model.split("/", 1)[1] if "/" in model else model
+        truncated = len(display) > MODEL_DISPLAY_MAX_LEN
+        if truncated:
+            display = display[: MODEL_DISPLAY_MAX_LEN - 1] + "…"
+        if "/" in model or truncated:
+            note = f"{model}\n${cost:.2f}"
+        else:
+            note = f"${cost:.2f}"
         metrics.append(
             UsageMetric(
-                label=model,
+                label=display,
                 percent_used=percent,
-                note=f"${cost:.2f}",
+                note=note,
                 tag=MODEL_BREAKDOWN_TAG,
             )
         )

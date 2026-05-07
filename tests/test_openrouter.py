@@ -7,6 +7,7 @@ from aigauge.providers.openrouter import (
     ACTIVITY_LABEL,
     MAX_MODEL_BREAKDOWN_ROWS,
     MODEL_BREAKDOWN_TAG,
+    MODEL_DISPLAY_MAX_LEN,
     OPENROUTER_API,
     _activity_model_costs,
     _build_credits_metric,
@@ -102,6 +103,40 @@ def test_build_model_metrics_top_six_only():
 
 def test_build_model_metrics_empty():
     assert _build_model_metrics([]) == []
+
+
+def test_build_model_metrics_strips_provider_prefix_into_tooltip():
+    metrics = _build_model_metrics(
+        [
+            ("anthropic/claude-opus-4.7", 10.0),
+            ("openai/gpt-5.5", 5.0),
+            ("bare-name", 1.0),
+        ],
+    )
+    rows = metrics[1:]
+    assert [m.label for m in rows] == ["claude-opus-4.7", "gpt-5.5", "bare-name"]
+    # Full slug goes into the tooltip, with cost on a second line.
+    assert rows[0].note == "anthropic/claude-opus-4.7\n$10.00"
+    assert rows[1].note == "openai/gpt-5.5\n$5.00"
+    # Models without a provider prefix keep the cost-only note.
+    assert rows[2].note == "$1.00"
+
+
+def test_build_model_metrics_truncates_long_names_and_keeps_full_in_tooltip():
+    metrics = _build_model_metrics(
+        [
+            ("google/gemini-3-pro-image-preview", 10.0),
+            ("some-very-long-bare-model-name-here", 5.0),
+        ],
+    )
+    rows = metrics[1:]
+    # Display labels are capped to MODEL_DISPLAY_MAX_LEN chars (with an ellipsis).
+    assert all(len(m.label) <= MODEL_DISPLAY_MAX_LEN for m in rows)
+    assert rows[0].label.endswith("…")
+    assert rows[1].label.endswith("…")
+    # Full slug is preserved in the tooltip for both prefixed and bare names.
+    assert "google/gemini-3-pro-image-preview" in (rows[0].note or "")
+    assert "some-very-long-bare-model-name-here" in (rows[1].note or "")
 
 
 def test_activity_model_costs_aggregates_all_activity_rows():

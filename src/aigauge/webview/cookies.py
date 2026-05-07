@@ -24,6 +24,35 @@ log = logging.getLogger("aigauge.webview.cookies")
 _COOKIE_TTL_DAYS = 60
 
 
+def _unquote_cookie_value(value: str) -> str:
+    if len(value) < 2 or value[0] != '"' or value[-1] != '"':
+        return value
+
+    try:
+        jar = SimpleCookie()
+        jar.load(f"cookie={value}")
+        morsel = jar.get("cookie")
+        if morsel is not None:
+            return morsel.value
+    except Exception:  # noqa: BLE001 - fall back to a plain quote trim
+        pass
+    return value[1:-1]
+
+
+def _parse_name_value_pairs_manually(cookie_text: str) -> list[tuple[str, str]]:
+    parsed: list[tuple[str, str]] = []
+    for part in cookie_text.replace("\r\n", ";").replace("\n", ";").split(";"):
+        if "=" not in part:
+            continue
+        name, item_value = part.split("=", 1)
+        name = name.strip()
+        if name.lower().startswith("cookie:"):
+            name = name.split(":", 1)[1].strip()
+        if name:
+            parsed.append((name, _unquote_cookie_value(item_value.strip())))
+    return parsed
+
+
 def _parse_name_value_pairs(cookie_text: str) -> list[tuple[str, str]]:
     parsed: list[tuple[str, str]] = []
     try:
@@ -34,17 +63,15 @@ def _parse_name_value_pairs(cookie_text: str) -> list[tuple[str, str]]:
     except Exception:  # noqa: BLE001 - fall through to the manual parser
         parsed = []
 
-    if parsed:
-        return parsed
+    manual = _parse_name_value_pairs_manually(cookie_text)
+    if len(manual) > len(parsed):
+        simple_values = {name: value for name, value in parsed}
+        return [
+            (name, simple_values.get(name, item_value))
+            for name, item_value in manual
+        ]
 
-    for part in cookie_text.replace("\r\n", ";").replace("\n", ";").split(";"):
-        if "=" not in part:
-            continue
-        name, item_value = part.split("=", 1)
-        name = name.strip()
-        if name:
-            parsed.append((name, item_value.strip()))
-    return parsed
+    return parsed or manual
 
 
 def _has_auth_cookie(provider: str, pairs: list[tuple[str, str]]) -> bool:

@@ -36,8 +36,9 @@ cannot.
 | macOS   | Login Keychain                                               | Login Keychain               |
 | Linux   | Secret Service (GNOME Keyring / KWallet) via `keyring`       | same                         |
 
-Embedded browser profiles live under `<app-data>/profiles/{provider}/` on
-every OS.
+Embedded browser profiles live under `<app-data>/profiles/{account-id}/` on
+every OS. The default Claude and Codex account IDs are `claude` and `codex`;
+additional Claude/Codex accounts get their own generated IDs and profiles.
 
 ### Why the split on Windows?
 
@@ -76,10 +77,11 @@ test fixtures only; production code paths should never reach this branch.
 
 ## Embedded Browser
 
-The sign-in window uses an in-process `QWebEngineView` with a per-provider
-profile under `<app-data>/profiles/{provider}/`. Cookies it acquires
-are kept inside that profile and are not shared with your real Chrome or
-Edge browser.
+The sign-in window uses an in-process `QWebEngineView` with a per-account
+profile under `<app-data>/profiles/{account-id}/`. Cookies it acquires are
+kept inside that account profile and are not shared with your real Chrome or
+Edge browser. Multiple Claude/Codex accounts are isolated from each other by
+using separate profile directories and separate stored cookie secrets.
 
 Navigation in the embedded browser is restricted to an allowlist of
 provider auth domains (Claude, ChatGPT, and their known OAuth/identity hops

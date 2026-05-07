@@ -14,7 +14,7 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, **GitHub Copilot**, and **
 
 > **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Run key / LaunchAgent / `~/.config/autostart`).
 
-Current version: **0.5.3**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.5.4**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
 utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
@@ -66,28 +66,34 @@ SHA256 sums are published alongside each archive. Builds are unsigned — see th
 
 ```powershell
 py -m venv .venv
-.venv\Scripts\pip install -e .[dev]
-.venv\Scripts\python -m aigauge
+.\.venv\Scripts\python.exe -m pip install -e .[dev]
+.\.venv\Scripts\python.exe -m aigauge
 ```
 
 **macOS / Linux (bash):**
 
 ```bash
 python3 -m venv .venv
-.venv/bin/pip install -e .[dev]
-.venv/bin/python -m aigauge
+./.venv/bin/python -m pip install -e '.[dev]'
+./.venv/bin/python -m aigauge
 ```
 
-On first launch the widget appears with enabled provider tiles. Claude and Codex use a **Sign in** flow; GitHub Copilot and OpenRouter are configured from Settings with API credentials. Open Settings to disable providers you don't use.
+On first launch the widget appears with enabled provider tiles. Claude and Codex use a **Sign in** flow; GitHub Copilot and OpenRouter are configured from Settings with API credentials. Open Settings to disable providers you don't use or to add more Claude/Codex accounts.
 
 ## First-time setup per provider
 
 | Provider           | Setup                                                                                                                                                                                                                                                                                                                                                                                                                                       |
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **Claude.ai**      | **Sign in (recommended):** opens an embedded browser. <b>Don't click "Continue with Google"</b> — Google refuses to authenticate inside embedded browsers. If your account is Google-linked, just type that same email into the **Enter your email** box and use the **magic link** sent to your inbox. **Paste cookie:** fallback if magic-link is unavailable; see below.                                                                |
-| **ChatGPT Codex**  | Same as Claude — use email + magic link in the embedded browser, or paste cookie as a fallback.                                                                                                                                                                                                                                                                                                                                             |
+| **Claude.ai**      | **Sign in (recommended):** opens an embedded browser. <b>Don't click "Continue with Google"</b> — Google refuses to authenticate inside embedded browsers. If your account is Google-linked, just type that same email into the **Enter your email** box and use the **magic link** sent to your inbox. **Paste cookie:** fallback if magic-link is unavailable; see below. Add extra Claude subscriptions from **Settings → Claude**. |
+| **ChatGPT Codex**  | Same as Claude — use email + magic link in the embedded browser, or paste cookie as a fallback. If your OpenAI account routes through Google or a passkey, use **Paste cookie**; embedded browsers often cannot complete those flows. Add extra Codex subscriptions from **Settings → Codex**.                                                                                                                                                 |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal Pro/Pro+, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly quota (Pro=300, Pro+=1500, Business=300, Enterprise=1000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
 | **OpenRouter**     | Create an inference API key at <https://openrouter.ai/keys> and paste it into Settings. To show account balance and model activity, also create a management key at <https://openrouter.ai/settings/provisioning-keys>. Management keys cannot be used for inference; AI Gauge stores it separately and only uses it for OpenRouter management endpoints. Daily spend budget is optional.                                                    |
+
+### Multiple Claude / Codex accounts
+
+Claude and Codex can track more than one subscription at a time. Open **Settings → Claude** or **Settings → Codex**, click **Add another**, give the account a short name, then use **Sign in** or **Paste cookie** for that specific row. The default account displays as `Claude` or `Codex`; named accounts display as `Claude (Work)`, `Codex (Account 2)`, etc.
+
+The **General** tab controls provider groups. If Claude is checked, all configured Claude accounts appear; if Codex is checked, all configured Codex accounts appear. Secondary accounts can be removed from their provider tab. Each Claude/Codex account uses separate cookie storage, browser profile data, widget tile state, and history records.
 
 Sessions persist between runs under the per-OS app-data directory:
 
@@ -103,7 +109,7 @@ are made from the local app to the configured providers. See
 
 ### Paste cookie (fallback)
 
-If the embedded-browser sign-in doesn't work for you (e.g. your account requires Google sign-in and you can't use the magic-link path), copy your existing session cookie from your normal browser into the app. Cookies last weeks before they need re-pasting.
+If the embedded-browser sign-in doesn't work for you (e.g. your account requires Google sign-in, passkey authentication, or you can't use the magic-link path), copy your existing session cookie from your normal browser into the app. Cookies last weeks before they need re-pasting.
 
 1. Sign into <https://claude.ai> (or <https://chatgpt.com>) in **Chrome / Edge / Firefox** as you normally do.
 2. For ChatGPT, press **F12** → **Network**, reload the page, click a
@@ -113,15 +119,15 @@ If the embedded-browser sign-in doesn't work for you (e.g. your account requires
 3. For Claude, press **F12** → **Network**, reload `https://claude.ai/settings/usage`,
    click a `claude.ai` request, and copy the full **Request Headers → Cookie:**
    value. It must include `sessionKey`.
-4. In the app: Settings → click **Paste cookie** next to the provider, paste, Save.
+4. In the app: Settings → Claude or Settings → Codex → click **Paste cookie** next to the account, paste, Save.
 
 ## Daily use
 
 - **Windows / Linux:** the widget floats above other windows by default. Drag anywhere to move; close (✕) hides to tray. Right-click the tray icon for Refresh / Settings / Quit. Left-click toggles widget visibility. Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
-- **macOS:** the menu-bar item shows one tinted dot + percent per enabled provider. Click it to open the panel as a popover; click outside to dismiss. Right-click for the same Refresh / Settings / Quit menu.
+- **macOS:** the menu-bar item shows tinted status dots for enabled provider/account tiles. Click it to open the panel as a popover; click outside to dismiss. Right-click for the same Refresh / Settings / Quit menu.
 - **Linux without a system tray** (stock GNOME): the floating widget stays visible and serves the same Show / Refresh / Settings / Quit menu via right-click on the widget.
-- **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view (one colored dot + percent per provider). Click the pill to expand back to the full panel.
-- **Hide unused providers:** uncheck Claude / Codex / Copilot / OpenRouter in Settings to remove their tile from the widget — useful if you only use one or two of them.
+- **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view. Each enabled provider/account gets a compact chip when space allows; overflow is summarized as `+N`.
+- **Hide unused providers:** uncheck Claude / Codex / Copilot / OpenRouter in Settings to remove their group from the widget — useful if you only use one or two of them.
 - Auto-refresh is adaptive: manual refresh or changed usage enters the active
   cadence, then unchanged results back off toward the configured max interval.
   Defaults are 5 min active and 60 min idle max.
@@ -154,8 +160,8 @@ See [RELEASING.md](RELEASING.md) for maintainer release steps.
 ## Tests
 
 ```powershell
-.venv\Scripts\pytest          # Windows
-.venv/bin/pytest              # macOS / Linux
+.\.venv\Scripts\python.exe -m pytest    # Windows
+./.venv/bin/python -m pytest            # macOS / Linux
 ```
 
 Tests cover: config round-trip, Copilot and OpenRouter REST helpers (with mocked HTTP), widget behavior, and snapshot models. Provider scrapers (Claude/Codex) require a live browser session and are validated manually.

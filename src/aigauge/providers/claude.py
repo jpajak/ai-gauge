@@ -156,19 +156,20 @@ def _is_load_failed_payload(payload: dict[str, Any]) -> bool:
 def _build_snapshot(
     payload: dict[str, Any],
     *,
+    account_id: str = "claude",
     show_design: bool = False,
 ) -> UsageSnapshot:
     page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
     if _is_logged_out_payload(payload):
         log_page_diagnosis(
             log,
-            provider="claude",
+            provider=account_id,
             classification="logged_out",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
         )
         return UsageSnapshot(
-            provider="claude",
+            provider=account_id,
             status=SnapshotStatus.AUTH_REQUIRED,
             error="Not signed in to Claude.",
             raw=payload,
@@ -176,14 +177,14 @@ def _build_snapshot(
     if _is_load_failed_payload(payload):
         log_page_diagnosis(
             log,
-            provider="claude",
+            provider=account_id,
             classification="load_failed",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
             level=logging.WARNING,
         )
         return UsageSnapshot(
-            provider="claude",
+            provider=account_id,
             status=SnapshotStatus.ERROR,
             error="Claude page load failed. Check your connection and try again.",
             raw=payload,
@@ -195,13 +196,13 @@ def _build_snapshot(
     ):
         log_page_diagnosis(
             log,
-            provider="claude",
+            provider=account_id,
             classification="security_verification",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
         )
         return UsageSnapshot(
-            provider="claude",
+            provider=account_id,
             status=SnapshotStatus.AUTH_REQUIRED,
             error="Claude security verification required. Click Connect and complete the browser check.",
             raw=payload,
@@ -242,7 +243,7 @@ def _build_snapshot(
         if _looks_like_empty_signed_in_usage(payload):
             log_page_diagnosis(
                 log,
-                provider="claude",
+                provider=account_id,
                 classification="empty_signed_in_usage",
                 payload=payload,
                 expected_rows=_EXPECTED_ROWS,
@@ -251,21 +252,21 @@ def _build_snapshot(
         else:
             log_page_diagnosis(
                 log,
-                provider="claude",
+                provider=account_id,
                 classification="layout_changed",
                 payload=payload,
                 expected_rows=_EXPECTED_ROWS,
                 level=logging.WARNING,
             )
             return UsageSnapshot(
-                provider="claude",
+                provider=account_id,
                 status=SnapshotStatus.ERROR,
                 error="Could not read usage from page (layout may have changed).",
                 raw=payload,
             )
 
     return UsageSnapshot(
-        provider="claude",
+        provider=account_id,
         status=SnapshotStatus.OK,
         metrics=metrics,
         raw=payload,
@@ -278,10 +279,16 @@ class ClaudeProvider(Provider):
 
     _MAX_BUILD_ATTEMPTS = 2
 
-    def __init__(self, parent: QObject | None = None, show_design: bool = False):
+    def __init__(
+        self,
+        parent: QObject | None = None,
+        show_design: bool = False,
+        account_id: str = "claude",
+    ):
         self._parent = parent
         self._scraper: HeadlessScraper | None = None
         self._show_design = show_design
+        self._account_id = account_id
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         # Connect via a closure rather than a bound method on `self`. PyQt6's
@@ -294,7 +301,7 @@ class ClaudeProvider(Provider):
             self._scraper = None
             if error or not isinstance(result, dict):
                 snapshot = UsageSnapshot(
-                    provider="claude",
+                    provider=self._account_id,
                     status=SnapshotStatus.ERROR,
                     error=error or "no data extracted",
                 )
@@ -304,7 +311,11 @@ class ClaudeProvider(Provider):
                 )
                 on_done(snapshot)
                 return
-            snapshot = _build_snapshot(result, show_design=self._show_design)
+            snapshot = _build_snapshot(
+                result,
+                account_id=self._account_id,
+                show_design=self._show_design,
+            )
             if (
                 snapshot.status == SnapshotStatus.ERROR
                 and attempts[0] < self._MAX_BUILD_ATTEMPTS
@@ -329,7 +340,7 @@ class ClaudeProvider(Provider):
         def _start_scrape() -> None:
             attempts[0] += 1
             self._scraper = HeadlessScraper(
-                provider="claude",
+                provider=self._account_id,
                 url=CLAUDE_USAGE_URL,
                 extractor_js=EXTRACTOR_JS,
                 wait_ms=5000,

@@ -23,32 +23,32 @@ git clone https://github.com/jpajak/ai-gauge.git
 cd ai-gauge
 
 py -m venv .venv
-.venv\Scripts\pip install -e .[dev]
+.\.venv\Scripts\python.exe -m pip install -e .[dev]
 ```
 
 Run the app:
 
 ```powershell
-.venv\Scripts\python -m aigauge
+.\.venv\Scripts\python.exe -m aigauge
 ```
 
 Run the tests:
 
 ```powershell
-.venv\Scripts\pytest
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 The version-sync check that gates CI:
 
 ```powershell
-.venv\Scripts\python tools\check_versions.py
+.\.venv\Scripts\python.exe tools\check_versions.py
 ```
 
 ## Pull request expectations
 
 - Keep changes focused. One PR per logical change.
 - Add or update tests when you change non-trivial logic.
-- Run `pytest` and `tools/check_versions.py` locally before opening the PR;
+- Run `python -m pytest` and `tools/check_versions.py` locally before opening the PR;
   both run in CI on push and pull request.
 - If you bump the version, update `pyproject.toml`, `src/aigauge/__init__.py`,
   `README.md`, and add a `CHANGELOG.md` section. CI will fail otherwise.

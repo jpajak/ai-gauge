@@ -32,6 +32,7 @@ from PyQt6.QtWidgets import (
     QLabel,
     QProgressBar,
     QPushButton,
+    QScrollArea,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -44,6 +45,7 @@ from .config import (
     WINDOW_MAX_HEIGHT,
     WINDOW_MIN_HEIGHT,
     WINDOW_WIDTH,
+    display_name_for_account,
 )
 from .models import SnapshotStatus, UsageSnapshot
 
@@ -58,9 +60,18 @@ def _clamp_height(value: int) -> int:
     return max(WINDOW_MIN_HEIGHT, min(value, WINDOW_MAX_HEIGHT))
 
 
+def _provider_family(provider: str) -> str:
+    if provider == "claude" or provider.startswith("claude-"):
+        return "claude"
+    if provider == "codex" or provider.startswith("codex-"):
+        return "codex"
+    return provider
+
+
 def _provider_sort_key(provider: str) -> tuple[int, str]:
+    family = _provider_family(provider)
     try:
-        return (PROVIDER_ORDER.index(provider), provider)
+        return (PROVIDER_ORDER.index(family), provider)
     except ValueError:
         return (len(PROVIDER_ORDER), provider)
 
@@ -733,7 +744,9 @@ class _ProviderTile(QFrame):
             )
             self.status.setToolTip(snapshot.error or "")
             self.status.setCursor(Qt.CursorShape.ArrowCursor)
-            self.action_btn.setVisible(self.provider in ("claude", "codex"))
+            self.action_btn.setVisible(
+                _provider_family(self.provider) in ("claude", "codex")
+            )
             self.expand_btn.setVisible(False)
             self._set_rows([])
             return
@@ -971,6 +984,7 @@ class UsageWidget(QWidget):
         collapsed_outer.addLayout(self._collapsed_summary_layout)
 
         self._tile_container = QWidget(self)
+        self._tile_container.setStyleSheet("background:#111827;")
         self._tile_container.setSizePolicy(
             QSizePolicy.Policy.Expanding,
             QSizePolicy.Policy.Fixed,
@@ -980,12 +994,31 @@ class UsageWidget(QWidget):
         self._tile_layout.setSpacing(2)
         self._tile_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
 
+        self._tile_scroll = QScrollArea(self)
+        self._tile_scroll.setWidgetResizable(True)
+        self._tile_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        self._tile_scroll.setHorizontalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._tile_scroll.setVerticalScrollBarPolicy(
+            Qt.ScrollBarPolicy.ScrollBarAsNeeded
+        )
+        self._tile_scroll.setStyleSheet(
+            "QScrollArea { background:#111827; border:none; }"
+            "QScrollArea > QWidget > QWidget { background:#111827; }"
+            "QScrollBar:vertical { background:#111827; width:6px; margin:0; }"
+            "QScrollBar::handle:vertical { background:#4b5563; border-radius:3px; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height:0; }"
+        )
+        self._tile_scroll.viewport().setStyleSheet("background:#111827;")
+        self._tile_scroll.setWidget(self._tile_container)
+
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
         outer.setSpacing(0)
         outer.addWidget(self._collapsed_widget)
         outer.addWidget(self._header_widget)
-        outer.addWidget(self._tile_container)
+        outer.addWidget(self._tile_scroll)
         outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
         # Height is layout-driven (refit on tile/snapshot changes); width is
@@ -1031,18 +1064,37 @@ class UsageWidget(QWidget):
             self._tiles[provider] = tile
             self._insert_tile_in_provider_order(provider, tile)
             self._refit_height()
+        else:
+            self._tiles[provider].header.setText(display_name)
         return self._tiles[provider]
+
+    def _tile_sort_key(self, provider: str) -> tuple[int, int, str]:
+        account_ids = [
+            account.id
+            for account in getattr(self._config, "browser_accounts", [])
+            if account.kind in ("claude", "codex")
+        ]
+        if provider in account_ids:
+            account = next(
+                account
+                for account in self._config.browser_accounts
+                if account.id == provider
+            )
+            family_rank = PROVIDER_ORDER.index(account.kind)
+            return (family_rank, account_ids.index(provider), provider)
+        family_rank, fallback = _provider_sort_key(provider)
+        return (family_rank, 10_000, fallback)
 
     def _insert_tile_in_provider_order(
         self, provider: str, tile: _ProviderTile
     ) -> None:
-        provider_rank = _provider_sort_key(provider)
+        provider_rank = self._tile_sort_key(provider)
         index = self._tile_layout.count()
         for i in range(self._tile_layout.count()):
             existing = self._tile_layout.itemAt(i).widget()
             if not isinstance(existing, _ProviderTile):
                 continue
-            if _provider_sort_key(existing.provider) > provider_rank:
+            if self._tile_sort_key(existing.provider) > provider_rank:
                 index = i
                 break
         self._tile_layout.insertWidget(index, tile)
@@ -1084,6 +1136,7 @@ class UsageWidget(QWidget):
         self._refresh_collapsed_summary()
         self._tile_layout.invalidate()
         self._tile_container.updateGeometry()
+        self._tile_scroll.updateGeometry()
         self.updateGeometry()
         self.layout().invalidate()
         self.layout().activate()
@@ -1104,9 +1157,14 @@ class UsageWidget(QWidget):
             return
         self._tile_layout.invalidate()
         self._tile_container.updateGeometry()
+        self._tile_scroll.updateGeometry()
         self.updateGeometry()
         self.layout().invalidate()
-        target_height = _clamp_height(self.sizeHint().height())
+        header_height = self._header_widget.sizeHint().height()
+        tile_height = self._tile_container.sizeHint().height()
+        max_tile_height = max(40, WINDOW_MAX_HEIGHT - header_height)
+        self._tile_scroll.setFixedHeight(min(tile_height, max_tile_height))
+        target_height = _clamp_height(header_height + self._tile_scroll.height())
         target_width = WINDOW_WIDTH
         if target_height != self.height() or target_width != self.width():
             self.resize(target_width, target_height)
@@ -1166,11 +1224,7 @@ class UsageWidget(QWidget):
         self._collapsed_cadence_label.setStyleSheet(f"color:{color}; font-size:10px;")
 
     def _session_summary_for(self, provider: str) -> str:
-        display = {
-            "claude": "Claude",
-            "codex": "Codex",
-            "copilot": "Copilot",
-        }.get(provider, provider.title())
+        display = display_name_for_account(self._config, provider)
         snapshot = self._snapshots.get(provider)
         if snapshot is None:
             return f"{display} --"
@@ -1192,10 +1246,36 @@ class UsageWidget(QWidget):
             return
         self._collapsed_label.setText("")
         self._collapsed_label.hide()
-        for provider in sorted(self._tiles, key=_provider_sort_key):
+        providers = sorted(self._tiles, key=self._tile_sort_key)
+        chips = [self._summary_chip(provider) for provider in providers]
+        available_width = WINDOW_WIDTH - 18
+        used_width = 0
+        visible_count = 0
+        for index, chip in enumerate(chips):
+            remaining = len(chips) - index
+            overflow_width = 0
+            if remaining > 1:
+                overflow = self._overflow_chip(remaining)
+                overflow_width = overflow.width() + 5
+                overflow.deleteLater()
+            next_width = chip.width() + (5 if visible_count else 0)
+            if used_width + next_width + overflow_width > available_width:
+                break
             self._collapsed_summary_layout.insertWidget(
                 max(0, self._collapsed_summary_layout.count() - 1),
-                self._summary_chip(provider),
+                chip,
+            )
+            used_width += next_width
+            visible_count += 1
+        hidden = chips[visible_count:]
+        for chip in hidden:
+            chip.deleteLater()
+        if hidden:
+            overflow = self._overflow_chip(len(hidden))
+            overflow.setToolTip("\n".join(self._session_summary_for(p) for p in providers[visible_count:]))
+            self._collapsed_summary_layout.insertWidget(
+                max(0, self._collapsed_summary_layout.count() - 1),
+                overflow,
             )
 
     def _clear_collapsed_summary(self) -> None:
@@ -1207,12 +1287,7 @@ class UsageWidget(QWidget):
         self._collapsed_label.show()
 
     def _summary_chip(self, provider: str) -> _SummaryChip:
-        display = {
-            "claude": "Claude",
-            "codex": "Codex",
-            "copilot": "Copilot",
-            "openrouter": "OpenRouter",
-        }.get(provider, provider.title())
+        display = display_name_for_account(self._config, provider)
         snapshot = self._snapshots.get(provider)
         percent: float | None = None
         pace: float | None = None
@@ -1255,6 +1330,11 @@ class UsageWidget(QWidget):
         chip.setToolTip(tooltip)
         return chip
 
+    def _overflow_chip(self, count: int) -> _SummaryChip:
+        chip = _SummaryChip()
+        chip.set_state(f"+{count}", None, "loading")
+        return chip
+
     def set_collapsed(self, collapsed: bool) -> None:
         if self._collapsed == collapsed:
             return
@@ -1269,6 +1349,7 @@ class UsageWidget(QWidget):
     def _apply_collapsed_state(self, *, save: bool) -> None:
         self._collapsed_widget.setVisible(self._collapsed)
         self._header_widget.setVisible(not self._collapsed)
+        self._tile_scroll.setVisible(not self._collapsed)
         self._tile_container.setVisible(not self._collapsed)
         self._refresh_collapsed_summary()
         if self._collapsed:

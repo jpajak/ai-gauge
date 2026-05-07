@@ -174,22 +174,31 @@ class LoginWindow(QDialog):
     signed-in user. If verification fails, we tell the user and stay open.
     """
 
-    def __init__(self, provider: str, login_url: str, title: str, parent=None):
+    def __init__(
+        self,
+        provider: str,
+        login_url: str,
+        title: str,
+        parent=None,
+        *,
+        account_id: str | None = None,
+    ):
         # Don't pass parent — avoids style cascade from main widget.
         super().__init__(None)
         # Intentionally NOT WindowStaysOnTopHint: an always-on-top sign-in
         # dialog can sit over OAuth popups (Apple, Microsoft, magic-link
         # email confirmation pages) the user opens in their real browser.
         self._provider = provider
+        self._account_id = account_id or provider
         self.setWindowTitle(title)
         self.resize(960, 760)
 
-        profile = get_profile(provider)
+        profile = get_profile(self._account_id)
         self._profile = profile
         self._page = _styled_page(
             profile,
             self,
-            provider=provider,
+            provider=self._account_id,
             on_google_started=self._on_google_started,
         )
         self._view = QWebEngineView(self)
@@ -202,9 +211,12 @@ class LoginWindow(QDialog):
 
         instructions = QLabel(
             "<b>Do not click \u201cContinue with Google\u201d</b> \u2014 Google blocks "
-            "embedded browsers. If you normally sign in with Google, just type "
-            "that same email address into the <b>Enter your email</b> box and "
-            "use the <b>magic link</b> sent to your inbox. "
+            "embedded browsers, and Google passkeys usually fail here too. If "
+            "you normally sign in with Google, try typing that same email "
+            "address into the <b>Enter your email</b> box and use the "
+            "<b>magic link</b> sent to your inbox. If OpenAI sends you back to "
+            "Google or asks for a passkey, close this window and use "
+            "<b>Paste cookie</b> in Settings. "
             "Click <b>I'm signed in</b> when you reach your account."
         )
         instructions.setWordWrap(True)
@@ -238,7 +250,7 @@ class LoginWindow(QDialog):
         popup_page = _PopupPage(
             self._profile,
             self,
-            provider=self._provider,
+            provider=self._account_id,
             on_google_started=self._on_google_started,
         )
         request.openIn(popup_page)
@@ -255,8 +267,8 @@ class LoginWindow(QDialog):
 
     def _on_google_started(self) -> None:
         self._status.setText(
-            "Continuing with Google. If Google refuses this embedded browser, "
-            "use Paste cookie in Settings."
+            "Continuing with Google. If Google refuses this embedded browser "
+            "or a passkey fails, use Paste cookie in Settings."
         )
         self._status.setStyleSheet("color:#6b7280;")
 

@@ -10,6 +10,8 @@ from ..config import (
     COOKIE_DOMAINS,
     COOKIE_NAME_ALIASES,
     COOKIE_NAMES,
+    Config,
+    browser_accounts,
     get_provider_cookie,
 )
 from .profile import get_profile
@@ -100,9 +102,9 @@ def _parse_cookie_pairs(provider: str, pasted: str) -> list[tuple[str, str]]:
     return [(name, value) for name in raw_names]
 
 
-def _set_cookie(provider: str, name: str, value: str) -> None:
-    domain = COOKIE_DOMAINS[provider]
-    profile = get_profile(provider)
+def _set_cookie(kind: str, account_id: str, name: str, value: str) -> None:
+    domain = COOKIE_DOMAINS[kind]
+    profile = get_profile(account_id)
     store = profile.cookieStore()
 
     cookie = QNetworkCookie(
@@ -121,43 +123,59 @@ def _set_cookie(provider: str, name: str, value: str) -> None:
     store.setCookie(cookie, origin)
 
 
-def inject_session_cookie(provider: str, value: str) -> bool:
+def inject_session_cookie(
+    provider: str,
+    value: str,
+    *,
+    account_id: str | None = None,
+) -> bool:
     """Push a cookie into the WebEngine profile so subsequent loads are signed-in.
 
     Returns True if a cookie was injected, False if no name/domain mapping exists
     for this provider.
     """
-    domain = COOKIE_DOMAINS.get(provider)
-    if not COOKIE_NAMES.get(provider) or not domain:
+    kind = provider
+    profile_id = account_id or provider
+    domain = COOKIE_DOMAINS.get(kind)
+    if not COOKIE_NAMES.get(kind) or not domain:
         return False
 
-    pairs = _parse_cookie_pairs(provider, value)
+    pairs = _parse_cookie_pairs(kind, value)
     for name, cookie_value in pairs:
-        _set_cookie(provider, name, cookie_value)
+        _set_cookie(kind, profile_id, name, cookie_value)
     return bool(pairs)
 
 
-def hydrate_all_from_keyring() -> list[str]:
+def hydrate_all_from_keyring(config: Config | None = None) -> list[str]:
     """On startup, push any saved cookies into their respective WebEngine profiles.
 
     Returns the list of providers that had a cookie loaded.
     """
     loaded: list[str] = []
-    for provider in COOKIE_NAMES:
-        value = get_provider_cookie(provider)
-        pairs = _parse_cookie_pairs(provider, value) if value else []
+    account_specs = (
+        [(account.kind, account.id) for account in browser_accounts(config)]
+        if config is not None
+        else [(provider, provider) for provider in COOKIE_NAMES]
+    )
+    for kind, account_id in account_specs:
+        value = get_provider_cookie(account_id)
+        pairs = _parse_cookie_pairs(kind, value) if value else []
         names = sorted({name for name, _ in pairs})
-        has_auth = _has_auth_cookie(provider, pairs) if pairs else False
-        injected = bool(value and inject_session_cookie(provider, value))
+        has_auth = _has_auth_cookie(kind, pairs) if pairs else False
+        if value and account_id != kind:
+            injected = inject_session_cookie(kind, value, account_id=account_id)
+        else:
+            injected = bool(value and inject_session_cookie(kind, value))
         log.info(
-            "cookie hydration provider=%s stored=%s parsed_cookie_names=%s "
+            "cookie hydration provider=%s kind=%s stored=%s parsed_cookie_names=%s "
             "has_auth_cookie=%s injected=%s",
-            provider,
+            account_id,
+            kind,
             bool(value),
             names,
             has_auth,
             injected,
         )
         if injected:
-            loaded.append(provider)
+            loaded.append(account_id)
     return loaded

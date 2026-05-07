@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import json
+import re
+import uuid
 from pathlib import Path
 from typing import Any
 
@@ -78,6 +80,13 @@ class ProviderToggles(BaseModel):
     openrouter: bool = False
 
 
+class BrowserAccount(BaseModel):
+    id: str
+    kind: str
+    name: str | None = None
+    enabled: bool = True
+
+
 class CopilotConfig(BaseModel):
     username: str | None = None
     billing_org: str | None = None
@@ -93,6 +102,12 @@ class Config(BaseModel):
     refresh_interval_minutes: int = Field(default=60, ge=1, le=180)
     start_at_login: bool = False
     providers: ProviderToggles = Field(default_factory=ProviderToggles)
+    browser_accounts: list[BrowserAccount] = Field(
+        default_factory=lambda: [
+            BrowserAccount(id="claude", kind="claude"),
+            BrowserAccount(id="codex", kind="codex"),
+        ]
+    )
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
     expanded_tiles: list[str] = Field(default_factory=list)
@@ -123,6 +138,49 @@ class Config(BaseModel):
         # 0.5.x renamed start_with_windows to start_at_login (cross-platform).
         if "start_at_login" not in data and "start_with_windows" in data:
             data["start_at_login"] = bool(data.pop("start_with_windows"))
+        providers = data.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+        if "browser_accounts" not in data:
+            data["browser_accounts"] = [
+                {
+                    "id": "claude",
+                    "kind": "claude",
+                    "name": None,
+                    "enabled": bool(providers.get("claude", True)),
+                },
+                {
+                    "id": "codex",
+                    "kind": "codex",
+                    "name": None,
+                    "enabled": bool(providers.get("codex", True)),
+                },
+            ]
+        elif isinstance(data.get("browser_accounts"), list):
+            accounts = [
+                item for item in data["browser_accounts"] if isinstance(item, dict)
+            ]
+            ids = {str(item.get("id") or "") for item in accounts}
+            if "claude" not in ids:
+                accounts.insert(
+                    0,
+                    {
+                        "id": "claude",
+                        "kind": "claude",
+                        "name": None,
+                        "enabled": bool(providers.get("claude", True)),
+                    },
+                )
+            if "codex" not in ids:
+                accounts.append(
+                    {
+                        "id": "codex",
+                        "kind": "codex",
+                        "name": None,
+                        "enabled": bool(providers.get("codex", True)),
+                    }
+                )
+            data["browser_accounts"] = accounts
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")
@@ -139,6 +197,75 @@ class Config(BaseModel):
             json.dumps(self.model_dump(), indent=2, default=str),
             encoding="utf-8",
         )
+
+
+def provider_base_name(kind: str) -> str:
+    return {"claude": "Claude", "codex": "Codex"}.get(kind, kind.title())
+
+
+def account_display_name(account: BrowserAccount) -> str:
+    base = provider_base_name(account.kind)
+    label = (account.name or "").strip()
+    return f"{base} ({label})" if label else base
+
+
+def browser_accounts(
+    config: Config,
+    *,
+    kind: str | None = None,
+    enabled_only: bool = False,
+) -> list[BrowserAccount]:
+    accounts = [
+        account
+        for account in getattr(config, "browser_accounts", [])
+        if account.kind in ("claude", "codex")
+    ]
+    if kind is not None:
+        accounts = [account for account in accounts if account.kind == kind]
+    if enabled_only:
+        accounts = [account for account in accounts if account.enabled]
+    return accounts
+
+
+def browser_account(config: Config, account_id: str) -> BrowserAccount | None:
+    for account in browser_accounts(config):
+        if account.id == account_id:
+            return account
+    return None
+
+
+def account_kind(config: Config, account_id: str) -> str | None:
+    account = browser_account(config, account_id)
+    if account is not None:
+        return account.kind
+    if account_id in ("claude", "codex"):
+        return account_id
+    if account_id.startswith("claude-"):
+        return "claude"
+    if account_id.startswith("codex-"):
+        return "codex"
+    return None
+
+
+def display_name_for_account(config: Config, account_id: str) -> str:
+    account = browser_account(config, account_id)
+    if account is not None:
+        return account_display_name(account)
+    return {
+        "claude": "Claude",
+        "codex": "Codex",
+        "copilot": "Copilot",
+        "openrouter": "OpenRouter",
+    }.get(account_id, account_id)
+
+
+def generate_browser_account_id(config: Config, kind: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]+", "-", kind.lower()).strip("-") or "account"
+    existing = {account.id for account in config.browser_accounts}
+    while True:
+        candidate = f"{slug}-{uuid.uuid4().hex[:8]}"
+        if candidate not in existing:
+            return candidate
 
 
 def get_github_pat() -> str | None:

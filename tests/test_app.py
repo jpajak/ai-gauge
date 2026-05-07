@@ -5,9 +5,11 @@ from aigauge.app import (
     App,
     _acquire_instance_lock,
     _adaptive_refresh_minutes,
+    _enabled_providers,
     _refresh_provider_order,
     _raw_summary,
 )
+from aigauge.config import BrowserAccount, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 
 
@@ -191,6 +193,20 @@ def test_refresh_order_prioritizes_openrouter_without_reordering_tiles():
         "codex",
         "copilot",
     ]
+
+
+def test_enabled_providers_includes_enabled_browser_accounts():
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(id="claude-team", kind="claude", name="Team", enabled=True)
+    )
+    config.providers.codex = False
+
+    assert _enabled_providers(config) == (
+        "claude",
+        "claude-team",
+        "copilot",
+    )
 
 
 def test_widget_activation_raises_open_settings_dialog():

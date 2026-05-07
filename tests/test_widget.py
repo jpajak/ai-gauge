@@ -3,7 +3,7 @@ from datetime import datetime, timedelta
 import pytest
 from PyQt6.QtCore import Qt
 
-from aigauge.config import Config
+from aigauge.config import BrowserAccount, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 from aigauge.widget import UsageWidget, _MetricRow, _SummaryChip
 
@@ -37,6 +37,32 @@ def test_reenabled_provider_returns_to_canonical_order(qtbot):
     widget.ensure_tile("codex", "Codex")
 
     assert _tile_order(widget) == ["claude", "codex", "copilot"]
+
+
+def test_browser_account_tiles_group_by_provider_kind(qtbot):
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(id="claude-team", kind="claude", name="Team")
+    )
+    config.browser_accounts.append(
+        BrowserAccount(id="codex-work", kind="codex", name="Work")
+    )
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    widget.ensure_tile("codex-work", "Codex (Work)")
+    widget.ensure_tile("claude-team", "Claude (Team)")
+    widget.ensure_tile("codex", "Codex")
+    widget.ensure_tile("claude", "Claude")
+    widget.ensure_tile("copilot", "Copilot")
+
+    assert _tile_order(widget) == [
+        "claude",
+        "claude-team",
+        "codex",
+        "codex-work",
+        "copilot",
+    ]
 
 
 def test_mark_loading_preserves_existing_data_and_dims_tile(qtbot):
@@ -121,6 +147,28 @@ def test_auth_required_tile_uses_sign_in_button(qtbot):
     )
 
     tile = widget._tiles["claude"]  # noqa: SLF001
+    assert tile.action_btn.text() == "Sign in"
+    assert not tile.action_btn.isHidden()
+
+
+def test_secondary_browser_account_auth_tile_uses_sign_in_button(qtbot):
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(id="codex-work", kind="codex", name="Work")
+    )
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="codex-work",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Not signed in.",
+        ),
+        "Codex (Work)",
+    )
+
+    tile = widget._tiles["codex-work"]  # noqa: SLF001
     assert tile.action_btn.text() == "Sign in"
     assert not tile.action_btn.isHidden()
 

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import uuid
 
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
@@ -26,13 +27,18 @@ from PyQt6.QtWidgets import (
 )
 
 from .config import (
+    BrowserAccount,
     Config,
+    account_display_name,
+    browser_accounts,
     get_github_pat,
     get_openrouter_key,
     get_openrouter_mgmt_key,
+    provider_base_name,
     set_github_pat,
     set_openrouter_key,
     set_openrouter_mgmt_key,
+    set_provider_cookie,
 )
 from .error_dialog import reveal_path
 from .logging_setup import log_path
@@ -197,6 +203,65 @@ def _hint_label(text: str) -> QLabel:
     return label
 
 
+class _BrowserAccountRow(QWidget):
+    sign_in_clicked = pyqtSignal(str)
+    paste_cookie_clicked = pyqtSignal(str)
+    remove_clicked = pyqtSignal(str)
+
+    def __init__(
+        self,
+        account: BrowserAccount,
+        *,
+        removable: bool,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.account_id = account.id
+        self.kind = account.kind
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setText(account.name or "")
+        self.name_edit.setPlaceholderText(
+            "Default account" if account.id in ("claude", "codex") else "Account name"
+        )
+        self.name_edit.setMinimumWidth(120)
+
+        sign_in = QPushButton("Sign in")
+        sign_in.setObjectName(f"{account.id}_signin_btn")
+        sign_in.setFixedWidth(68)
+        sign_in.setToolTip("Open an embedded browser to sign in to this account.")
+        sign_in.clicked.connect(lambda: self.sign_in_clicked.emit(self.account_id))
+
+        paste = QPushButton("Paste cookie")
+        paste.setObjectName(f"{account.id}_paste_cookie_btn")
+        paste.setFixedWidth(92)
+        paste.setToolTip("Paste a session cookie for this account.")
+        paste.clicked.connect(lambda: self.paste_cookie_clicked.emit(self.account_id))
+
+        remove = QPushButton("Remove")
+        remove.setFixedWidth(72)
+        remove.setVisible(removable)
+        remove.setToolTip("Remove this account and clear its saved cookie.")
+        remove.clicked.connect(lambda: self.remove_clicked.emit(self.account_id))
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.name_edit, 1)
+        layout.addWidget(sign_in)
+        layout.addWidget(paste)
+        layout.addWidget(remove)
+
+    def to_account(self) -> BrowserAccount:
+        name = self.name_edit.text().strip() or None
+        return BrowserAccount(
+            id=self.account_id,
+            kind=self.kind,
+            name=name,
+            enabled=True,
+        )
+
+
 class SettingsDialog(QDialog):
     sign_in_clicked = pyqtSignal(str)  # provider name
     paste_cookie_clicked = pyqtSignal(str)  # provider name
@@ -210,10 +275,15 @@ class SettingsDialog(QDialog):
         # this existing Settings window back to the foreground.
         self.setWindowTitle("AI Gauge — Settings")
         self.setModal(False)
-        self.resize(540, 470)
-        self.setMinimumSize(460, 360)
+        self.resize(620, 520)
+        self.setMinimumSize(560, 420)
         self.setStyleSheet(_DARK_STYLESHEET)
         self._config = config
+        self._browser_account_rows: list[_BrowserAccountRow] = []
+        self._removed_browser_account_ids: list[str] = []
+        self._browser_accounts = [
+            account.model_copy(deep=True) for account in browser_accounts(config)
+        ]
 
         # ----- General -----
         general = QGroupBox("General")
@@ -270,78 +340,74 @@ class SettingsDialog(QDialog):
 
         # ----- Providers -----
         providers = QGroupBox("Providers")
-        providers_grid = QGridLayout(providers)
-        providers_grid.setColumnStretch(0, 1)
-        providers_grid.setHorizontalSpacing(8)
-        providers_grid.setVerticalSpacing(6)
+        providers_layout = QVBoxLayout(providers)
+        providers_layout.setSpacing(8)
 
         providers_hint = _hint_label(
-            "Uncheck a provider to hide its tile from the widget. The panel "
-            "shrinks to fit only what's enabled."
+            "Show or hide provider groups in the widget. Manage multiple Claude "
+            "or Codex accounts from their tabs."
         )
-        providers_grid.addWidget(providers_hint, 0, 0, 1, 3)
+        providers_layout.addWidget(providers_hint)
 
-        self.claude_cb = QCheckBox("Claude.ai")
-        self.claude_cb.setToolTip("Show the Claude.ai usage tile in the panel.")
+        self.claude_cb = QCheckBox("Claude")
+        self.claude_cb.setToolTip("Show Claude accounts in the panel.")
         self.claude_cb.setChecked(config.providers.claude)
-        claude_signin = QPushButton("Sign in (email)")
-        claude_signin.setObjectName("claude_signin_btn")
-        claude_signin.setToolTip(
-            "Open an embedded browser to sign in. Only works for email/password — "
-            "Google sign-in is blocked in embedded browsers."
-        )
-        claude_signin.clicked.connect(lambda: self.sign_in_clicked.emit("claude"))
-        claude_paste = QPushButton("Paste cookie")
-        claude_paste.setObjectName("claude_paste_cookie_btn")
-        claude_paste.setToolTip(
-            "Paste the sessionKey cookie from your real browser (Google sign-in path)."
-        )
-        claude_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("claude"))
-        providers_grid.addWidget(self.claude_cb, 1, 0)
-        providers_grid.addWidget(claude_signin, 1, 1)
-        providers_grid.addWidget(claude_paste, 1, 2)
+        providers_layout.addWidget(self.claude_cb)
 
         self.claude_design_cb = QCheckBox("Show Claude Design limit")
         self.claude_design_cb.setToolTip(
             "Show Claude's separate design-generation usage limit when Claude exposes it."
         )
         self.claude_design_cb.setChecked(config.providers.claude_design)
-        providers_grid.addWidget(self.claude_design_cb, 2, 0, 1, 3)
+        providers_layout.addWidget(self.claude_design_cb)
 
-        self.codex_cb = QCheckBox("ChatGPT Codex")
-        self.codex_cb.setToolTip("Show the ChatGPT Codex usage tile in the panel.")
+        self.codex_cb = QCheckBox("Codex")
+        self.codex_cb.setToolTip("Show Codex accounts in the panel.")
         self.codex_cb.setChecked(config.providers.codex)
-        codex_signin = QPushButton("Sign in (email)")
-        codex_signin.setObjectName("codex_signin_btn")
-        codex_signin.setToolTip(
-            "Open an embedded browser to sign in. Only works for email/password."
-        )
-        codex_signin.clicked.connect(lambda: self.sign_in_clicked.emit("codex"))
-        codex_paste = QPushButton("Paste cookie")
-        codex_paste.setObjectName("codex_paste_cookie_btn")
-        codex_paste.setToolTip(
-            "Paste the __Secure-next-auth.session-token cookie from your real browser."
-        )
-        codex_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("codex"))
-        providers_grid.addWidget(self.codex_cb, 3, 0)
-        providers_grid.addWidget(codex_signin, 3, 1)
-        providers_grid.addWidget(codex_paste, 3, 2)
-
-        google_hint = _hint_label(
-            "If you sign in with <b>Google</b>, use <b>Paste cookie</b> — "
-            "Google blocks embedded browsers."
-        )
-        providers_grid.addWidget(google_hint, 4, 0, 1, 3)
+        providers_layout.addWidget(self.codex_cb)
 
         self.copilot_cb = QCheckBox("GitHub Copilot")
         self.copilot_cb.setToolTip("Show the GitHub Copilot usage tile in the panel.")
         self.copilot_cb.setChecked(config.providers.copilot)
-        providers_grid.addWidget(self.copilot_cb, 5, 0, 1, 3)
+        providers_layout.addWidget(self.copilot_cb)
 
         self.openrouter_cb = QCheckBox("OpenRouter")
         self.openrouter_cb.setToolTip("Show the OpenRouter usage tile in the panel.")
         self.openrouter_cb.setChecked(config.providers.openrouter)
-        providers_grid.addWidget(self.openrouter_cb, 6, 0, 1, 3)
+        providers_layout.addWidget(self.openrouter_cb)
+
+        # ----- Claude accounts -----
+        claude_accounts = QGroupBox("Claude Accounts")
+        claude_accounts_layout = QVBoxLayout(claude_accounts)
+        claude_accounts_layout.setSpacing(8)
+        claude_accounts_layout.addWidget(
+            _hint_label(
+                "Name each Claude subscription here. All accounts appear when "
+                "Claude is enabled on the General tab. If you sign in with "
+                "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
+                "because embedded browsers often cannot complete that flow."
+            )
+        )
+        self._claude_accounts_layout = QVBoxLayout()
+        self._claude_accounts_layout.setSpacing(6)
+        claude_accounts_layout.addLayout(self._claude_accounts_layout)
+
+        # ----- Codex accounts -----
+        codex_accounts = QGroupBox("Codex Accounts")
+        codex_accounts_layout = QVBoxLayout(codex_accounts)
+        codex_accounts_layout.setSpacing(8)
+        codex_accounts_layout.addWidget(
+            _hint_label(
+                "Name each Codex subscription here. All accounts appear when "
+                "Codex is enabled on the General tab. If you sign in with "
+                "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
+                "because embedded browsers often cannot complete that flow."
+            )
+        )
+        self._codex_accounts_layout = QVBoxLayout()
+        self._codex_accounts_layout.setSpacing(6)
+        codex_accounts_layout.addLayout(self._codex_accounts_layout)
+        self._rebuild_browser_account_rows()
 
         # ----- Copilot details -----
         copilot = QGroupBox("GitHub Copilot")
@@ -515,6 +581,20 @@ class SettingsDialog(QDialog):
         general_tab_layout.addWidget(providers)
         general_tab_layout.addStretch(1)
 
+        claude_tab = QWidget()
+        claude_tab_layout = QVBoxLayout(claude_tab)
+        claude_tab_layout.setContentsMargins(10, 10, 10, 10)
+        claude_tab_layout.setSpacing(10)
+        claude_tab_layout.addWidget(claude_accounts)
+        claude_tab_layout.addStretch(1)
+
+        codex_tab = QWidget()
+        codex_tab_layout = QVBoxLayout(codex_tab)
+        codex_tab_layout.setContentsMargins(10, 10, 10, 10)
+        codex_tab_layout.setSpacing(10)
+        codex_tab_layout.addWidget(codex_accounts)
+        codex_tab_layout.addStretch(1)
+
         copilot_tab = QWidget()
         copilot_tab_layout = QVBoxLayout(copilot_tab)
         copilot_tab_layout.setContentsMargins(10, 10, 10, 10)
@@ -531,6 +611,8 @@ class SettingsDialog(QDialog):
 
         tabs = QTabWidget()
         tabs.addTab(general_tab, "General")
+        tabs.addTab(claude_tab, "Claude")
+        tabs.addTab(codex_tab, "Codex")
         tabs.addTab(copilot_tab, "GitHub Copilot")
         tabs.addTab(openrouter_tab, "OpenRouter")
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -559,7 +641,84 @@ class SettingsDialog(QDialog):
         layout.addWidget(tabs, 1)
         layout.addLayout(button_row)
 
+    def _new_account_id(self, kind: str) -> str:
+        existing = {account.id for account in self._browser_accounts}
+        while True:
+            account_id = f"{kind}-{uuid.uuid4().hex[:8]}"
+            if account_id not in existing:
+                return account_id
+
+    def _next_account_name(self, kind: str) -> str:
+        count = sum(1 for account in self._browser_accounts if account.kind == kind)
+        return f"Account {count + 1}"
+
+    def _add_browser_account(self, kind: str) -> None:
+        self._browser_accounts = self._current_browser_accounts()
+        self._browser_accounts.append(
+            BrowserAccount(
+                id=self._new_account_id(kind),
+                kind=kind,
+                name=self._next_account_name(kind),
+                enabled=True,
+            )
+        )
+        self._rebuild_browser_account_rows()
+
+    def _remove_browser_account(self, account_id: str) -> None:
+        self._browser_accounts = [
+            account for account in self._current_browser_accounts()
+            if account.id != account_id
+        ]
+        self._removed_browser_account_ids.append(account_id)
+        self._rebuild_browser_account_rows()
+
+    def _rebuild_browser_account_rows(self) -> None:
+        for layout in (self._claude_accounts_layout, self._codex_accounts_layout):
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+        self._browser_account_rows = []
+        for kind, layout in (
+            ("claude", self._claude_accounts_layout),
+            ("codex", self._codex_accounts_layout),
+        ):
+            for account in [a for a in self._browser_accounts if a.kind == kind]:
+                row = _BrowserAccountRow(
+                    account,
+                    removable=account.id not in ("claude", "codex"),
+                )
+                row.sign_in_clicked.connect(self.sign_in_clicked.emit)
+                row.paste_cookie_clicked.connect(self.paste_cookie_clicked.emit)
+                row.remove_clicked.connect(self._remove_browser_account)
+                self._browser_account_rows.append(row)
+                layout.addWidget(row)
+            add_btn = QPushButton(f"Add another {provider_base_name(kind)}")
+            add_btn.clicked.connect(lambda _checked=False, k=kind: self._add_browser_account(k))
+            add_btn.setFixedWidth(150)
+            layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+    def _current_browser_accounts(self) -> list[BrowserAccount]:
+        return [row.to_account() for row in self._browser_account_rows]
+
+    def _validate_browser_accounts(self) -> bool:
+        seen: set[tuple[str, str]] = set()
+        for account in self._current_browser_accounts():
+            key = (account.kind, account_display_name(account).lower())
+            if key in seen:
+                QMessageBox.warning(
+                    self,
+                    "Duplicate account name",
+                    f"Each {provider_base_name(account.kind)} account needs a unique display name.",
+                )
+                return False
+            seen.add(key)
+        return True
+
     def _accept(self) -> None:
+        if not self._validate_browser_accounts():
+            return
         new_pat = self.gh_pat_edit.text().strip()
         if self.clear_pat_cb.isChecked() and not new_pat:
             try:
@@ -709,11 +868,15 @@ class SettingsDialog(QDialog):
         config.start_at_login = self.startup_cb.isChecked()
         config.window.always_on_top = self.always_on_top_cb.isChecked()
         config.window.opacity = self.opacity_slider.value() / 100.0
+        accounts = self._current_browser_accounts()
+        config.browser_accounts = accounts
         config.providers.claude = self.claude_cb.isChecked()
         config.providers.claude_design = self.claude_design_cb.isChecked()
         config.providers.codex = self.codex_cb.isChecked()
         config.providers.copilot = self.copilot_cb.isChecked()
         config.providers.openrouter = self.openrouter_cb.isChecked()
+        for account_id in self._removed_browser_account_ids:
+            set_provider_cookie(account_id, None)
         username = self.gh_username.text().strip()
         config.copilot.username = username or None
         billing_org = self.gh_billing_org.text().strip()

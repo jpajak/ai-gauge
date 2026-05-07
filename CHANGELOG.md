@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+## 0.5.4 - 2026-05-07
+
+### Added
+
+- Claude and Codex now support multiple named accounts. Add extra accounts from the dedicated Claude or Codex Settings tab; each account gets its own browser profile, cookie storage, tile, snapshot history, and display name such as `Codex (Account 2)`.
+- Settings now separates provider visibility from account management: General controls whether Claude/Codex groups appear, while the Claude and Codex tabs manage account names, sign-in, cookie paste, add, and remove actions.
+
+### Changed
+
+- The main widget now groups multiple Claude accounts before Codex accounts, keeps secondary account names visible in expanded and compact views, and uses a scrollable dark tile area when many accounts are shown.
+- Codex/OpenAI sign-in guidance now explicitly calls out Google and passkey accounts: use Paste cookie when the embedded browser cannot complete the Google/passkey flow.
+
+### Fixed
+
+- Fixed the multi-account widget scroll area inheriting Qt's default light background.
+- Fixed secondary-account Settings rows being cramped in a single mixed provider list.
+
 ## 0.5.3 - 2026-05-06
 
 ### Added

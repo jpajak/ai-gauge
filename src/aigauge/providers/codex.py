@@ -202,18 +202,22 @@ def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
     )
 
 
-def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
+def _build_snapshot(
+    payload: dict[str, Any],
+    *,
+    account_id: str = "codex",
+) -> UsageSnapshot:
     page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
     if _is_logged_out_payload(payload):
         log_page_diagnosis(
             log,
-            provider="codex",
+            provider=account_id,
             classification="logged_out",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
         )
         return UsageSnapshot(
-            provider="codex",
+            provider=account_id,
             status=SnapshotStatus.AUTH_REQUIRED,
             error="Not signed in to ChatGPT.",
             raw=payload,
@@ -225,13 +229,13 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
     ):
         log_page_diagnosis(
             log,
-            provider="codex",
+            provider=account_id,
             classification="security_verification",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
         )
         return UsageSnapshot(
-            provider="codex",
+            provider=account_id,
             status=SnapshotStatus.AUTH_REQUIRED,
             error="ChatGPT security verification required. Click Connect and complete the browser check.",
             raw=payload,
@@ -266,34 +270,34 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
         if _looks_like_empty_signed_in_usage(payload):
             log_page_diagnosis(
                 log,
-                provider="codex",
+                provider=account_id,
                 classification="empty_signed_in_usage",
                 payload=payload,
                 expected_rows=_EXPECTED_ROWS,
             )
             return UsageSnapshot(
-                provider="codex",
+                provider=account_id,
                 status=SnapshotStatus.OK,
                 metrics=_empty_usage_metrics(),
                 raw=payload,
             )
         log_page_diagnosis(
             log,
-            provider="codex",
+            provider=account_id,
             classification="layout_changed",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
             level=logging.WARNING,
         )
         return UsageSnapshot(
-            provider="codex",
+            provider=account_id,
             status=SnapshotStatus.ERROR,
             error="Could not read usage from page (layout may have changed).",
             raw=payload,
         )
 
     return UsageSnapshot(
-        provider="codex",
+        provider=account_id,
         status=SnapshotStatus.OK,
         metrics=metrics,
         raw=payload,
@@ -304,16 +308,17 @@ class CodexProvider(Provider):
     name = "codex"
     display_name = "Codex"
 
-    def __init__(self, parent: QObject | None = None):
+    def __init__(self, parent: QObject | None = None, account_id: str = "codex"):
         self._parent = parent
         self._scraper: HeadlessScraper | None = None  # held to prevent GC
+        self._account_id = account_id
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         def _handle(result: Any, error: str) -> None:
             self._scraper = None
             if error or not isinstance(result, dict):
                 snapshot = UsageSnapshot(
-                    provider="codex",
+                    provider=self._account_id,
                     status=SnapshotStatus.ERROR,
                     error=error or "no data extracted",
                 )
@@ -322,7 +327,7 @@ class CodexProvider(Provider):
                 )
                 on_done(snapshot)
                 return
-            snapshot = _build_snapshot(result)
+            snapshot = _build_snapshot(result, account_id=self._account_id)
             if snapshot.status == SnapshotStatus.ERROR:
                 log.warning(
                     "provider snapshot error provider=codex reason=%s", snapshot.error
@@ -330,7 +335,7 @@ class CodexProvider(Provider):
             on_done(snapshot)
 
         self._scraper = HeadlessScraper(
-            provider="codex",
+            provider=self._account_id,
             url=CODEX_USAGE_URL,
             extractor_js=EXTRACTOR_JS,
             wait_ms=5000,

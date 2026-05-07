@@ -54,9 +54,9 @@ You publish the draft from the web UI.
 3. Create and push the version tag:
 
    ```powershell
-   git tag v0.5.0
+   git tag v<version>
    git push origin main
-   git push origin v0.5.0
+   git push origin v<version>
    ```
 
 4. Watch the **release** workflow under the Actions tab. On success it
@@ -85,11 +85,11 @@ PyInstaller cross-compilation isn't supported.
 3. Create a checksum:
 
    ```powershell
-   Get-FileHash .\ai-gauge-0.5.0-windows.zip -Algorithm SHA256
+   Get-FileHash .\ai-gauge-<ver>-windows.zip -Algorithm SHA256
    ```
 
    ```bash
-   shasum -a 256 ai-gauge-0.5.0-macos.tar.gz
+   shasum -a 256 ai-gauge-<ver>-macos.tar.gz
    ```
 
 4. Push the version tag, then in GitHub go to **Releases** → **Draft a new
@@ -99,7 +99,7 @@ PyInstaller cross-compilation isn't supported.
 ## Suggested Release Notes Shape
 
 ```markdown
-## AI Gauge 0.5.0
+## AI Gauge <version>
 
 Compact monitor for Claude.ai, ChatGPT Codex, GitHub Copilot, and OpenRouter usage.
 Native UI per OS: floating widget on Windows / Linux, menu-bar item on macOS.

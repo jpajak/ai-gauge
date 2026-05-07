@@ -12,7 +12,13 @@ from PyQt6.QtGui import QAction, QColor, QCursor, QIcon, QPainter, QPixmap
 from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QSystemTrayIcon
 
 from . import __version__
-from .config import Config, app_data_dir
+from .config import (
+    Config,
+    account_kind,
+    app_data_dir,
+    browser_accounts,
+    display_name_for_account,
+)
 from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
 from .history import HistoryStore
@@ -62,11 +68,17 @@ def _make_dot_tray_icon(percent: float | None = None) -> QIcon:
 
 
 def _enabled_providers(config: Config) -> tuple[str, ...]:
-    out: list[str] = []
-    if config.providers.claude:
-        out.append("claude")
-    if config.providers.codex:
-        out.append("codex")
+    out: list[str] = [
+        account.id
+        for account in browser_accounts(config)
+        if getattr(config.providers, account.kind, False)
+    ]
+    if not out:
+        providers = getattr(config, "providers", None)
+        if getattr(providers, "claude", False):
+            out.append("claude")
+        if getattr(providers, "codex", False):
+            out.append("codex")
     if config.providers.copilot:
         out.append("copilot")
     if config.providers.openrouter:
@@ -198,7 +210,7 @@ class App(QObject):
 
         # Push any saved session cookies into the WebEngine profiles before any
         # scrape runs, so the headless page loads as signed-in.
-        loaded = hydrate_all_from_keyring()
+        loaded = hydrate_all_from_keyring(self._config)
         log.info("hydrated cookies for: %s", loaded or "none")
 
         self._widget = UsageWidget(self._config)
@@ -361,29 +373,35 @@ class App(QObject):
     def _build_providers(self) -> None:
         # Tear down any existing providers (no shared state to clean up beyond refs)
         self._providers.clear()
-        if self._config.providers.claude:
-            self._providers["claude"] = ClaudeProvider(
-                parent=self,
-                show_design=self._config.providers.claude_design,
-            )
-            self._widget.ensure_tile("claude", "Claude")
-        else:
-            self._widget.remove_tile("claude")
-        if self._config.providers.codex:
-            self._providers["codex"] = CodexProvider(parent=self)
-            self._widget.ensure_tile("codex", "Codex")
-        else:
-            self._widget.remove_tile("codex")
+        desired_tiles: set[str] = set()
+        for account in browser_accounts(self._config):
+            if not getattr(self._config.providers, account.kind, False):
+                continue
+            desired_tiles.add(account.id)
+            if account.kind == "claude":
+                self._providers[account.id] = ClaudeProvider(
+                    parent=self,
+                    show_design=self._config.providers.claude_design,
+                    account_id=account.id,
+                )
+            elif account.kind == "codex":
+                self._providers[account.id] = CodexProvider(
+                    parent=self,
+                    account_id=account.id,
+                )
+            self._widget.ensure_tile(account.id, display_name_for_account(self._config, account.id))
         if self._config.providers.copilot:
             self._providers["copilot"] = CopilotProvider(self._config)
+            desired_tiles.add("copilot")
             self._widget.ensure_tile("copilot", "Copilot")
-        else:
-            self._widget.remove_tile("copilot")
         if self._config.providers.openrouter:
             self._providers["openrouter"] = OpenRouterProvider(self._config)
+            desired_tiles.add("openrouter")
             self._widget.ensure_tile("openrouter", "OpenRouter")
-        else:
-            self._widget.remove_tile("openrouter")
+        for tile_id in list(self._widget._tiles):  # noqa: SLF001
+            if tile_id not in desired_tiles:
+                self._widget.remove_tile(tile_id)
+                self._snapshots.pop(tile_id, None)
 
     def _restart_timer(self) -> None:
         self._timer.stop()
@@ -470,14 +488,29 @@ class App(QObject):
             self._widget.mark_loading(
                 {
                     name: {
-                        "claude": "Claude",
-                        "codex": "Codex",
                         "copilot": "Copilot",
                         "openrouter": "OpenRouter",
-                    }.get(name, name)
+                    }.get(name, display_name_for_account(self._config, name))
                     for name in self._refresh_queue
                 }
             )
+        self._start_next_refresh()
+
+    def refresh_provider(self, provider: str) -> None:
+        if provider not in self._providers:
+            return
+        if self._inflight or self._refresh_queue:
+            return
+        self._active_until = datetime.now() + timedelta(minutes=_ACTIVE_MODE_MINUTES)
+        self._unchanged_cycles = 0
+        self._timer.stop()
+        self._current_refresh_manual = True
+        self._cycle_signatures = {}
+        self._widget.set_refreshing(True)
+        self._refresh_queue = [provider]
+        self._widget.mark_loading(
+            {provider: display_name_for_account(self._config, provider)}
+        )
         self._start_next_refresh()
 
     def _start_next_refresh(self) -> None:
@@ -528,12 +561,7 @@ class App(QObject):
             self._history.record_snapshot(snapshot)
         except Exception:  # noqa: BLE001
             log.exception("history.record_snapshot failed")
-        display_name = {
-            "claude": "Claude",
-            "codex": "Codex",
-            "copilot": "Copilot",
-            "openrouter": "OpenRouter",
-        }.get(snapshot.provider, snapshot.provider)
+        display_name = display_name_for_account(self._config, snapshot.provider)
         self._widget.update_snapshot(snapshot, display_name)
 
         if self._refresh_queue:
@@ -560,22 +588,23 @@ class App(QObject):
 
     def _update_tray(self) -> None:
         lines: list[str] = []
-        for name in ("claude", "codex", "copilot", "openrouter"):
+        for name in _enabled_providers(self._config):
             snap = self._snapshots.get(name)
             if not snap:
                 continue
+            display_name = display_name_for_account(self._config, name)
             if snap.status == SnapshotStatus.AUTH_REQUIRED:
-                lines.append(f"{name}: setup needed")
+                lines.append(f"{display_name}: setup needed")
                 continue
             if snap.status == SnapshotStatus.ERROR:
-                lines.append(f"{name}: error")
+                lines.append(f"{display_name}: error")
                 continue
             for m in snap.metrics:
                 if m.percent_used is None:
                     continue
                 if m.tag:
                     continue
-                lines.append(f"{name} {m.label}: {m.percent_used:.0f}%")
+                lines.append(f"{display_name} {m.label}: {m.percent_used:.0f}%")
         tooltip = (
             f"AI Gauge {__version__}\n" + "\n".join(lines)
             if lines
@@ -624,21 +653,30 @@ class App(QObject):
     # ----- Login / cookie paste -----
 
     def open_login(self, provider: str) -> None:
-        if provider not in LOGIN_URLS:
+        kind = account_kind(self._config, provider)
+        if kind not in LOGIN_URLS:
             return
-        url, title = LOGIN_URLS[provider]
-        dlg = LoginWindow(provider, url, title)
+        url, _title = LOGIN_URLS[kind]
+        display_name = display_name_for_account(self._config, provider)
+        dlg = LoginWindow(kind, url, f"Sign in to {display_name}", account_id=provider)
         self._widget.suspend_always_on_top()
         try:
             accepted = bool(dlg.exec())
         finally:
             self._widget.restore_always_on_top()
         if accepted:
-            self.refresh_now(manual=True)
+            self.refresh_provider(provider)
 
     def open_cookie_paste(self, provider: str) -> None:
+        kind = account_kind(self._config, provider)
+        if kind is None:
+            return
         try:
-            dlg = CookieDialog(provider)
+            dlg = CookieDialog(
+                kind,
+                account_id=provider,
+                display_name=display_name_for_account(self._config, provider),
+            )
         except ValueError:
             return
         self._widget.suspend_always_on_top()
@@ -649,18 +687,13 @@ class App(QObject):
         if accepted:
             # QWebEngineCookieStore commits asynchronously; give the freshly
             # injected cookie a short beat before loading the scrape page.
-            QTimer.singleShot(1000, lambda: self.refresh_now(manual=True))
+            QTimer.singleShot(1000, lambda: self.refresh_provider(provider))
 
     def open_error_details(self, provider: str) -> None:
         snapshot = self._snapshots.get(provider)
         if snapshot is None or snapshot.status != SnapshotStatus.ERROR:
             return
-        display_name = {
-            "claude": "Claude",
-            "codex": "Codex",
-            "copilot": "Copilot",
-            "openrouter": "OpenRouter",
-        }.get(provider, provider)
+        display_name = display_name_for_account(self._config, provider)
         dlg = ErrorDetailsDialog(provider, display_name, snapshot, parent=self._widget)
         dlg.exec()
 

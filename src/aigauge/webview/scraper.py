@@ -87,6 +87,7 @@ class HeadlessScraper(QObject):
         self._url_change_count = 0
         self._max_progress = 0
         self._render_terminated = False
+        self._extractor_reruns = 0
 
         profile = get_profile(provider)
         self._page = QuietWebEnginePage(profile, self, provider=provider)
@@ -134,6 +135,7 @@ class HeadlessScraper(QObject):
         self._url_change_count = 0
         self._max_progress = 0
         self._render_terminated = False
+        self._extractor_reruns = 0
         self._timeout.stop()
         self._timeout.start(self._timeout_ms)
         self._page.load(QUrl(self._url))
@@ -216,6 +218,25 @@ class HeadlessScraper(QObject):
             return
         if result is None:
             self._finish(None, "extractor returned null")
+            return
+        if isinstance(result, dict) and "__retry_after_ms" in result:
+            self._extractor_reruns += 1
+            if self._extractor_reruns > 5:
+                self._finish(None, "extractor retry limit exceeded")
+                return
+            try:
+                delay_ms = int(result.get("__retry_after_ms") or 0)
+            except (TypeError, ValueError):
+                delay_ms = 0
+            delay_ms = max(0, min(delay_ms, 5000))
+            log.info(
+                "scrape extractor rerun provider=%s rerun=%s delay_ms=%s reason=%s",
+                self._provider,
+                self._extractor_reruns,
+                delay_ms,
+                result.get("__retry_reason", ""),
+            )
+            QTimer.singleShot(delay_ms, self._run_extractor)
             return
         self._finish(result, "")
 

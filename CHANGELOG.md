@@ -9,6 +9,10 @@
 - OpenRouter model breakdown rows now strip the provider prefix (e.g. `anthropic/`, `openai/`, `google/`) from the displayed name and truncate names longer than 20 characters with an ellipsis. The full original slug is preserved in the row tooltip.
 - OpenRouter model breakdown bars now line up at the same x position by sizing all model rows to a uniform label column width.
 
+### Fixed
+
+- Fixed Codex personal usage scraping after ChatGPT started dropping the `#personal-usage` fragment and defaulting the analytics page to Workspace usage. AI Gauge now selects the Personal usage tab inside the rendered page, waits for the tab content to hydrate, and only verifies Codex sessions once the actual personal usage rows are visible.
+
 ## 0.5.4 - 2026-05-07
 
 ### Added

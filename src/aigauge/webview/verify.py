@@ -17,8 +17,19 @@ VERIFY_TARGETS = {
         "(() => document.body && document.body.innerText.includes('Plan usage limits'))()",
     ),
     "codex": (
-        "https://chatgpt.com/codex/cloud/settings/analytics",
-        "(() => document.body && /usage limit/i.test(document.body.innerText))()",
+        "https://chatgpt.com/codex/cloud/settings/analytics#personal-usage",
+        r"""(() => {
+          const visibleText = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+          const text = visibleText(document.body);
+          if (/5 hour usage limit/i.test(text) && /Weekly usage limit/i.test(text) && /\d+(?:\.\d+)?\s*%/.test(text)) {
+            return true;
+          }
+          const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"],div,span,p'));
+          const label = labels.find(el => visibleText(el).toLowerCase() === 'personal usage');
+          const target = label && (label.closest('button,a,[role="tab"],[role="button"]') || label);
+          if (target) target.click();
+          return false;
+        })()""",
     ),
 }
 
@@ -52,6 +63,7 @@ class SessionVerifier(QObject):
             return
         url, check_js = target
         self._check_js = check_js
+        self._check_attempts = 0
 
         profile = get_profile(account_id or provider)
         self._page = QuietWebEnginePage(profile, self)
@@ -84,7 +96,14 @@ class SessionVerifier(QObject):
     def _on_js_result(self, result: Any) -> None:
         if self._finished:
             return
-        self._finish(result is True, "")
+        if result is True:
+            self._finish(True, "")
+            return
+        self._check_attempts += 1
+        if self._check_attempts >= 12:
+            self._finish(False, "")
+            return
+        QTimer.singleShot(1000, self._run_check)
 
     def _finish(self, ok: bool, error: str) -> None:
         if self._finished:

@@ -17,3 +17,4 @@ dist/
 .vscode/
 .idea/
 .claude/
+.DS_Store

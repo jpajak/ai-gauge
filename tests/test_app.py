@@ -5,8 +5,11 @@ from aigauge.app import (
     App,
     _acquire_instance_lock,
     _adaptive_refresh_minutes,
+    _enabled_providers,
+    _refresh_provider_order,
     _raw_summary,
 )
+from aigauge.config import BrowserAccount, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 
 
@@ -14,12 +17,23 @@ class _Timer:
     def __init__(self):
         self.stopped = False
         self.started_ms: int | None = None
+        self.active = False
+        self.remaining_ms = 0
 
     def stop(self):
         self.stopped = True
+        self.active = False
 
     def start(self, ms: int):
         self.started_ms = ms
+        self.remaining_ms = ms
+        self.active = True
+
+    def isActive(self):
+        return self.active
+
+    def remainingTime(self):
+        return self.remaining_ms
 
 
 class _Widget:
@@ -27,6 +41,7 @@ class _Widget:
         self.loading_calls = []
         self.refreshing = []
         self.refresh_state_calls = []
+        self.visible = True
 
     def set_refreshing(self, refreshing):
         self.refreshing.append(refreshing)
@@ -38,6 +53,9 @@ class _Widget:
         self.refresh_state_calls.append(
             {"active": active, "minutes": minutes, "next_at": next_at}
         )
+
+    def isVisible(self):
+        return self.visible
 
 
 class _Dialog:
@@ -161,6 +179,36 @@ def test_scheduled_refresh_keeps_existing_tiles_visible():
     assert app._unchanged_cycles == 3  # noqa: SLF001
 
 
+def test_refresh_order_prioritizes_openrouter_without_reordering_tiles():
+    providers = {
+        "claude": object(),
+        "codex": object(),
+        "copilot": object(),
+        "openrouter": object(),
+    }
+
+    assert _refresh_provider_order(providers) == [
+        "openrouter",
+        "claude",
+        "codex",
+        "copilot",
+    ]
+
+
+def test_enabled_providers_includes_enabled_browser_accounts():
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(id="claude-team", kind="claude", name="Team", enabled=True)
+    )
+    config.providers.codex = False
+
+    assert _enabled_providers(config) == (
+        "claude",
+        "claude-team",
+        "copilot",
+    )
+
+
 def test_widget_activation_raises_open_settings_dialog():
     app = App.__new__(App)
     dialog = _Dialog()
@@ -188,6 +236,34 @@ def test_raw_summary_includes_sanitized_payload_details():
     assert "xxx" in summary
     assert "more" in summary
     assert len(summary) < 700
+
+
+def test_lifecycle_context_includes_refresh_state():
+    app = App.__new__(App)
+    app._started_at = datetime.now() - timedelta(seconds=90)  # noqa: SLF001
+    app._ui_mode = "floating_widget"  # noqa: SLF001
+    app._widget = _Widget()  # noqa: SLF001
+    app._config = SimpleNamespace(  # noqa: SLF001
+        providers=SimpleNamespace(
+            claude=True, codex=False, copilot=True, openrouter=False
+        )
+    )
+    app._inflight = {"claude"}  # noqa: SLF001
+    app._refresh_queue = ["copilot"]  # noqa: SLF001
+    app._unchanged_cycles = 2  # noqa: SLF001
+    app._timer = _Timer()  # noqa: SLF001
+    app._timer.start(125_000)  # noqa: SLF001
+
+    context = app._lifecycle_context()  # noqa: SLF001
+
+    assert context["uptime_s"] >= 89
+    assert context["ui_mode"] == "floating_widget"
+    assert context["widget_visible"] is True
+    assert context["providers"] == "claude,copilot"
+    assert context["inflight"] == "claude"
+    assert context["queue"] == "copilot"
+    assert context["next_refresh_s"] == 125
+    assert context["unchanged_cycles"] == 2
 
 
 def test_instance_lock_prevents_second_running_copy(tmp_path, monkeypatch):

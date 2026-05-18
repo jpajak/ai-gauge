@@ -1,16 +1,20 @@
 from __future__ import annotations
 
 import json
-import os
+import re
+import uuid
 from pathlib import Path
 from typing import Any
 
 import keyring
 from pydantic import BaseModel, Field
 
-APP_NAME = "ai-gauge"
+from .platforms import APP_NAME, get_platform
+
 KEYRING_SERVICE = "ai-gauge"
 KEYRING_GITHUB_PAT = "github-pat"
+KEYRING_OPENROUTER_KEY = "openrouter-key"
+KEYRING_OPENROUTER_MGMT_KEY = "openrouter-mgmt-key"
 WINDOW_WIDTH = 340
 WINDOW_MIN_HEIGHT = 80
 WINDOW_MAX_HEIGHT = 420
@@ -41,11 +45,13 @@ COOKIE_DOMAINS = {
 
 
 def app_data_dir() -> Path:
-    """%APPDATA%/ai-gauge on Windows, ~/.config/ai-gauge elsewhere."""
-    base = os.environ.get("APPDATA")
-    if base:
-        return Path(base) / APP_NAME
-    return Path.home() / ".config" / APP_NAME
+    """Per-OS config / log / secrets directory.
+
+    - Windows: ``%APPDATA%/ai-gauge``
+    - macOS:   ``~/Library/Application Support/ai-gauge``
+    - Linux:   ``$XDG_CONFIG_HOME/ai-gauge`` (or ``~/.config/ai-gauge``)
+    """
+    return get_platform().app_data_dir()
 
 
 def webview_profile_dir(provider: str) -> Path:
@@ -71,6 +77,14 @@ class ProviderToggles(BaseModel):
     claude_design: bool = False
     codex: bool = True
     copilot: bool = True
+    openrouter: bool = False
+
+
+class BrowserAccount(BaseModel):
+    id: str
+    kind: str
+    name: str | None = None
+    enabled: bool = True
 
 
 class CopilotConfig(BaseModel):
@@ -79,12 +93,24 @@ class CopilotConfig(BaseModel):
     monthly_quota: int = Field(default=300, ge=1)  # Pro=300, Pro+=1500, Business=300
 
 
+class OpenRouterConfig(BaseModel):
+    daily_budget: float | None = Field(default=None, ge=0)
+
+
 class Config(BaseModel):
     active_refresh_interval_minutes: int = Field(default=5, ge=1, le=180)
     refresh_interval_minutes: int = Field(default=60, ge=1, le=180)
-    start_with_windows: bool = False
+    start_at_login: bool = False
     providers: ProviderToggles = Field(default_factory=ProviderToggles)
+    browser_accounts: list[BrowserAccount] = Field(
+        default_factory=lambda: [
+            BrowserAccount(id="claude", kind="claude"),
+            BrowserAccount(id="codex", kind="codex"),
+        ]
+    )
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
+    openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
+    expanded_tiles: list[str] = Field(default_factory=list)
     window: WindowState = Field(default_factory=WindowState)
 
     @classmethod
@@ -109,6 +135,52 @@ class Config(BaseModel):
             if isinstance(old_interval, int):
                 data["active_refresh_interval_minutes"] = old_interval
                 data["refresh_interval_minutes"] = 60
+        # 0.5.x renamed start_with_windows to start_at_login (cross-platform).
+        if "start_at_login" not in data and "start_with_windows" in data:
+            data["start_at_login"] = bool(data.pop("start_with_windows"))
+        providers = data.get("providers")
+        if not isinstance(providers, dict):
+            providers = {}
+        if "browser_accounts" not in data:
+            data["browser_accounts"] = [
+                {
+                    "id": "claude",
+                    "kind": "claude",
+                    "name": None,
+                    "enabled": bool(providers.get("claude", True)),
+                },
+                {
+                    "id": "codex",
+                    "kind": "codex",
+                    "name": None,
+                    "enabled": bool(providers.get("codex", True)),
+                },
+            ]
+        elif isinstance(data.get("browser_accounts"), list):
+            accounts = [
+                item for item in data["browser_accounts"] if isinstance(item, dict)
+            ]
+            ids = {str(item.get("id") or "") for item in accounts}
+            if "claude" not in ids:
+                accounts.insert(
+                    0,
+                    {
+                        "id": "claude",
+                        "kind": "claude",
+                        "name": None,
+                        "enabled": bool(providers.get("claude", True)),
+                    },
+                )
+            if "codex" not in ids:
+                accounts.append(
+                    {
+                        "id": "codex",
+                        "kind": "codex",
+                        "name": None,
+                        "enabled": bool(providers.get("codex", True)),
+                    }
+                )
+            data["browser_accounts"] = accounts
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")
@@ -127,6 +199,75 @@ class Config(BaseModel):
         )
 
 
+def provider_base_name(kind: str) -> str:
+    return {"claude": "Claude", "codex": "Codex"}.get(kind, kind.title())
+
+
+def account_display_name(account: BrowserAccount) -> str:
+    base = provider_base_name(account.kind)
+    label = (account.name or "").strip()
+    return f"{base} ({label})" if label else base
+
+
+def browser_accounts(
+    config: Config,
+    *,
+    kind: str | None = None,
+    enabled_only: bool = False,
+) -> list[BrowserAccount]:
+    accounts = [
+        account
+        for account in getattr(config, "browser_accounts", [])
+        if account.kind in ("claude", "codex")
+    ]
+    if kind is not None:
+        accounts = [account for account in accounts if account.kind == kind]
+    if enabled_only:
+        accounts = [account for account in accounts if account.enabled]
+    return accounts
+
+
+def browser_account(config: Config, account_id: str) -> BrowserAccount | None:
+    for account in browser_accounts(config):
+        if account.id == account_id:
+            return account
+    return None
+
+
+def account_kind(config: Config, account_id: str) -> str | None:
+    account = browser_account(config, account_id)
+    if account is not None:
+        return account.kind
+    if account_id in ("claude", "codex"):
+        return account_id
+    if account_id.startswith("claude-"):
+        return "claude"
+    if account_id.startswith("codex-"):
+        return "codex"
+    return None
+
+
+def display_name_for_account(config: Config, account_id: str) -> str:
+    account = browser_account(config, account_id)
+    if account is not None:
+        return account_display_name(account)
+    return {
+        "claude": "Claude",
+        "codex": "Codex",
+        "copilot": "Copilot",
+        "openrouter": "OpenRouter",
+    }.get(account_id, account_id)
+
+
+def generate_browser_account_id(config: Config, kind: str) -> str:
+    slug = re.sub(r"[^a-z0-9-]+", "-", kind.lower()).strip("-") or "account"
+    existing = {account.id for account in config.browser_accounts}
+    while True:
+        candidate = f"{slug}-{uuid.uuid4().hex[:8]}"
+        if candidate not in existing:
+            return candidate
+
+
 def get_github_pat() -> str | None:
     try:
         pat = keyring.get_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT)
@@ -134,30 +275,85 @@ def get_github_pat() -> str | None:
             return pat
     except keyring.errors.KeyringError:
         pass
-    from .secret_storage import load_secret
-    legacy_pat = load_secret(KEYRING_GITHUB_PAT)
+    legacy_pat = _load_legacy_github_pat()
     if not legacy_pat:
         return None
     try:
         keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, legacy_pat)
     except keyring.errors.KeyringError:
         return legacy_pat
-    from .secret_storage import save_secret
-    save_secret(KEYRING_GITHUB_PAT, None)
+    _delete_legacy_github_pat()
     return legacy_pat
 
 
 def set_github_pat(pat: str | None) -> None:
-    from .secret_storage import save_secret
     if pat:
         keyring.set_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT, pat)
-        save_secret(KEYRING_GITHUB_PAT, None)
+        _delete_legacy_github_pat()
     else:
         try:
             keyring.delete_password(KEYRING_SERVICE, KEYRING_GITHUB_PAT)
-        except keyring.errors.PasswordDeleteError:
+        except keyring.errors.KeyringError:
             pass
-        save_secret(KEYRING_GITHUB_PAT, None)
+        _delete_legacy_github_pat()
+
+
+def _load_legacy_github_pat() -> str | None:
+    from . import secret_storage
+
+    return secret_storage.load_secret(KEYRING_GITHUB_PAT)
+
+
+def _delete_legacy_github_pat() -> None:
+    from . import secret_storage
+
+    try:
+        secret_storage.save_secret(KEYRING_GITHUB_PAT, None)
+    except RuntimeError:
+        # Non-Windows production hosts refuse to write plaintext secrets.dat.
+        # PAT storage itself has already used the system keyring; this cleanup
+        # is only for the old sidecar-file migration path.
+        pass
+
+
+def get_openrouter_key() -> str | None:
+    try:
+        key = keyring.get_password(KEYRING_SERVICE, KEYRING_OPENROUTER_KEY)
+        if key:
+            return key
+    except keyring.errors.KeyringError:
+        pass
+    return None
+
+
+def set_openrouter_key(key: str | None) -> None:
+    if key:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_OPENROUTER_KEY, key)
+    else:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, KEYRING_OPENROUTER_KEY)
+        except keyring.errors.KeyringError:
+            pass
+
+
+def get_openrouter_mgmt_key() -> str | None:
+    try:
+        key = keyring.get_password(KEYRING_SERVICE, KEYRING_OPENROUTER_MGMT_KEY)
+        if key:
+            return key
+    except keyring.errors.KeyringError:
+        pass
+    return None
+
+
+def set_openrouter_mgmt_key(key: str | None) -> None:
+    if key:
+        keyring.set_password(KEYRING_SERVICE, KEYRING_OPENROUTER_MGMT_KEY, key)
+    else:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, KEYRING_OPENROUTER_MGMT_KEY)
+        except keyring.errors.KeyringError:
+            pass
 
 
 def _cookie_key(provider: str) -> str:
@@ -165,12 +361,8 @@ def _cookie_key(provider: str) -> str:
 
 
 def get_provider_cookie(provider: str) -> str | None:
-    # DPAPI-encrypted file — Credential Manager has a 2.5KB blob limit that
-    # ChatGPT's session JWT exceeds.
-    from .secret_storage import load_secret
-    return load_secret(_cookie_key(provider))
+    return get_platform().load_secret(_cookie_key(provider))
 
 
 def set_provider_cookie(provider: str, value: str | None) -> None:
-    from .secret_storage import save_secret
-    save_secret(_cookie_key(provider), value)
+    get_platform().save_secret(_cookie_key(provider), value)

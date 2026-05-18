@@ -1,3 +1,4 @@
+from aigauge.config import BrowserAccount, Config
 from aigauge.webview.cookies import _parse_cookie_pairs
 from aigauge.webview import cookies
 
@@ -14,6 +15,34 @@ def test_parse_codex_full_cookie_header_keeps_related_cookies():
         ("__Secure-oai-is", "identity"),
         ("__Secure-next-auth.session-token.0", "first"),
         ("__Secure-next-auth.session-token.1", "second"),
+    ]
+
+
+def test_parse_codex_full_cookie_header_with_json_cookie_keeps_related_cookies():
+    pasted = (
+        'Cookie: __cflb=load-balancer; g_state={"i_l":0}; '
+        'oai-chat-web-route="route-value"; '
+        "__Secure-next-auth.session-token=session"
+    )
+    assert _parse_cookie_pairs("codex", pasted) == [
+        ("__cflb", "load-balancer"),
+        ("g_state", '{"i_l":0}'),
+        ("oai-chat-web-route", "route-value"),
+        ("__Secure-next-auth.session-token", "session"),
+    ]
+
+
+def test_parse_codex_bare_cookie_header_value_with_json_cookie_keeps_related_cookies():
+    pasted = (
+        '__cflb=load-balancer; g_state={"i_l":0}; '
+        'oai-chat-web-route="route-value"; '
+        "__Secure-next-auth.session-token=session"
+    )
+    assert _parse_cookie_pairs("codex", pasted) == [
+        ("__cflb", "load-balancer"),
+        ("g_state", '{"i_l":0}'),
+        ("oai-chat-web-route", "route-value"),
+        ("__Secure-next-auth.session-token", "session"),
     ]
 
 
@@ -90,3 +119,36 @@ def test_cookie_hydration_logs_names_without_values(monkeypatch, caplog):
     assert "sessionKey" in caplog.text
     assert "secret-session" not in caplog.text
     assert injected == [("claude", "Cookie: other=value; sessionKey=secret-session")]
+
+
+def test_cookie_hydration_uses_account_ids_for_secrets_and_profiles(monkeypatch):
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="codex-work",
+            kind="codex",
+            name="Work",
+            enabled=True,
+        )
+    )
+
+    def fake_get_provider_cookie(account_id):
+        if account_id == "codex-work":
+            return "__Secure-next-auth.session-token=secret"
+        return None
+
+    injected = []
+    monkeypatch.setattr(cookies, "get_provider_cookie", fake_get_provider_cookie)
+    monkeypatch.setattr(
+        cookies,
+        "inject_session_cookie",
+        lambda provider, value, *, account_id=None: injected.append(
+            (provider, value, account_id)
+        )
+        or True,
+    )
+
+    assert cookies.hydrate_all_from_keyring(config) == ["codex-work"]
+    assert injected == [
+        ("codex", "__Secure-next-auth.session-token=secret", "codex-work")
+    ]

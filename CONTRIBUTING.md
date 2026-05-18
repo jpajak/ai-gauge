@@ -1,7 +1,7 @@
 # Contributing to AI Gauge
 
-Thanks for your interest. AI Gauge is a small Windows desktop utility, so most
-contributions fall into one of three buckets:
+Thanks for your interest. AI Gauge is a small cross-platform desktop utility,
+so most contributions fall into one of three buckets:
 
 - **Provider layout fixes** — when Claude or Codex change their usage page and
   a tile starts showing `error · layout changed`. These are the most common
@@ -13,46 +13,47 @@ contributions fall into one of three buckets:
 
 ## Development environment
 
-Requirements: **Windows 10/11** and **Python 3.11+**. Other platforms can run
-the test suite under `QT_QPA_PLATFORM=offscreen`, but real provider scraping
-and secret storage are Windows-only.
+Requirements: **Windows 10/11, macOS, or Linux** and **Python 3.11+**. The
+test suite runs headlessly under `QT_QPA_PLATFORM=offscreen`; manual smoke
+testing is still useful on each OS because tray/menu-bar behavior and native
+credential storage are platform-specific.
 
 ```powershell
 git clone https://github.com/jpajak/ai-gauge.git
 cd ai-gauge
 
 py -m venv .venv
-.venv\Scripts\pip install -e .[dev]
+.\.venv\Scripts\python.exe -m pip install -e .[dev]
 ```
 
 Run the app:
 
 ```powershell
-.venv\Scripts\python -m aigauge
+.\.venv\Scripts\python.exe -m aigauge
 ```
 
 Run the tests:
 
 ```powershell
-.venv\Scripts\pytest
+.\.venv\Scripts\python.exe -m pytest
 ```
 
 The version-sync check that gates CI:
 
 ```powershell
-.venv\Scripts\python tools\check_versions.py
+.\.venv\Scripts\python.exe tools\check_versions.py
 ```
 
 ## Pull request expectations
 
 - Keep changes focused. One PR per logical change.
 - Add or update tests when you change non-trivial logic.
-- Run `pytest` and `tools/check_versions.py` locally before opening the PR;
+- Run `python -m pytest` and `tools/check_versions.py` locally before opening the PR;
   both run in CI on push and pull request.
 - If you bump the version, update `pyproject.toml`, `src/aigauge/__init__.py`,
   `README.md`, and add a `CHANGELOG.md` section. CI will fail otherwise.
 - Avoid logging cookies, PATs, or full provider response bodies. The logger
-  is rotated to `%APPDATA%/ai-gauge/ai-gauge.log` and users may attach those
+  is rotated under the per-OS app-data directory, and users may attach those
   logs to issues.
 
 ## Reporting bugs

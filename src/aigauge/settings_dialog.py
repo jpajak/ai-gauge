@@ -1,28 +1,51 @@
 from __future__ import annotations
 
+import logging
+import uuid
+
 from PyQt6.QtCore import Qt, pyqtSignal
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
     QDialog,
     QDialogButtonBox,
+    QDoubleSpinBox,
     QFormLayout,
+    QGridLayout,
     QGroupBox,
     QHBoxLayout,
     QLabel,
     QLineEdit,
     QMessageBox,
     QPushButton,
+    QSizePolicy,
     QSlider,
     QSpinBox,
+    QTabWidget,
     QVBoxLayout,
+    QWidget,
 )
 
-from .config import Config, get_github_pat, set_github_pat
+from .config import (
+    BrowserAccount,
+    Config,
+    account_display_name,
+    browser_accounts,
+    get_github_pat,
+    get_openrouter_key,
+    get_openrouter_mgmt_key,
+    provider_base_name,
+    set_github_pat,
+    set_openrouter_key,
+    set_openrouter_mgmt_key,
+    set_provider_cookie,
+)
 from .error_dialog import reveal_path
 from .logging_setup import log_path
-from .startup import set_start_with_windows
+from .startup import set_start_at_login
 
+
+log = logging.getLogger("aigauge.settings_dialog")
 
 _COPILOT_PLAN_QUOTAS = (
     ("Pro", 300),
@@ -44,15 +67,15 @@ QLabel {
 }
 QLabel[hint="true"] {
     color: #9ca3af;
-    font-size: 11px;
+    font-size: 10px;
 }
 QGroupBox {
     color: #f3f4f6;
     font-weight: 600;
     border: 1px solid #374151;
     border-radius: 6px;
-    margin-top: 14px;
-    padding: 14px 10px 10px 10px;
+    margin-top: 10px;
+    padding: 10px 10px 8px 10px;
     background: transparent;
 }
 QGroupBox::title {
@@ -60,6 +83,25 @@ QGroupBox::title {
     subcontrol-position: top left;
     left: 10px;
     padding: 0 6px;
+    background: #1f2937;
+    color: #f3f4f6;
+}
+QTabWidget::pane {
+    border: 1px solid #374151;
+    border-radius: 6px;
+    top: -1px;
+}
+QTabBar::tab {
+    background: #111827;
+    color: #cbd5e1;
+    border: 1px solid #374151;
+    border-bottom: none;
+    border-top-left-radius: 4px;
+    border-top-right-radius: 4px;
+    padding: 6px 14px;
+    margin-right: 2px;
+}
+QTabBar::tab:selected {
     background: #1f2937;
     color: #f3f4f6;
 }
@@ -161,6 +203,65 @@ def _hint_label(text: str) -> QLabel:
     return label
 
 
+class _BrowserAccountRow(QWidget):
+    sign_in_clicked = pyqtSignal(str)
+    paste_cookie_clicked = pyqtSignal(str)
+    remove_clicked = pyqtSignal(str)
+
+    def __init__(
+        self,
+        account: BrowserAccount,
+        *,
+        removable: bool,
+        parent=None,
+    ):
+        super().__init__(parent)
+        self.account_id = account.id
+        self.kind = account.kind
+
+        self.name_edit = QLineEdit()
+        self.name_edit.setText(account.name or "")
+        self.name_edit.setPlaceholderText(
+            "Default account" if account.id in ("claude", "codex") else "Account name"
+        )
+        self.name_edit.setMinimumWidth(120)
+
+        sign_in = QPushButton("Sign in")
+        sign_in.setObjectName(f"{account.id}_signin_btn")
+        sign_in.setFixedWidth(68)
+        sign_in.setToolTip("Open an embedded browser to sign in to this account.")
+        sign_in.clicked.connect(lambda: self.sign_in_clicked.emit(self.account_id))
+
+        paste = QPushButton("Paste cookie")
+        paste.setObjectName(f"{account.id}_paste_cookie_btn")
+        paste.setFixedWidth(92)
+        paste.setToolTip("Paste a session cookie for this account.")
+        paste.clicked.connect(lambda: self.paste_cookie_clicked.emit(self.account_id))
+
+        remove = QPushButton("Remove")
+        remove.setFixedWidth(72)
+        remove.setVisible(removable)
+        remove.setToolTip("Remove this account and clear its saved cookie.")
+        remove.clicked.connect(lambda: self.remove_clicked.emit(self.account_id))
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addWidget(self.name_edit, 1)
+        layout.addWidget(sign_in)
+        layout.addWidget(paste)
+        layout.addWidget(remove)
+
+    def to_account(self) -> BrowserAccount:
+        name = self.name_edit.text().strip() or None
+        return BrowserAccount(
+            id=self.account_id,
+            kind=self.kind,
+            name=name,
+            enabled=True,
+        )
+
+
 class SettingsDialog(QDialog):
     sign_in_clicked = pyqtSignal(str)  # provider name
     paste_cookie_clicked = pyqtSignal(str)  # provider name
@@ -174,17 +275,23 @@ class SettingsDialog(QDialog):
         # this existing Settings window back to the foreground.
         self.setWindowTitle("AI Gauge — Settings")
         self.setModal(False)
-        self.resize(560, 650)
+        self.resize(620, 520)
+        self.setMinimumSize(560, 420)
         self.setStyleSheet(_DARK_STYLESHEET)
         self._config = config
+        self._browser_account_rows: list[_BrowserAccountRow] = []
+        self._removed_browser_account_ids: list[str] = []
+        self._browser_accounts = [
+            account.model_copy(deep=True) for account in browser_accounts(config)
+        ]
 
         # ----- General -----
         general = QGroupBox("General")
-        general_form = QFormLayout(general)
-        general_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        general_form.setFormAlignment(Qt.AlignmentFlag.AlignTop)
-        general_form.setHorizontalSpacing(12)
-        general_form.setVerticalSpacing(10)
+        general_grid = QGridLayout(general)
+        general_grid.setColumnStretch(1, 1)
+        general_grid.setColumnStretch(3, 1)
+        general_grid.setHorizontalSpacing(10)
+        general_grid.setVerticalSpacing(8)
 
         self.active_refresh_spin = QSpinBox()
         self.active_refresh_spin.setRange(1, 180)
@@ -194,7 +301,8 @@ class SettingsDialog(QDialog):
         self.active_refresh_spin.setToolTip(
             "Refresh cadence after a manual refresh or when usage is changing."
         )
-        general_form.addRow("Active refresh:", self.active_refresh_spin)
+        general_grid.addWidget(QLabel("Active refresh:"), 0, 0)
+        general_grid.addWidget(self.active_refresh_spin, 0, 1)
 
         self.refresh_spin = QSpinBox()
         self.refresh_spin.setRange(1, 180)
@@ -204,15 +312,16 @@ class SettingsDialog(QDialog):
         self.refresh_spin.setToolTip(
             "Slowest refresh cadence after repeated unchanged readings."
         )
-        general_form.addRow("Idle max refresh:", self.refresh_spin)
+        general_grid.addWidget(QLabel("Idle max:"), 0, 2)
+        general_grid.addWidget(self.refresh_spin, 0, 3)
 
         self.always_on_top_cb = QCheckBox("Always on top")
         self.always_on_top_cb.setChecked(config.window.always_on_top)
-        general_form.addRow("", self.always_on_top_cb)
+        general_grid.addWidget(self.always_on_top_cb, 1, 0, 1, 2)
 
-        self.startup_cb = QCheckBox("Start with Windows")
-        self.startup_cb.setChecked(config.start_with_windows)
-        general_form.addRow("", self.startup_cb)
+        self.startup_cb = QCheckBox("Start at login")
+        self.startup_cb.setChecked(config.start_at_login)
+        general_grid.addWidget(self.startup_cb, 1, 2, 1, 2)
 
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(30, 100)
@@ -223,9 +332,11 @@ class SettingsDialog(QDialog):
             lambda v: self.opacity_value.setText(f"{v}%")
         )
         op_row = QHBoxLayout()
+        op_row.setContentsMargins(0, 0, 0, 0)
         op_row.addWidget(self.opacity_slider, 1)
         op_row.addWidget(self.opacity_value)
-        general_form.addRow("Opacity:", op_row)
+        general_grid.addWidget(QLabel("Opacity:"), 2, 0)
+        general_grid.addLayout(op_row, 2, 1, 1, 3)
 
         # ----- Providers -----
         providers = QGroupBox("Providers")
@@ -233,32 +344,15 @@ class SettingsDialog(QDialog):
         providers_layout.setSpacing(8)
 
         providers_hint = _hint_label(
-            "Uncheck a provider to hide its tile from the widget. The panel "
-            "shrinks to fit only what's enabled."
+            "Show or hide provider groups in the widget. Manage multiple Claude "
+            "or Codex accounts from their tabs."
         )
         providers_layout.addWidget(providers_hint)
 
-        self.claude_cb = QCheckBox("Claude.ai")
-        self.claude_cb.setToolTip("Show the Claude.ai usage tile in the panel.")
+        self.claude_cb = QCheckBox("Claude")
+        self.claude_cb.setToolTip("Show Claude accounts in the panel.")
         self.claude_cb.setChecked(config.providers.claude)
-        claude_signin = QPushButton("Sign in (email)")
-        claude_signin.setObjectName("claude_signin_btn")
-        claude_signin.setToolTip(
-            "Open an embedded browser to sign in. Only works for email/password — "
-            "Google sign-in is blocked in embedded browsers."
-        )
-        claude_signin.clicked.connect(lambda: self.sign_in_clicked.emit("claude"))
-        claude_paste = QPushButton("Paste cookie")
-        claude_paste.setObjectName("claude_paste_cookie_btn")
-        claude_paste.setToolTip(
-            "Paste the sessionKey cookie from your real browser (Google sign-in path)."
-        )
-        claude_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("claude"))
-        claude_row = QHBoxLayout()
-        claude_row.addWidget(self.claude_cb, 1)
-        claude_row.addWidget(claude_signin)
-        claude_row.addWidget(claude_paste)
-        providers_layout.addLayout(claude_row)
+        providers_layout.addWidget(self.claude_cb)
 
         self.claude_design_cb = QCheckBox("Show Claude Design limit")
         self.claude_design_cb.setToolTip(
@@ -267,37 +361,53 @@ class SettingsDialog(QDialog):
         self.claude_design_cb.setChecked(config.providers.claude_design)
         providers_layout.addWidget(self.claude_design_cb)
 
-        self.codex_cb = QCheckBox("ChatGPT Codex")
-        self.codex_cb.setToolTip("Show the ChatGPT Codex usage tile in the panel.")
+        self.codex_cb = QCheckBox("Codex")
+        self.codex_cb.setToolTip("Show Codex accounts in the panel.")
         self.codex_cb.setChecked(config.providers.codex)
-        codex_signin = QPushButton("Sign in (email)")
-        codex_signin.setObjectName("codex_signin_btn")
-        codex_signin.setToolTip(
-            "Open an embedded browser to sign in. Only works for email/password."
-        )
-        codex_signin.clicked.connect(lambda: self.sign_in_clicked.emit("codex"))
-        codex_paste = QPushButton("Paste cookie")
-        codex_paste.setObjectName("codex_paste_cookie_btn")
-        codex_paste.setToolTip(
-            "Paste the __Secure-next-auth.session-token cookie from your real browser."
-        )
-        codex_paste.clicked.connect(lambda: self.paste_cookie_clicked.emit("codex"))
-        codex_row = QHBoxLayout()
-        codex_row.addWidget(self.codex_cb, 1)
-        codex_row.addWidget(codex_signin)
-        codex_row.addWidget(codex_paste)
-        providers_layout.addLayout(codex_row)
-
-        google_hint = _hint_label(
-            "If you sign in with <b>Google</b>, use <b>Paste cookie</b> — "
-            "Google blocks embedded browsers."
-        )
-        providers_layout.addWidget(google_hint)
+        providers_layout.addWidget(self.codex_cb)
 
         self.copilot_cb = QCheckBox("GitHub Copilot")
         self.copilot_cb.setToolTip("Show the GitHub Copilot usage tile in the panel.")
         self.copilot_cb.setChecked(config.providers.copilot)
         providers_layout.addWidget(self.copilot_cb)
+
+        self.openrouter_cb = QCheckBox("OpenRouter")
+        self.openrouter_cb.setToolTip("Show the OpenRouter usage tile in the panel.")
+        self.openrouter_cb.setChecked(config.providers.openrouter)
+        providers_layout.addWidget(self.openrouter_cb)
+
+        # ----- Claude accounts -----
+        claude_accounts = QGroupBox("Claude Accounts")
+        claude_accounts_layout = QVBoxLayout(claude_accounts)
+        claude_accounts_layout.setSpacing(8)
+        claude_accounts_layout.addWidget(
+            _hint_label(
+                "Name each Claude subscription here. All accounts appear when "
+                "Claude is enabled on the General tab. If you sign in with "
+                "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
+                "because embedded browsers often cannot complete that flow."
+            )
+        )
+        self._claude_accounts_layout = QVBoxLayout()
+        self._claude_accounts_layout.setSpacing(6)
+        claude_accounts_layout.addLayout(self._claude_accounts_layout)
+
+        # ----- Codex accounts -----
+        codex_accounts = QGroupBox("Codex Accounts")
+        codex_accounts_layout = QVBoxLayout(codex_accounts)
+        codex_accounts_layout.setSpacing(8)
+        codex_accounts_layout.addWidget(
+            _hint_label(
+                "Name each Codex subscription here. All accounts appear when "
+                "Codex is enabled on the General tab. If you sign in with "
+                "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
+                "because embedded browsers often cannot complete that flow."
+            )
+        )
+        self._codex_accounts_layout = QVBoxLayout()
+        self._codex_accounts_layout.setSpacing(6)
+        codex_accounts_layout.addLayout(self._codex_accounts_layout)
+        self._rebuild_browser_account_rows()
 
         # ----- Copilot details -----
         copilot = QGroupBox("GitHub Copilot")
@@ -323,14 +433,14 @@ class SettingsDialog(QDialog):
 
         self.clear_pat_cb = QCheckBox("Clear saved GitHub PAT")
         self.clear_pat_cb.setToolTip(
-            "Remove the token from Windows Credential Manager."
+            "Remove the token from the system keychain."
         )
         self.clear_pat_cb.setVisible(self._had_existing_pat)
-        copilot_form.addRow("", self.clear_pat_cb)
+        if self._had_existing_pat:
+            copilot_form.addRow("", self.clear_pat_cb)
 
         pat_help = _hint_label(
-            "Use a <b>fine-grained PAT</b>. Add <b>Account permissions → Plan → Read</b> "
-            "(scroll down in the 'Add permissions' dropdown).<br/>"
+            "Fine-grained PAT: add <b>Account permissions → Plan → Read</b>. "
             "<a style='color:#60a5fa;' "
             "href='https://github.com/settings/personal-access-tokens/new'>"
             "Create one →</a>"
@@ -372,11 +482,140 @@ class SettingsDialog(QDialog):
         self._set_quota_selection(config.copilot.monthly_quota)
 
         quota_hint = _hint_label(
-            "GitHub does not currently expose a reliable personal-plan quota "
-            "field through the API. Choose your plan here; use Custom if your "
-            "account has a different allowance."
+            "GitHub does not expose a reliable personal-plan quota through the API; "
+            "choose your plan here or Custom for a different allowance."
         )
         copilot_form.addRow("", quota_hint)
+
+        # ----- OpenRouter details -----
+        openrouter = QGroupBox("OpenRouter")
+        openrouter_form = QFormLayout(openrouter)
+        openrouter_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        openrouter_form.setHorizontalSpacing(12)
+        openrouter_form.setVerticalSpacing(8)
+        openrouter_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+
+        self.or_key_edit = QLineEdit()
+        self.or_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        existing_or_key = get_openrouter_key()
+        self._had_existing_or_key = bool(existing_or_key)
+        if existing_or_key:
+            self.or_key_edit.setPlaceholderText(
+                "•••••••••• (saved — leave blank to keep)"
+            )
+        else:
+            self.or_key_edit.setPlaceholderText("sk-or-...")
+        openrouter_form.addRow("Inference key:", self.or_key_edit)
+
+        self.clear_or_key_cb = QCheckBox("Clear saved inference key")
+        self.clear_or_key_cb.setToolTip(
+            "Remove the inference key from the system keychain."
+        )
+        self.clear_or_key_cb.setVisible(self._had_existing_or_key)
+        if self._had_existing_or_key:
+            openrouter_form.addRow("", self.clear_or_key_cb)
+
+        or_key_help = _hint_label(
+            "Your regular API key from <a style='color:#60a5fa;' "
+            "href='https://openrouter.ai/keys'>openrouter.ai/keys</a> — the same "
+            "one your apps use for chat completions. <b>Required</b> for daily "
+            "spend."
+        )
+        openrouter_form.addRow("", or_key_help)
+
+        self.or_mgmt_key_edit = QLineEdit()
+        self.or_mgmt_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        existing_or_mgmt_key = get_openrouter_mgmt_key()
+        self._had_existing_or_mgmt_key = bool(existing_or_mgmt_key)
+        if existing_or_mgmt_key:
+            self.or_mgmt_key_edit.setPlaceholderText(
+                "•••••••••• (saved — leave blank to keep)"
+            )
+        else:
+            self.or_mgmt_key_edit.setPlaceholderText("sk-or-v1-... (optional)")
+        openrouter_form.addRow("Management key:", self.or_mgmt_key_edit)
+
+        self.clear_or_mgmt_key_cb = QCheckBox("Clear saved management key")
+        self.clear_or_mgmt_key_cb.setToolTip(
+            "Remove the management key from the system keychain."
+        )
+        self.clear_or_mgmt_key_cb.setVisible(self._had_existing_or_mgmt_key)
+        if self._had_existing_or_mgmt_key:
+            openrouter_form.addRow("", self.clear_or_mgmt_key_cb)
+
+        or_mgmt_key_help = _hint_label(
+            "<b>Optional</b>, but needed to show your <b>account-wide remaining "
+            "balance</b> and <b>model activity</b>. Create a separate management key at "
+            "<a style='color:#60a5fa;' "
+            "href='https://openrouter.ai/settings/provisioning-keys'>"
+            "openrouter.ai/settings/provisioning-keys</a>. Management keys can't "
+            "make inference calls, so this is in addition to the inference key "
+            "above, not a replacement."
+        )
+        openrouter_form.addRow("", or_mgmt_key_help)
+
+        self.or_daily_budget = QDoubleSpinBox()
+        self.or_daily_budget.setRange(0.0, 10000.0)
+        self.or_daily_budget.setDecimals(2)
+        self.or_daily_budget.setSingleStep(1.0)
+        self.or_daily_budget.setPrefix("$ ")
+        self.or_daily_budget.setSpecialValueText("(no gauge)")
+        self.or_daily_budget.setValue(
+            float(config.openrouter.daily_budget or 0.0)
+        )
+        openrouter_form.addRow("Daily budget:", self.or_daily_budget)
+
+        budget_hint = _hint_label(
+            "Optional. If set, the Daily row shows a colored gauge against this "
+            "budget. Leave at $0.00 to show only the dollar amount."
+        )
+        openrouter_form.addRow("", budget_hint)
+
+        general_tab = QWidget()
+        general_tab_layout = QVBoxLayout(general_tab)
+        general_tab_layout.setContentsMargins(10, 10, 10, 10)
+        general_tab_layout.setSpacing(10)
+        general_tab_layout.addWidget(general)
+        general_tab_layout.addWidget(providers)
+        general_tab_layout.addStretch(1)
+
+        claude_tab = QWidget()
+        claude_tab_layout = QVBoxLayout(claude_tab)
+        claude_tab_layout.setContentsMargins(10, 10, 10, 10)
+        claude_tab_layout.setSpacing(10)
+        claude_tab_layout.addWidget(claude_accounts)
+        claude_tab_layout.addStretch(1)
+
+        codex_tab = QWidget()
+        codex_tab_layout = QVBoxLayout(codex_tab)
+        codex_tab_layout.setContentsMargins(10, 10, 10, 10)
+        codex_tab_layout.setSpacing(10)
+        codex_tab_layout.addWidget(codex_accounts)
+        codex_tab_layout.addStretch(1)
+
+        copilot_tab = QWidget()
+        copilot_tab_layout = QVBoxLayout(copilot_tab)
+        copilot_tab_layout.setContentsMargins(10, 10, 10, 10)
+        copilot_tab_layout.setSpacing(10)
+        copilot_tab_layout.addWidget(copilot)
+        copilot_tab_layout.addStretch(1)
+
+        openrouter_tab = QWidget()
+        openrouter_tab_layout = QVBoxLayout(openrouter_tab)
+        openrouter_tab_layout.setContentsMargins(10, 10, 10, 10)
+        openrouter_tab_layout.setSpacing(10)
+        openrouter_tab_layout.addWidget(openrouter)
+        openrouter_tab_layout.addStretch(1)
+
+        tabs = QTabWidget()
+        tabs.addTab(general_tab, "General")
+        tabs.addTab(claude_tab, "Claude")
+        tabs.addTab(codex_tab, "Codex")
+        tabs.addTab(copilot_tab, "GitHub Copilot")
+        tabs.addTab(openrouter_tab, "OpenRouter")
+        tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
 
         # ----- Buttons -----
         buttons = QDialogButtonBox(
@@ -397,15 +636,89 @@ class SettingsDialog(QDialog):
         button_row.addWidget(buttons)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(16, 16, 16, 12)
-        layout.setSpacing(12)
-        layout.addWidget(general)
-        layout.addWidget(providers)
-        layout.addWidget(copilot)
-        layout.addStretch(1)
+        layout.setContentsMargins(12, 12, 12, 10)
+        layout.setSpacing(10)
+        layout.addWidget(tabs, 1)
         layout.addLayout(button_row)
 
+    def _new_account_id(self, kind: str) -> str:
+        existing = {account.id for account in self._browser_accounts}
+        while True:
+            account_id = f"{kind}-{uuid.uuid4().hex[:8]}"
+            if account_id not in existing:
+                return account_id
+
+    def _next_account_name(self, kind: str) -> str:
+        count = sum(1 for account in self._browser_accounts if account.kind == kind)
+        return f"Account {count + 1}"
+
+    def _add_browser_account(self, kind: str) -> None:
+        self._browser_accounts = self._current_browser_accounts()
+        self._browser_accounts.append(
+            BrowserAccount(
+                id=self._new_account_id(kind),
+                kind=kind,
+                name=self._next_account_name(kind),
+                enabled=True,
+            )
+        )
+        self._rebuild_browser_account_rows()
+
+    def _remove_browser_account(self, account_id: str) -> None:
+        self._browser_accounts = [
+            account for account in self._current_browser_accounts()
+            if account.id != account_id
+        ]
+        self._removed_browser_account_ids.append(account_id)
+        self._rebuild_browser_account_rows()
+
+    def _rebuild_browser_account_rows(self) -> None:
+        for layout in (self._claude_accounts_layout, self._codex_accounts_layout):
+            while layout.count():
+                item = layout.takeAt(0)
+                widget = item.widget()
+                if widget is not None:
+                    widget.deleteLater()
+        self._browser_account_rows = []
+        for kind, layout in (
+            ("claude", self._claude_accounts_layout),
+            ("codex", self._codex_accounts_layout),
+        ):
+            for account in [a for a in self._browser_accounts if a.kind == kind]:
+                row = _BrowserAccountRow(
+                    account,
+                    removable=account.id not in ("claude", "codex"),
+                )
+                row.sign_in_clicked.connect(self.sign_in_clicked.emit)
+                row.paste_cookie_clicked.connect(self.paste_cookie_clicked.emit)
+                row.remove_clicked.connect(self._remove_browser_account)
+                self._browser_account_rows.append(row)
+                layout.addWidget(row)
+            add_btn = QPushButton(f"Add another {provider_base_name(kind)}")
+            add_btn.clicked.connect(lambda _checked=False, k=kind: self._add_browser_account(k))
+            add_btn.setFixedWidth(150)
+            layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignLeft)
+
+    def _current_browser_accounts(self) -> list[BrowserAccount]:
+        return [row.to_account() for row in self._browser_account_rows]
+
+    def _validate_browser_accounts(self) -> bool:
+        seen: set[tuple[str, str]] = set()
+        for account in self._current_browser_accounts():
+            key = (account.kind, account_display_name(account).lower())
+            if key in seen:
+                QMessageBox.warning(
+                    self,
+                    "Duplicate account name",
+                    f"Each {provider_base_name(account.kind)} account needs a unique display name.",
+                )
+                return False
+            seen.add(key)
+        return True
+
     def _accept(self) -> None:
+        if not self._validate_browser_accounts():
+            return
         new_pat = self.gh_pat_edit.text().strip()
         if self.clear_pat_cb.isChecked() and not new_pat:
             try:
@@ -423,7 +736,7 @@ class SettingsDialog(QDialog):
                     "PAT was not cleared",
                     "The token still appears to be available after clearing. "
                     "Remove the 'ai-gauge' / 'github-pat' credential from "
-                    "Windows Credential Manager.",
+                    "your system keychain.",
                 )
                 return
         if new_pat:
@@ -433,19 +746,102 @@ class SettingsDialog(QDialog):
                 QMessageBox.warning(
                     self,
                     "PAT was not saved",
-                    f"Windows Credential Manager rejected the token:\n{exc}",
+                    f"The system keychain rejected the token:\n{exc}",
                 )
                 return
             if get_github_pat() != new_pat:
                 QMessageBox.warning(
                     self,
                     "PAT was not saved",
-                    "The token could not be read back from Windows Credential "
-                    "Manager. Try running the app normally rather than as a "
+                    "The token could not be read back from the system "
+                    "keychain. Try running the app normally rather than as a "
                     "different user/elevated account.",
                 )
                 return
-            print("Saved GitHub PAT to Windows Credential Manager.")
+            log.info("Saved GitHub PAT to system keychain.")
+
+        new_or_key = self.or_key_edit.text().strip()
+        if self.clear_or_key_cb.isChecked() and not new_or_key:
+            try:
+                set_openrouter_key(None)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter inference key was not cleared",
+                    f"The saved key could not be cleared:\n{exc}",
+                )
+                return
+            if get_openrouter_key():
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter inference key was not cleared",
+                    "The key still appears to be available after clearing. "
+                    "Remove the 'ai-gauge' / 'openrouter-key' credential from "
+                    "your system keychain.",
+                )
+                return
+        if new_or_key:
+            try:
+                set_openrouter_key(new_or_key)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter inference key was not saved",
+                    f"The system keychain rejected the key:\n{exc}",
+                )
+                return
+            if get_openrouter_key() != new_or_key:
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter inference key was not saved",
+                    "The key could not be read back from the system "
+                    "keychain. Try running the app normally rather than as a "
+                    "different user/elevated account.",
+                )
+                return
+            log.info("Saved OpenRouter inference key to system keychain.")
+
+        new_or_mgmt_key = self.or_mgmt_key_edit.text().strip()
+        if self.clear_or_mgmt_key_cb.isChecked() and not new_or_mgmt_key:
+            try:
+                set_openrouter_mgmt_key(None)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter management key was not cleared",
+                    f"The saved key could not be cleared:\n{exc}",
+                )
+                return
+            if get_openrouter_mgmt_key():
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter management key was not cleared",
+                    "The key still appears to be available after clearing. "
+                    "Remove the 'ai-gauge' / 'openrouter-mgmt-key' credential "
+                    "from your system keychain.",
+                )
+                return
+        if new_or_mgmt_key:
+            try:
+                set_openrouter_mgmt_key(new_or_mgmt_key)
+            except Exception as exc:  # noqa: BLE001
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter management key was not saved",
+                    f"The system keychain rejected the key:\n{exc}",
+                )
+                return
+            if get_openrouter_mgmt_key() != new_or_mgmt_key:
+                QMessageBox.warning(
+                    self,
+                    "OpenRouter management key was not saved",
+                    "The key could not be read back from the system "
+                    "keychain. Try running the app normally rather than as a "
+                    "different user/elevated account.",
+                )
+                return
+            log.info("Saved OpenRouter management key to system keychain.")
+
         self.accept()
 
     def _set_quota_selection(self, quota: int) -> None:
@@ -469,13 +865,18 @@ class SettingsDialog(QDialog):
             self.active_refresh_spin.value(),
             config.refresh_interval_minutes,
         )
-        config.start_with_windows = self.startup_cb.isChecked()
+        config.start_at_login = self.startup_cb.isChecked()
         config.window.always_on_top = self.always_on_top_cb.isChecked()
         config.window.opacity = self.opacity_slider.value() / 100.0
+        accounts = self._current_browser_accounts()
+        config.browser_accounts = accounts
         config.providers.claude = self.claude_cb.isChecked()
         config.providers.claude_design = self.claude_design_cb.isChecked()
         config.providers.codex = self.codex_cb.isChecked()
         config.providers.copilot = self.copilot_cb.isChecked()
+        config.providers.openrouter = self.openrouter_cb.isChecked()
+        for account_id in self._removed_browser_account_ids:
+            set_provider_cookie(account_id, None)
         username = self.gh_username.text().strip()
         config.copilot.username = username or None
         billing_org = self.gh_billing_org.text().strip()
@@ -484,6 +885,8 @@ class SettingsDialog(QDialog):
         config.copilot.monthly_quota = (
             int(selected_quota) if selected_quota is not None else self.gh_quota.value()
         )
-        set_start_with_windows(config.start_with_windows)
+        budget = self.or_daily_budget.value()
+        config.openrouter.daily_budget = budget if budget > 0 else None
+        set_start_at_login(config.start_at_login)
 
         config.save()

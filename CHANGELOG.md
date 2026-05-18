@@ -1,5 +1,90 @@
 # Changelog
 
+## Unreleased
+
+## 0.5.5 - 2026-05-07
+
+### Changed
+
+- OpenRouter model breakdown rows now strip the provider prefix (e.g. `anthropic/`, `openai/`, `google/`) from the displayed name and truncate names longer than 20 characters with an ellipsis. The full original slug is preserved in the row tooltip.
+- OpenRouter model breakdown bars now line up at the same x position by sizing all model rows to a uniform label column width.
+
+### Fixed
+
+- Fixed Codex personal usage scraping after ChatGPT started dropping the `#personal-usage` fragment and defaulting the analytics page to Workspace usage. AI Gauge now selects the Personal usage tab inside the rendered page, waits for the tab content to hydrate, and only verifies Codex sessions once the actual personal usage rows are visible.
+
+## 0.5.4 - 2026-05-07
+
+### Added
+
+- Claude and Codex now support multiple named accounts. Add extra accounts from the dedicated Claude or Codex Settings tab; each account gets its own browser profile, cookie storage, tile, snapshot history, and display name such as `Codex (Account 2)`.
+- Settings now separates provider visibility from account management: General controls whether Claude/Codex groups appear, while the Claude and Codex tabs manage account names, sign-in, cookie paste, add, and remove actions.
+
+### Changed
+
+- The main widget now groups multiple Claude accounts before Codex accounts, keeps secondary account names visible in expanded and compact views, wraps compact chips onto additional rows when needed, and uses a scrollable dark tile area when many accounts are shown.
+- Codex/OpenAI sign-in guidance now explicitly calls out Google and passkey accounts: use Paste cookie when the embedded browser cannot complete the Google/passkey flow.
+
+### Fixed
+
+- Fixed the multi-account widget scroll area inheriting Qt's default light background.
+- Fixed secondary-account Settings rows being cramped in a single mixed provider list.
+
+## 0.5.3 - 2026-05-06
+
+### Added
+
+- OpenRouter support with separate storage for the standard inference key and management key, plus settings for enabling the provider and optionally setting a daily spend budget.
+- OpenRouter diagnostics now log non-secret endpoint status for `/credits`, `/key`, and `/activity`, including whether each key type is configured, payload field names, and activity row counts.
+
+### Changed
+
+- OpenRouter balance and spend now render as a single split row, e.g. `Balance $11.16 left` with `Spend today $0.00 / month $0.00` right-aligned; UTC details moved to the tooltip.
+- OpenRouter daily spend only renders as a gauge when a daily budget is configured.
+- OpenRouter model breakdown now uses the default `/activity` history window, shows up to six models, and labels it explicitly as `Models: last 30 completed UTC days`.
+- OpenRouter refreshes before browser-scraped providers so its API-backed tile does not wait behind Claude/Codex page loads.
+- Note-only OpenRouter rows, such as empty completed-day model activity, no longer render as empty gauges with `--`.
+- Routine successful OpenRouter refresh diagnostics now log at debug level instead of filling the normal log on every refresh.
+
+### Fixed
+
+- OpenRouter `/activity` now uses the management key, matching OpenRouter's current API requirements, instead of incorrectly using the standard inference key and receiving HTTP 403 responses.
+- OpenRouter management endpoints are skipped when no management key is configured, with visible tile guidance instead of failed background calls.
+
+## 0.5.2 - 2026-05-03
+
+### Added
+
+- Lifecycle diagnostics: AI Gauge now writes a five-minute heartbeat plus explicit Qt `aboutToQuit` and Python `atexit` log lines with uptime, UI mode, enabled providers, in-flight refreshes, queued providers, next refresh delay, and idle-backoff count. This should make future unexplained exits easier to distinguish from clean quits, OS shutdowns, and mid-refresh process termination.
+
+### Changed
+
+- Settings is now more compact: general/window/provider controls share a shorter tab, GitHub Copilot details live on their own tab, and long helper text was tightened so the dialog fits more comfortably on smaller displays.
+
+## 0.5.1 - 2026-04-30
+
+### Added
+
+- Pace indicator on every active time window: provider tile bars get a thin tick at the elapsed-time position, and compact-view chips get a small downward-pointing notch on the top edge, so quota used vs. elapsed session/weekly/monthly time is visible at a glance.
+- **macOS and Linux support.** A new `aigauge.platforms` seam routes per-OS work (app-data directory, secret storage, auto-start) through `WindowsPlatform` / `MacOSPlatform` / `LinuxPlatform` impls. Windows behavior is unchanged.
+- **Stats-style menu-bar UI on macOS.** Instead of the floating widget, macOS shows one tinted dot + percent per enabled provider directly in the menu bar (`● 42% ● 78% ● 15%`). Clicking opens the panel as a popover anchored under the menu-bar item; clicking outside dismisses. The pixmap is rendered at 2× DPR for Retina.
+- **No-tray fallback on Linux.** Stock GNOME has no system tray; AI Gauge now detects this via `QSystemTrayIcon.isSystemTrayAvailable()`, keeps the floating widget visible, and serves the same Show / Refresh / Settings / Quit menu via right-click on the widget.
+- **Cross-platform CI.** `test.yml` now runs on `windows-latest`, `macos-latest`, and `ubuntu-22.04` across Python 3.11 and 3.12. `release.yml` builds per-OS artifacts in parallel and attaches them to a single draft release.
+- `build.sh` for macOS / Linux PyInstaller builds. On macOS it injects `LSUIElement=true` into the bundle's `Info.plist` so the `.app` runs as a menu-bar agent without a Dock icon.
+
+### Changed
+
+- The `start_with_windows` config field is renamed to `start_at_login` (with automatic migration); the matching Settings checkbox now reads "Start at login". UI strings that called out "Windows Credential Manager" now say "system keychain".
+- Per-OS secret backends: macOS uses Keychain via `keyring`, Linux uses Secret Service via `keyring`, Windows keeps the existing DPAPI sidecar for cookies (Credential Manager's blob limit is too small for ChatGPT JWTs).
+- Per-OS auto-start: LaunchAgent plist on macOS, `~/.config/autostart/ai-gauge.desktop` on Linux, the existing Run-key entry on Windows.
+- App-data directory is now per-OS: `~/Library/Application Support/ai-gauge` on macOS, `$XDG_CONFIG_HOME/ai-gauge` on Linux, unchanged `%APPDATA%/ai-gauge` on Windows.
+
+### Fixed
+
+- Copilot monthly resets are now anchored to UTC midnight on the first of the month, so countdowns near month end match GitHub's reset boundary instead of local midnight.
+- Claude scrapes now retry transparently after a wake-from-sleep timeout instead of giving up on the first attempt: the headless scraper retries up to twice on `timeout`, `page failed to load`, or null-extractor results, so a cold network on the first refresh after resume usually succeeds on the retry instead of surfacing as `error · timeout`.
+- Claude usage panel that hadn't finished rendering when the extractor ran is no longer misclassified as the idle 0%/0% state. The signed-in-but-empty heuristic now requires positive evidence the usage panel rendered (the "Plan usage limits" header in the body) before declaring idle, and `ClaudeProvider` retries the whole scrape once on a transient layout-error result so the second attempt sees the populated rows.
+
 ## 0.5.0 - 2026-04-28
 
 ### Changed
@@ -9,6 +94,7 @@
 ### Added
 
 - Continuous integration on GitHub Actions: pytest runs against Python 3.11 and 3.12 on Windows for every push and pull request, gated by a `tools/check_versions.py` script that fails the build if `pyproject.toml`, `src/aigauge/__init__.py`, the README, and the changelog drift out of sync.
+- Automated release workflow: pushing a `v*` tag spins up a Windows runner that runs the tests, builds the standalone `.exe` via `build.ps1`, zips `dist/ai-gauge/`, computes a SHA256, and attaches both files to a draft GitHub Release for review.
 - Issue templates (bug report, provider layout broken, feature request) and a `CONTRIBUTING.md` with dev setup, test, and PR expectations.
 - URL allowlist on the embedded sign-in browser: navigation is restricted to the auth-related domains for Claude and ChatGPT (and their known OAuth/identity hops). Off-allowlist navigations are blocked, hardening the embedded browser against open-redirect abuse on either provider's auth flow.
 

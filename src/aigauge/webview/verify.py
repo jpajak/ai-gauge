@@ -17,8 +17,19 @@ VERIFY_TARGETS = {
         "(() => document.body && document.body.innerText.includes('Plan usage limits'))()",
     ),
     "codex": (
-        "https://chatgpt.com/codex/cloud/settings/analytics",
-        "(() => document.body && /usage limit/i.test(document.body.innerText))()",
+        "https://chatgpt.com/codex/cloud/settings/analytics#personal-usage",
+        r"""(() => {
+          const visibleText = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+          const text = visibleText(document.body);
+          if (/5 hour usage limit/i.test(text) && /Weekly usage limit/i.test(text) && /\d+(?:\.\d+)?\s*%/.test(text)) {
+            return true;
+          }
+          const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"],div,span,p'));
+          const label = labels.find(el => visibleText(el).toLowerCase() === 'personal usage');
+          const target = label && (label.closest('button,a,[role="tab"],[role="button"]') || label);
+          if (target) target.click();
+          return false;
+        })()""",
     ),
 }
 
@@ -39,6 +50,7 @@ class SessionVerifier(QObject):
     def __init__(
         self,
         provider: str,
+        account_id: str | None = None,
         timeout_ms: int = 20000,
         parent: QObject | None = None,
     ):
@@ -51,8 +63,9 @@ class SessionVerifier(QObject):
             return
         url, check_js = target
         self._check_js = check_js
+        self._check_attempts = 0
 
-        profile = get_profile(provider)
+        profile = get_profile(account_id or provider)
         self._page = QuietWebEnginePage(profile, self)
         s = self._page.settings()
         s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
@@ -83,7 +96,14 @@ class SessionVerifier(QObject):
     def _on_js_result(self, result: Any) -> None:
         if self._finished:
             return
-        self._finish(result is True, "")
+        if result is True:
+            self._finish(True, "")
+            return
+        self._check_attempts += 1
+        if self._check_attempts >= 12:
+            self._finish(False, "")
+            return
+        QTimer.singleShot(1000, self._run_check)
 
     def _finish(self, ok: bool, error: str) -> None:
         if self._finished:
@@ -109,9 +129,11 @@ class SessionVerifier(QObject):
 def verify_session(
     provider: str,
     on_done: Callable[[bool, str], None],
+    *,
+    account_id: str | None = None,
     parent: QObject | None = None,
 ) -> SessionVerifier:
     """Convenience wrapper. Returns the verifier so the caller can keep a ref."""
-    verifier = SessionVerifier(provider, parent=parent)
+    verifier = SessionVerifier(provider, account_id=account_id, parent=parent)
     verifier.done.connect(on_done)
     return verifier

@@ -31,8 +31,39 @@ def test_paste_cookie_button_emits_paste_cookie_signal(qtbot):
     assert signal.args == ["codex"]
 
 
+def test_add_codex_account_creates_named_secondary_row(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    dialog._add_browser_account("codex")  # noqa: SLF001
+    dialog.apply_to(config)
+
+    codex_accounts = [a for a in config.browser_accounts if a.kind == "codex"]
+    assert len(codex_accounts) == 2
+    assert codex_accounts[1].name == "Account 2"
+    assert codex_accounts[1].enabled is True
+
+
+def test_remove_secondary_account_clears_cookie(qtbot, monkeypatch):
+    removed = []
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(settings_dialog, "set_provider_cookie", lambda key, value: removed.append((key, value)))
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    dialog._add_browser_account("claude")  # noqa: SLF001
+    account_id = dialog._browser_accounts[-1].id  # noqa: SLF001
+    dialog._remove_browser_account(account_id)  # noqa: SLF001
+    dialog.apply_to(config)
+
+    assert removed == [(account_id, None)]
+
+
 def test_claude_design_limit_is_optional(qtbot, monkeypatch):
-    monkeypatch.setattr(settings_dialog, "set_start_with_windows", lambda enabled: None)
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
     config = Config()
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)

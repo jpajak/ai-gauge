@@ -5,14 +5,7 @@ import logging
 from PyQt6.QtCore import Qt, QTimer, QUrl
 from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import (
-    QDialog,
-    QHBoxLayout,
-    QLabel,
-    QMessageBox,
-    QPushButton,
-    QVBoxLayout,
-)
+from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
 from .page import QuietWebEnginePage
 from .profile import get_profile
@@ -39,6 +32,8 @@ AUTH_HOST_ALLOWLIST: tuple[str, ...] = (
     "oaiusercontent.com",
     # Identity providers used by the above for SSO popups.
     "auth0.com",
+    "google.com",
+    "youtube.com",
     "appleid.apple.com",
     "apple.com",
     "icloud.com",
@@ -58,8 +53,31 @@ def _host_allowed(host: str) -> bool:
     return False
 
 
+def _is_google_host(host: str) -> bool:
+    host = host.lower().strip()
+    return host == "google.com" or host.endswith(".google.com")
+
+
+def _safe_url_for_log(url: QUrl) -> str:
+    if url.scheme() in ("http", "https"):
+        return f"{url.scheme()}://{url.host()}{url.path()}"
+    return f"{url.scheme()}:{url.path()}"
+
+
 class _AllowlistedPage(QuietWebEnginePage):
     """QuietWebEnginePage that blocks main-frame navigation off the auth allowlist."""
+
+    def __init__(
+        self,
+        profile,
+        parent=None,
+        *,
+        provider: str = "unknown",
+        on_google_started=None,
+    ):
+        super().__init__(profile, parent, provider=provider)
+        self._on_google_started = on_google_started
+        self._google_noted = False
 
     def acceptNavigationRequest(  # noqa: N802 — Qt override
         self,
@@ -75,21 +93,35 @@ class _AllowlistedPage(QuietWebEnginePage):
                 log.warning(
                     "login_window: blocking non-http navigation scheme=%s url=%s",
                     scheme,
-                    url.toString(),
+                    _safe_url_for_log(url),
                 )
                 return False
+            if _is_google_host(url.host()):
+                if not self._google_noted and self._on_google_started is not None:
+                    self._google_noted = True
+                    QTimer.singleShot(0, self._on_google_started)
+                log.info(
+                    "login_window: Google sign-in navigation host=%s url=%s",
+                    url.host(),
+                    _safe_url_for_log(url),
+                )
             if not _host_allowed(url.host()):
                 log.warning(
                     "login_window: blocking off-allowlist navigation host=%s url=%s",
                     url.host(),
-                    url.toString(),
+                    _safe_url_for_log(url),
                 )
                 return False
         return super().acceptNavigationRequest(url, nav_type, is_main_frame)
 
 
-def _styled_page(profile, parent) -> QWebEnginePage:
-    page = _AllowlistedPage(profile, parent)
+def _styled_page(profile, parent, *, provider: str, on_google_started) -> QWebEnginePage:
+    page = _AllowlistedPage(
+        profile,
+        parent,
+        provider=provider,
+        on_google_started=on_google_started,
+    )
     s = page.settings()
     s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptEnabled, True)
     s.setAttribute(QWebEngineSettings.WebAttribute.JavascriptCanOpenWindows, True)
@@ -109,10 +141,14 @@ def _styled_page(profile, parent) -> QWebEnginePage:
 class _PopupPage(_AllowlistedPage):
     """Page used for popup OAuth windows opened from the main login view."""
 
-    def __init__(self, profile, parent):
-        super().__init__(profile, parent)
+    def __init__(self, profile, parent, *, provider: str, on_google_started):
+        super().__init__(
+            profile,
+            parent,
+            provider=provider,
+            on_google_started=on_google_started,
+        )
         self._popup_view: QWebEngineView | None = None
-        self._google_warned = False
 
     def attach_view(self) -> QWebEngineView:
         view = QWebEngineView()
@@ -129,31 +165,6 @@ class _PopupPage(_AllowlistedPage):
         self._popup_view = view
         return view
 
-    def acceptNavigationRequest(  # noqa: N802 — Qt override
-        self,
-        url: QUrl,
-        nav_type: QWebEnginePage.NavigationType,
-        is_main_frame: bool,
-    ) -> bool:
-        # Google sign-in is going to fail anyway (Google blocks embedded
-        # browsers), and the host is also off-allowlist below — surface a
-        # friendlier message before the generic block kicks in.
-        if is_main_frame and not self._google_warned:
-            host = url.host().lower()
-            if "google.com" in host or "accounts.google" in host:
-                self._google_warned = True
-                if self._popup_view is not None:
-                    QMessageBox.warning(
-                        self._popup_view,
-                        "Google sign-in not supported",
-                        "Google blocks sign-in from embedded browsers. Cancel "
-                        "this window and use the <b>Paste cookie</b> button "
-                        "in Settings instead — that path works with "
-                        "Google-authed accounts.",
-                    )
-                return False
-        return super().acceptNavigationRequest(url, nav_type, is_main_frame)
-
 
 class LoginWindow(QDialog):
     """Modal embedded-Chromium window for signing in to Claude or ChatGPT.
@@ -163,19 +174,33 @@ class LoginWindow(QDialog):
     signed-in user. If verification fails, we tell the user and stay open.
     """
 
-    def __init__(self, provider: str, login_url: str, title: str, parent=None):
+    def __init__(
+        self,
+        provider: str,
+        login_url: str,
+        title: str,
+        parent=None,
+        *,
+        account_id: str | None = None,
+    ):
         # Don't pass parent — avoids style cascade from main widget.
         super().__init__(None)
         # Intentionally NOT WindowStaysOnTopHint: an always-on-top sign-in
         # dialog can sit over OAuth popups (Apple, Microsoft, magic-link
         # email confirmation pages) the user opens in their real browser.
         self._provider = provider
+        self._account_id = account_id or provider
         self.setWindowTitle(title)
         self.resize(960, 760)
 
-        profile = get_profile(provider)
+        profile = get_profile(self._account_id)
         self._profile = profile
-        self._page = _styled_page(profile, self)
+        self._page = _styled_page(
+            profile,
+            self,
+            provider=self._account_id,
+            on_google_started=self._on_google_started,
+        )
         self._view = QWebEngineView(self)
         self._view.setPage(self._page)
         self._view.load(QUrl(login_url))
@@ -186,9 +211,12 @@ class LoginWindow(QDialog):
 
         instructions = QLabel(
             "<b>Do not click \u201cContinue with Google\u201d</b> \u2014 Google blocks "
-            "embedded browsers. If you normally sign in with Google, just type "
-            "that same email address into the <b>Enter your email</b> box and "
-            "use the <b>magic link</b> sent to your inbox. "
+            "embedded browsers, and Google passkeys usually fail here too. If "
+            "you normally sign in with Google, try typing that same email "
+            "address into the <b>Enter your email</b> box and use the "
+            "<b>magic link</b> sent to your inbox. If OpenAI sends you back to "
+            "Google or asks for a passkey, close this window and use "
+            "<b>Paste cookie</b> in Settings. "
             "Click <b>I'm signed in</b> when you reach your account."
         )
         instructions.setWordWrap(True)
@@ -219,7 +247,12 @@ class LoginWindow(QDialog):
 
     def _handle_popup(self, request) -> None:
         """Spawn a new window for popup-based OAuth flows."""
-        popup_page = _PopupPage(self._profile, self)
+        popup_page = _PopupPage(
+            self._profile,
+            self,
+            provider=self._account_id,
+            on_google_started=self._on_google_started,
+        )
         request.openIn(popup_page)
         view = popup_page.attach_view()
         # When the popup closes, drop the reference.
@@ -231,6 +264,13 @@ class LoginWindow(QDialog):
             )
         )
         self._popup_pages.append(popup_page)
+
+    def _on_google_started(self) -> None:
+        self._status.setText(
+            "Continuing with Google. If Google refuses this embedded browser "
+            "or a passkey fails, use Paste cookie in Settings."
+        )
+        self._status.setStyleSheet("color:#6b7280;")
 
     def closeEvent(self, event) -> None:
         self._close_popups()

@@ -55,6 +55,8 @@ class HeadlessScraper(QObject):
 
     done = pyqtSignal(object, str)  # (result_or_None, error_or_empty_string)
 
+    _RETRYABLE_ERRORS = ("timeout", "page failed to load", "extractor returned null")
+
     def __init__(
         self,
         provider: str,
@@ -62,6 +64,7 @@ class HeadlessScraper(QObject):
         extractor_js: str,
         wait_ms: int = 4000,
         timeout_ms: int = 25000,
+        max_attempts: int = 1,
         parent: QObject | None = None,
     ):
         super().__init__(parent)
@@ -69,6 +72,9 @@ class HeadlessScraper(QObject):
         self._url = url
         self._extractor_js = extractor_js
         self._wait_ms = wait_ms
+        self._timeout_ms = timeout_ms
+        self._max_attempts = max(1, max_attempts)
+        self._attempt = 0
         self._finished = False
         self._started_at = time.monotonic()
         self._last_load_status = ""
@@ -81,6 +87,7 @@ class HeadlessScraper(QObject):
         self._url_change_count = 0
         self._max_progress = 0
         self._render_terminated = False
+        self._extractor_reruns = 0
 
         profile = get_profile(provider)
         self._page = QuietWebEnginePage(profile, self, provider=provider)
@@ -92,7 +99,6 @@ class HeadlessScraper(QObject):
         self._timeout = QTimer(self)
         self._timeout.setSingleShot(True)
         self._timeout.timeout.connect(lambda: self._finish(None, "timeout"))
-        self._timeout.start(timeout_ms)
 
         self._page.loadFinished.connect(self._on_load_finished)
         self._page.loadProgress.connect(self._on_load_progress)
@@ -101,10 +107,10 @@ class HeadlessScraper(QObject):
         loading_changed = getattr(self._page, "loadingChanged", None)
         if loading_changed is not None:
             loading_changed.connect(self._on_loading_changed)
-        self._page.load(QUrl(url))
+
         log.info(
             "scrape start provider=%s url=%s profile=%s viewport=%sx%s "
-            "wait_ms=%s timeout_ms=%s user_agent=%r",
+            "wait_ms=%s timeout_ms=%s max_attempts=%s user_agent=%r",
             provider,
             _safe_url(url),
             profile.persistentStoragePath(),
@@ -112,8 +118,27 @@ class HeadlessScraper(QObject):
             self._view.height(),
             wait_ms,
             timeout_ms,
+            self._max_attempts,
             profile.httpUserAgent(),
         )
+        self._begin_attempt()
+
+    def _begin_attempt(self) -> None:
+        self._attempt += 1
+        self._last_load_status = ""
+        self._last_load_url = ""
+        self._last_load_error_code = ""
+        self._last_load_error_domain = ""
+        self._last_load_error_string = ""
+        self._last_load_is_error_page = ""
+        self._last_url = self._url
+        self._url_change_count = 0
+        self._max_progress = 0
+        self._render_terminated = False
+        self._extractor_reruns = 0
+        self._timeout.stop()
+        self._timeout.start(self._timeout_ms)
+        self._page.load(QUrl(self._url))
 
     def _on_load_progress(self, progress: int) -> None:
         self._max_progress = max(self._max_progress, progress)
@@ -194,20 +219,55 @@ class HeadlessScraper(QObject):
         if result is None:
             self._finish(None, "extractor returned null")
             return
+        if isinstance(result, dict) and "__retry_after_ms" in result:
+            self._extractor_reruns += 1
+            if self._extractor_reruns > 5:
+                self._finish(None, "extractor retry limit exceeded")
+                return
+            try:
+                delay_ms = int(result.get("__retry_after_ms") or 0)
+            except (TypeError, ValueError):
+                delay_ms = 0
+            delay_ms = max(0, min(delay_ms, 5000))
+            log.info(
+                "scrape extractor rerun provider=%s rerun=%s delay_ms=%s reason=%s",
+                self._provider,
+                self._extractor_reruns,
+                delay_ms,
+                result.get("__retry_reason", ""),
+            )
+            QTimer.singleShot(delay_ms, self._run_extractor)
+            return
         self._finish(result, "")
 
     def _finish(self, result: Any, error: str) -> None:
         if self._finished:
             return
+        elapsed = time.monotonic() - self._started_at
+        if error and error in self._RETRYABLE_ERRORS and self._attempt < self._max_attempts:
+            log.warning(
+                "scrape retry provider=%s attempt=%s/%s elapsed=%.1fs error=%s "
+                "progress=%s load_status=%s",
+                self._provider,
+                self._attempt,
+                self._max_attempts,
+                elapsed,
+                error,
+                self._max_progress,
+                self._last_load_status,
+            )
+            self._view.stop()
+            self._begin_attempt()
+            return
         self._finished = True
         self._timeout.stop()
-        elapsed = time.monotonic() - self._started_at
         if error:
             log.warning(
                 "scrape fail provider=%s url=%s page_url=%s elapsed=%.1fs "
                 "error=%s load_status=%s load_url=%s load_error_code=%s "
                 "load_error_domain=%s load_error_string=%r load_is_error_page=%s "
-                "title=%r progress=%s url_changes=%s render_terminated=%s",
+                "title=%r progress=%s url_changes=%s render_terminated=%s "
+                "attempts=%s",
                 self._provider,
                 _safe_url(self._url),
                 _safe_url(self._page.url()),
@@ -223,12 +283,13 @@ class HeadlessScraper(QObject):
                 self._max_progress,
                 self._url_change_count,
                 self._render_terminated,
+                self._attempt,
             )
         else:
             log.info(
                 "scrape ok provider=%s elapsed=%.1fs page_url=%s load_status=%s "
                 "load_url=%s load_is_error_page=%s title=%r progress=%s "
-                "url_changes=%s render_terminated=%s result_keys=%s",
+                "url_changes=%s render_terminated=%s attempts=%s result_keys=%s",
                 self._provider,
                 elapsed,
                 _safe_url(self._page.url()),
@@ -239,6 +300,7 @@ class HeadlessScraper(QObject):
                 self._max_progress,
                 self._url_change_count,
                 self._render_terminated,
+                self._attempt,
                 sorted(result.keys()) if isinstance(result, dict) else type(result).__name__,
             )
         self.done.emit(result, error)
@@ -280,8 +342,16 @@ def scrape(
     on_done: Callable[[Any, str], None],
     parent: QObject | None = None,
     wait_ms: int = 4000,
+    max_attempts: int = 1,
 ) -> HeadlessScraper:
     """Convenience wrapper. Returns the scraper so the caller can keep a reference."""
-    scraper = HeadlessScraper(provider, url, extractor_js, wait_ms=wait_ms, parent=parent)
+    scraper = HeadlessScraper(
+        provider,
+        url,
+        extractor_js,
+        wait_ms=wait_ms,
+        max_attempts=max_attempts,
+        parent=parent,
+    )
     scraper.done.connect(on_done)
     return scraper

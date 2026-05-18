@@ -59,6 +59,6 @@ body:
     attributes:
       label: Relevant log lines
       description: |
-        From `%APPDATA%/ai-gauge/ai-gauge.log`. Look for `provider=claude` or
-        `provider=codex` lines around the failed refresh.
+        From `ai-gauge.log` in the per-OS app-data directory. Look for
+        `provider=claude` or `provider=codex` lines around the failed refresh.
       render: text

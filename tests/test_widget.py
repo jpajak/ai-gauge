@@ -1,10 +1,11 @@
 from datetime import datetime, timedelta
 
+import pytest
 from PyQt6.QtCore import Qt
 
-from aigauge.config import Config
+from aigauge.config import BrowserAccount, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
-from aigauge.widget import UsageWidget
+from aigauge.widget import UsageWidget, _MetricRow, _SummaryChip
 
 
 def _tile_order(widget: UsageWidget) -> list[str]:
@@ -16,12 +17,17 @@ def _tile_order(widget: UsageWidget) -> list[str]:
 
 def _collapsed_chip_texts(widget: UsageWidget) -> list[str]:
     texts = []
-    layout = widget._collapsed_summary_layout  # noqa: SLF001
-    for i in range(layout.count()):
-        item = layout.itemAt(i)
-        child = item.widget()
-        if child is not None and child is not widget._collapsed_label:  # noqa: SLF001
-            texts.append(child.text())
+    stack = [widget._collapsed_summary_layout]  # noqa: SLF001
+    while stack:
+        layout = stack.pop(0)
+        for i in range(layout.count()):
+            item = layout.itemAt(i)
+            child = item.widget()
+            if child is not None and child is not widget._collapsed_label:  # noqa: SLF001
+                if hasattr(child, "text"):
+                    texts.append(child.text())
+                if child.layout() is not None:
+                    stack.append(child.layout())
     return texts
 
 
@@ -36,6 +42,32 @@ def test_reenabled_provider_returns_to_canonical_order(qtbot):
     widget.ensure_tile("codex", "Codex")
 
     assert _tile_order(widget) == ["claude", "codex", "copilot"]
+
+
+def test_browser_account_tiles_group_by_provider_kind(qtbot):
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(id="claude-team", kind="claude", name="Team")
+    )
+    config.browser_accounts.append(
+        BrowserAccount(id="codex-work", kind="codex", name="Work")
+    )
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    widget.ensure_tile("codex-work", "Codex (Work)")
+    widget.ensure_tile("claude-team", "Claude (Team)")
+    widget.ensure_tile("codex", "Codex")
+    widget.ensure_tile("claude", "Claude")
+    widget.ensure_tile("copilot", "Copilot")
+
+    assert _tile_order(widget) == [
+        "claude",
+        "claude-team",
+        "codex",
+        "codex-work",
+        "copilot",
+    ]
 
 
 def test_mark_loading_preserves_existing_data_and_dims_tile(qtbot):
@@ -120,6 +152,28 @@ def test_auth_required_tile_uses_sign_in_button(qtbot):
     )
 
     tile = widget._tiles["claude"]  # noqa: SLF001
+    assert tile.action_btn.text() == "Sign in"
+    assert not tile.action_btn.isHidden()
+
+
+def test_secondary_browser_account_auth_tile_uses_sign_in_button(qtbot):
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(id="codex-work", kind="codex", name="Work")
+    )
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="codex-work",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Not signed in.",
+        ),
+        "Codex (Work)",
+    )
+
+    tile = widget._tiles["codex-work"]  # noqa: SLF001
     assert tile.action_btn.text() == "Sign in"
     assert not tile.action_btn.isHidden()
 
@@ -235,6 +289,47 @@ def test_collapsed_mode_shows_session_summary(qtbot):
     assert all("Weekly" not in text for text in _collapsed_chip_texts(widget))
 
 
+def test_collapsed_mode_shows_openrouter_balance(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="openrouter",
+            status=SnapshotStatus.OK,
+            metrics=[UsageMetric("Balance $11.50 left · Today $1.31", None)],
+        ),
+        "OpenRouter",
+    )
+
+    widget.set_collapsed(True)
+
+    assert _collapsed_chip_texts(widget) == ["OpenRouter $11.50"]
+
+
+def test_collapsed_mode_shows_openrouter_today_without_balance(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="openrouter",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric(
+                    "Spend today $1.31 / month $21.90",
+                    None,
+                )
+            ],
+        ),
+        "OpenRouter",
+    )
+
+    widget.set_collapsed(True)
+
+    assert _collapsed_chip_texts(widget) == ["OpenRouter today $1.31"]
+
+
 def test_collapsed_mode_resizes_immediately(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
@@ -243,6 +338,36 @@ def test_collapsed_mode_resizes_immediately(qtbot):
     widget.set_collapsed(True)
 
     assert widget.height() == 58
+
+
+def test_collapsed_mode_wraps_all_account_chips_without_overflow(qtbot):
+    config = Config()
+    for i in range(2, 6):
+        config.browser_accounts.append(
+            BrowserAccount(id=f"codex-{i}", kind="codex", name=f"Account {i}")
+        )
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    for account in config.browser_accounts:
+        widget.update_snapshot(
+            UsageSnapshot(
+                provider=account.id,
+                status=SnapshotStatus.OK,
+                metrics=[UsageMetric("Session", 25.0, None)],
+            ),
+            f"Codex ({account.name})" if account.name else "Codex",
+        )
+
+    widget.set_collapsed(True)
+    widget._do_refit_height()  # noqa: SLF001
+
+    texts = _collapsed_chip_texts(widget)
+    assert "+4" not in texts
+    assert len(texts) == len(config.browser_accounts)
+    assert "Account 2 25%" in texts
+    assert all("Codex (Account" not in text for text in texts)
+    assert widget.height() > 58
 
 
 def test_collapsed_mode_persists_and_expands(qtbot):
@@ -276,3 +401,76 @@ def test_always_on_top_suspension_is_reference_counted(qtbot):
 
     widget.restore_always_on_top()
     assert widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+
+
+def test_metric_row_sets_pace_from_window(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+
+    row.set_metric(
+        "Session",
+        47.0,
+        datetime.now() + timedelta(hours=1),
+        window=timedelta(hours=5),
+    )
+
+    assert row.bar._pace_pct == pytest.approx(80, abs=1)  # noqa: SLF001
+    assert "Time elapsed:" in row.bar.toolTip()
+
+
+def test_metric_row_renders_note_only_metric_without_empty_gauge(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+
+    row.set_metric("Models: none", None, None, note="No activity.")
+
+    assert row.label.text() == "Models: none"
+    assert row.bar.isHidden()
+    assert row.pct.isHidden()
+    assert row.reset.isHidden()
+
+
+def test_metric_row_right_aligns_split_note_metric(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+
+    row.set_metric(
+        "Balance $11.50 left · Spend today $0.00 / month $0.00",
+        None,
+        None,
+        note="OpenRouter summary.",
+    )
+
+    assert row.label.text() == "Balance $11.50 left"
+    assert row.reset.text() == "Spend today $0.00 / month $0.00"
+    assert row.reset.width() > 92
+    assert row.reset.toolTip() == ""
+    assert "#d1d5db" in row.reset.styleSheet()
+    assert row.bar.isHidden()
+    assert row.pct.isHidden()
+    assert not row.reset.isHidden()
+
+
+def test_metric_row_keeps_timeline_bar_without_missing_percent(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+
+    row.set_metric(
+        "Today ($0.00/$5.00)",
+        None,
+        datetime.now() + timedelta(hours=8),
+        window=timedelta(days=1),
+    )
+
+    assert not row.bar.isHidden()
+    assert row.pct.isHidden()
+    assert not row.reset.isHidden()
+
+
+def test_summary_chip_stores_pace(qtbot):
+    chip = _SummaryChip()
+    qtbot.addWidget(chip)
+
+    chip.set_state("Claude 37%", 37.0, "ok", pace=37)
+
+    assert chip._pace_pct == 37  # noqa: SLF001

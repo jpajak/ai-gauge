@@ -12,62 +12,97 @@ downloadable files.
 For AI Gauge, the release page should include:
 
 - The source code snapshot that GitHub attaches automatically.
-- A Windows build artifact, preferably a zipped `dist/ai-gauge/` folder.
-- SHA256 checksums for downloadable artifacts.
+- One build artifact per supported OS:
+  - Windows: zipped `dist/ai-gauge/` folder
+  - macOS: tar.gz of the `.app` bundle
+  - Linux: tar.gz of `dist/ai-gauge/`
+- SHA256 checksums for each downloadable artifact.
 - A short note that the app is unsigned unless code signing has been added.
 
-## Release Checklist
+## Release Checklist (automated path)
+
+The recommended path uses [.github/workflows/release.yml](.github/workflows/release.yml):
+pushing a `v*` tag fans out a 3-OS build matrix (Windows, macOS, Ubuntu).
+Each runner runs the test suite, builds its OS's standalone bundle, packages
+it, computes a SHA256, and uploads both files as job artifacts. A final job
+collects all artifacts and attaches them to a **draft** release on GitHub.
+You publish the draft from the web UI.
 
 1. Confirm `pyproject.toml`, `src/aigauge/__init__.py`, `README.md`, and
-   `CHANGELOG.md` all show the same version. The CI workflow runs
-   `tools/check_versions.py` for this; you can run it locally with:
+   `CHANGELOG.md` all show the new version. The release workflow runs
+   `tools/check_versions.py` and also rejects mismatched tag/pyproject
+   versions, but a local pre-flight catches issues sooner:
 
    ```powershell
+   # Windows
    .venv\Scripts\python.exe tools\check_versions.py
-   ```
-
-2. Run the test suite:
-
-   ```powershell
    .venv\Scripts\python.exe -m pytest
-   ```
-
-3. Build the recommended one-folder Windows package:
-
-   ```powershell
    .\build.ps1
+   .\dist\ai-gauge\ai-gauge.exe   # smoke-test
    ```
 
-4. Smoke-test `dist\ai-gauge\ai-gauge.exe` on the release machine.
-5. Zip the full `dist\ai-gauge\` folder. Do not upload only the executable
-   from a one-folder build.
-6. Create checksums:
-
-   ```powershell
-   Get-FileHash .\dist\ai-gauge.zip -Algorithm SHA256
+   ```bash
+   # macOS / Linux
+   .venv/bin/python tools/check_versions.py
+   .venv/bin/python -m pytest
+   ./build.sh
+   open dist/ai-gauge.app          # macOS smoke-test
+   ./dist/ai-gauge/ai-gauge        # Linux smoke-test
    ```
 
-7. Commit the release prep changes.
-8. Create and push a version tag:
+2. Commit the release prep changes to `main`.
+3. Create and push the version tag:
 
    ```powershell
-   git tag v0.5.0
+   git tag v<version>
    git push origin main
-   git push origin v0.5.0
+   git push origin v<version>
    ```
 
-9. In GitHub, open the repository, go to **Releases**, choose **Draft a new
-   release**, select the tag, paste the changelog notes, and attach the zip.
-10. Mark the release as a prerelease if you want early testers before a wider
-    announcement.
+4. Watch the **release** workflow under the Actions tab. On success it
+   creates a draft release on the [Releases page](https://github.com/jpajak/ai-gauge/releases)
+   with three artifact pairs attached:
+   - `ai-gauge-<version>-windows.zip` (+ `.sha256`)
+   - `ai-gauge-<version>-macos.tar.gz` (+ `.sha256`)
+   - `ai-gauge-<version>-linux.tar.gz` (+ `.sha256`)
+5. Open the draft release, paste the relevant changelog notes into the body
+   (the workflow auto-generates a commit list, but the changelog reads
+   better), and click **Publish release**. Mark as prerelease if you want a
+   soft launch.
+
+## Manual fallback
+
+If the automated workflow is unavailable (e.g. you're publishing from a
+fork without Actions enabled), the manual flow still works — but you'll
+need access to a machine of each OS you intend to ship for, since
+PyInstaller cross-compilation isn't supported.
+
+1. Run the same local pre-flight in step 1 above on each target OS.
+2. Package the build:
+   - Windows: zip the full `dist\ai-gauge\` folder.
+   - macOS: `tar -C dist -czf ai-gauge-<ver>-macos.tar.gz ai-gauge.app`
+   - Linux: `tar -C dist -czf ai-gauge-<ver>-linux.tar.gz ai-gauge`
+3. Create a checksum:
+
+   ```powershell
+   Get-FileHash .\ai-gauge-<ver>-windows.zip -Algorithm SHA256
+   ```
+
+   ```bash
+   shasum -a 256 ai-gauge-<ver>-macos.tar.gz
+   ```
+
+4. Push the version tag, then in GitHub go to **Releases** → **Draft a new
+   release**, select the tag, paste the changelog notes, and attach all
+   archive + `.sha256` pairs.
 
 ## Suggested Release Notes Shape
 
 ```markdown
-## AI Gauge 0.5.0
+## AI Gauge <version>
 
-Compact always-on-top Windows monitor for Claude.ai, ChatGPT Codex, and GitHub
-Copilot usage limits.
+Compact monitor for Claude.ai, ChatGPT Codex, GitHub Copilot, and OpenRouter usage.
+Native UI per OS: floating widget on Windows / Linux, menu-bar item on macOS.
 
 ### Highlights
 
@@ -75,23 +110,24 @@ Copilot usage limits.
 
 ### Download
 
-- `ai-gauge.zip` contains the Windows app folder.
-- Extract it and run `ai-gauge.exe`.
-- Windows may show an unsigned-app warning.
+- Windows: `ai-gauge-<ver>-windows.zip` → extract, run `ai-gauge.exe`.
+- macOS: `ai-gauge-<ver>-macos.tar.gz` → drag `ai-gauge.app` to Applications.
+  First launch needs `xattr -dr com.apple.quarantine ai-gauge.app` or right-click → Open.
+- Linux: `ai-gauge-<ver>-linux.tar.gz` → extract, run `./ai-gauge/ai-gauge`.
 
 ### Verification
 
-SHA256:
-
-`...`
+SHA256: see the `.sha256` next to each archive.
 ```
 
 ## Signing Notes
 
-Unsigned Windows executables commonly trigger Microsoft Defender SmartScreen
-warnings for new downloads. This does not necessarily mean the file is unsafe,
-but users will need to decide whether they trust the project.
+Release artifacts are unsigned on every OS:
 
-Code signing can reduce friction, but it costs money and adds maintenance. It
-is reasonable to wait until there is real external usage before buying a
-certificate.
+- **Windows** — Microsoft Defender SmartScreen warns on new downloads.
+- **macOS** — Gatekeeper blocks first launch (quarantine attribute).
+- **Linux** — no signing layer, so no warning.
+
+Code signing / notarization can reduce friction but costs money and adds
+maintenance. It is reasonable to wait until there is real external usage
+before investing.

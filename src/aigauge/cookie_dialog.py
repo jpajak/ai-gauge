@@ -70,17 +70,24 @@ QPushButton:default:hover { background:#1d4ed8; }
 
 
 class CookieDialog(QDialog):
-    def __init__(self, provider: str):
+    def __init__(
+        self,
+        provider: str,
+        *,
+        account_id: str | None = None,
+        display_name: str | None = None,
+    ):
         super().__init__(None)
         if provider not in INSTRUCTIONS:
             raise ValueError(f"unknown provider: {provider}")
         self._provider = provider
+        self._account_id = account_id or provider
         self._verifier = None
         title, instructions_html = INSTRUCTIONS[provider]
         # Not stays-on-top: the user has to switch to their normal browser to
         # copy the cookie, and the main widget is suspended from always-on-top
         # by the caller while this is open.
-        self.setWindowTitle(f"Paste {title}")
+        self.setWindowTitle(f"Paste {display_name or title}")
         self.resize(540, 460)
         self.setStyleSheet(_DARK_STYLESHEET)
 
@@ -134,8 +141,8 @@ class CookieDialog(QDialog):
                 "row, or full Cookie: request header.",
             )
             return
-        set_provider_cookie(self._provider, value)
-        persisted = get_provider_cookie(self._provider)
+        set_provider_cookie(self._account_id, value)
+        persisted = get_provider_cookie(self._account_id)
         if persisted != value:
             QMessageBox.warning(
                 self,
@@ -144,7 +151,11 @@ class CookieDialog(QDialog):
                 "storage. Check terminal output for DPAPI/key storage errors.",
             )
             return
-        inject_session_cookie(self._provider, value)
+        inject_session_cookie(
+            self._provider,
+            value,
+            account_id=self._account_id,
+        )
         names = ", ".join(name for name, _ in pairs[:6])
         if len(pairs) > 6:
             names += f", and {len(pairs) - 6} more"
@@ -159,7 +170,12 @@ class CookieDialog(QDialog):
             f"<span style='color:#9ca3af;'>Saved. Verifying that the cookie loads "
             f"a signed-in {self._provider} page…</span>"
         )
-        self._verifier = verify_session(self._provider, self._on_verify_done, parent=self)
+        self._verifier = verify_session(
+            self._provider,
+            self._on_verify_done,
+            account_id=self._account_id,
+            parent=self,
+        )
 
     def _on_verify_done(self, ok: bool, error: str) -> None:
         if ok:

@@ -1,0 +1,205 @@
+name: release
+
+on:
+  push:
+    tags:
+      - "v*"
+
+permissions:
+  contents: write
+
+jobs:
+  resolve-version:
+    runs-on: ubuntu-latest
+    outputs:
+      tag: ${{ steps.ver.outputs.tag }}
+      version: ${{ steps.ver.outputs.version }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: ver
+        shell: bash
+        run: |
+          tag="${GITHUB_REF_NAME}"
+          version="${tag#v}"
+          echo "tag=$tag"         >> "$GITHUB_OUTPUT"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+      - name: Confirm tag matches pyproject version
+        shell: bash
+        run: |
+          proj_version=$(grep -E '^version\s*=' pyproject.toml | head -1 | sed -E 's/.*"([^"]+)".*/\1/')
+          if [ -z "$proj_version" ]; then
+              echo "could not find version in pyproject.toml" >&2; exit 1
+          fi
+          if [ "$proj_version" != "${{ steps.ver.outputs.version }}" ]; then
+              echo "tag version ${{ steps.ver.outputs.version }} != pyproject.toml version $proj_version" >&2
+              exit 1
+          fi
+          echo "Tag and pyproject agree on $proj_version"
+
+  build:
+    needs: resolve-version
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            label: windows
+            archive_ext: zip
+            build_cmd: ./build.ps1
+          - os: macos-latest
+            label: macos
+            archive_ext: tar.gz
+            build_cmd: ./build.sh
+          - os: ubuntu-22.04
+            label: linux
+            archive_ext: tar.gz
+            build_cmd: ./build.sh
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+
+      - name: Bootstrap virtualenv (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          python -m venv .venv
+          .\.venv\Scripts\python.exe -m pip install --upgrade pip
+          .\.venv\Scripts\pip.exe install -e .[dev]
+
+      - name: Bootstrap virtualenv (macOS / Linux)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          python -m venv .venv
+          .venv/bin/python -m pip install --upgrade pip
+          .venv/bin/pip install -e .[dev]
+
+      - name: Install Linux Qt runtime libs
+        if: matrix.os == 'ubuntu-22.04'
+        run: |
+          sudo apt-get update
+          # Minimum runtime libs PyQt6's xcb plugin links against on Ubuntu
+          sudo apt-get install -y \
+              libegl1 libxkbcommon0 libxcb-cursor0 libxcb-icccm4 libxcb-image0 \
+              libxcb-keysyms1 libxcb-randr0 libxcb-render-util0 libxcb-shape0 \
+              libxcb-sync1 libxcb-xfixes0 libxcb-xinerama0 libxcb-xkb1 \
+              libnss3 libxss1 libasound2 libdrm2 libgbm1 \
+              libxkbfile1 libxshmfence1
+
+      - name: Run tests (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .\.venv\Scripts\python.exe tools\check_versions.py
+          .\.venv\Scripts\python.exe -m pytest -q
+
+      - name: Run tests (macOS / Linux)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          .venv/bin/python tools/check_versions.py
+          .venv/bin/python -m pytest -q
+
+      - name: Build (Windows)
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: ${{ matrix.build_cmd }}
+
+      - name: Build (macOS / Linux)
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          chmod +x ./build.sh
+          ${{ matrix.build_cmd }}
+
+      - name: Package (Windows zip + sha256)
+        id: pack_win
+        if: matrix.os == 'windows-latest'
+        shell: pwsh
+        run: |
+          $version = "${{ needs.resolve-version.outputs.version }}"
+          $zipName = "ai-gauge-$version-windows.zip"
+          $shaName = "$zipName.sha256"
+          Compress-Archive -Path dist\ai-gauge -DestinationPath $zipName -Force
+          $sha = (Get-FileHash $zipName -Algorithm SHA256).Hash.ToLower()
+          "$sha *$zipName" | Out-File -Encoding ascii -FilePath $shaName
+          "archive=$zipName" | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+          "sha=$shaName"     | Out-File -FilePath $env:GITHUB_OUTPUT -Append -Encoding utf8
+
+      - name: Package (macOS / Linux tar.gz + sha256)
+        id: pack_unix
+        if: matrix.os != 'windows-latest'
+        shell: bash
+        run: |
+          version="${{ needs.resolve-version.outputs.version }}"
+          archive="ai-gauge-${version}-${{ matrix.label }}.tar.gz"
+          sha="${archive}.sha256"
+          # On mac, archive the .app bundle. On Linux, archive the dist folder.
+          if [ "${{ matrix.os }}" = "macos-latest" ]; then
+              tar -C dist -czf "$archive" ai-gauge.app
+          else
+              tar -C dist -czf "$archive" ai-gauge
+          fi
+          shasum -a 256 "$archive" | awk '{print $1 " *" $2}' > "$sha"
+          echo "archive=$archive" >> "$GITHUB_OUTPUT"
+          echo "sha=$sha"         >> "$GITHUB_OUTPUT"
+
+      - name: Upload artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-gauge-${{ matrix.label }}
+          path: |
+            ai-gauge-*.${{ matrix.archive_ext }}
+            ai-gauge-*.${{ matrix.archive_ext }}.sha256
+          if-no-files-found: error
+
+  release:
+    needs: [resolve-version, build]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all artifacts
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+
+      - name: Flatten artifact tree
+        shell: bash
+        run: |
+          mkdir -p release
+          find artifacts -mindepth 2 -type f -exec mv -t release {} +
+          ls -la release
+
+      - name: Create draft GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          draft: true
+          name: AI Gauge ${{ needs.resolve-version.outputs.version }}
+          tag_name: ${{ needs.resolve-version.outputs.tag }}
+          generate_release_notes: true
+          body: |
+            ## Highlights
+
+            _Replace this section with 3-5 user-facing highlights for this release before publishing the draft._
+
+            See [CHANGELOG.md](https://github.com/${{ github.repository }}/blob/${{ needs.resolve-version.outputs.tag }}/CHANGELOG.md) for full notes.
+
+            **Downloads** (pick the artifact for your OS, extract, and run):
+            - Windows: `ai-gauge-${{ needs.resolve-version.outputs.version }}-windows.zip`, run `ai-gauge.exe`
+            - macOS:   `ai-gauge-${{ needs.resolve-version.outputs.version }}-macos.tar.gz`, drag `ai-gauge.app` to Applications
+            - Linux:   `ai-gauge-${{ needs.resolve-version.outputs.version }}-linux.tar.gz`, run `./ai-gauge/ai-gauge`
+
+            **Verify:** SHA256 sums live next to each archive.
+
+            Builds are unsigned. Windows SmartScreen and macOS Gatekeeper may warn on first launch; see the README for the per-OS first-launch steps.
+          files: release/*

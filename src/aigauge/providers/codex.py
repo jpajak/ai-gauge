@@ -13,7 +13,8 @@ from .base import Provider
 from .diagnostics import log_page_diagnosis
 from .idle import idle_reset_state
 
-CODEX_USAGE_URL = "https://chatgpt.com/codex/cloud/settings/analytics#usage"
+CODEX_ANALYTICS_URL = "https://chatgpt.com/codex/cloud/settings/analytics"
+CODEX_USAGE_URL = f"{CODEX_ANALYTICS_URL}#personal-usage"
 _EXPECTED_ROWS = ("session", "weekly")
 log = logging.getLogger("aigauge.providers.codex")
 
@@ -22,30 +23,85 @@ log = logging.getLogger("aigauge.providers.codex")
 # fragments so Python can do the unit-aware normalization.
 EXTRACTOR_JS = r"""
 (() => {
+  function visibleText(el) {
+    return ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function windowTextAfterLabel(label, nextLabels) {
+    const bodyText = visibleText(document.body);
+    const lowerText = bodyText.toLowerCase();
+    const start = lowerText.indexOf(label.toLowerCase());
+    if (start < 0) return '';
+    let end = bodyText.length;
+    for (const nextLabel of nextLabels) {
+      const candidate = lowerText.indexOf(nextLabel.toLowerCase(), start + label.length);
+      if (candidate >= 0 && candidate < end) end = candidate;
+    }
+    return bodyText.slice(start, end).trim();
+  }
+
+  function maybeSelectPersonalUsageTab(bodyText) {
+    if (/5 hour usage limit/i.test(bodyText) && /Weekly usage limit/i.test(bodyText)) {
+      return null;
+    }
+
+    const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"],div,span,p'));
+    const label = labels.find(el => visibleText(el).toLowerCase() === 'personal usage');
+    if (!label) return null;
+
+    const target = label.closest('button,a,[role="tab"],[role="button"]') || label;
+    const selected =
+      target.getAttribute('aria-selected') === 'true' ||
+      target.getAttribute('data-state') === 'active' ||
+      /\bactive\b|\bselected\b/.test(String(target.className || ''));
+    if (selected) return 'waiting for personal usage cards';
+
+    target.click();
+    return 'selected personal usage tab';
+  }
+
   function findCardByLabel(label) {
+    const candidates = Array.from(document.querySelectorAll('article,section,[role="group"],div,li'))
+      .map(el => {
+        const text = visibleText(el);
+        return { el, text };
+      })
+      .filter(({ text }) => {
+        const lower = text.toLowerCase();
+        return lower.includes(label.toLowerCase()) && /%/.test(text) && text.length < 1600;
+      })
+      .sort((a, b) => {
+        const score = item =>
+          (item.el.tagName.toLowerCase() === 'article' ? -1000 : 0) +
+          (/reset/i.test(item.text) ? -100 : 0) +
+          item.text.length;
+        return score(a) - score(b);
+      });
+    if (candidates.length) return candidates[0].el;
+
     const headings = Array.from(document.querySelectorAll('h1,h2,h3,h4,div,span,p'));
     const heading = headings.find(el => {
-      const t = (el.textContent || '').trim();
+      const t = visibleText(el);
       return t === label || t.toLowerCase() === label.toLowerCase();
     });
     if (!heading) return null;
     let card = heading;
     for (let i = 0; i < 6 && card.parentElement; i++) {
       card = card.parentElement;
-      const txt = card.textContent || '';
-      if (/%/.test(txt) && /reset/i.test(txt)) return card;
+      const txt = visibleText(card);
+      if (/%/.test(txt)) return card;
     }
     return null;
   }
 
-  function readCard(label) {
+  function readCard(label, nextLabels) {
     const card = findCardByLabel(label);
-    if (!card) return null;
-    const text = (card.textContent || '').replace(/\s+/g, ' ').trim();
+    const text = card ? visibleText(card) : windowTextAfterLabel(label, nextLabels);
+    if (!text) return null;
     const pctMatch = text.match(/(\d+(?:\.\d+)?)\s*%/);
     const remaining = /remaining/i.test(text);
     const used = /used/i.test(text);
-    const resetMatch = text.match(/Resets?\s+(?:in\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current))/i);
+    const resetMatch = text.match(/Resets?\s+(?:(?:at|on|in)\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current|Personal|Team|5 hour)\b|\s+\d+(?:\.\d+)?\s*%)/i);
     return {
       raw: text.slice(0, 400),
       percent: pctMatch ? parseFloat(pctMatch[1]) : null,
@@ -54,7 +110,21 @@ EXTRACTOR_JS = r"""
     };
   }
 
-  const bodyText = (document.body.textContent || '').replace(/\s+/g, ' ').trim();
+  const bodyText = visibleText(document.body);
+  const personalTabReason = maybeSelectPersonalUsageTab(bodyText);
+  if (personalTabReason) {
+    return {
+      __retry_after_ms: 1200,
+      __retry_reason: personalTabReason,
+      logged_out: false,
+      session: null,
+      weekly: null,
+      url: location.href,
+      title: document.title,
+      body_text: bodyText.slice(0, 2000),
+    };
+  }
+
   const lowerText = bodyText.toLowerCase();
   const isLoggedOut =
     !!document.querySelector('a[href*="/auth/login"], a[href*="/login"]') ||
@@ -64,11 +134,13 @@ EXTRACTOR_JS = r"""
     (/log in|sign in/.test(lowerText) && !/usage limit/i.test(bodyText));
   return {
     logged_out: isLoggedOut,
-    session: readCard('5 hour usage limit'),
-    weekly: readCard('Weekly usage limit'),
+    session: readCard('5 hour usage limit', ['Weekly usage limit']),
+    weekly: readCard('Weekly usage limit', ['Personal usage', 'Team usage']),
     url: location.href,
     title: document.title,
-    body_text: bodyText.slice(0, 500),
+    has_percent_text: /%/.test(bodyText),
+    has_usage_text: /usage limit/i.test(bodyText),
+    body_text: bodyText.slice(0, 2000),
   };
 })();
 """
@@ -100,6 +172,8 @@ def _parse_reset_text(text: str | None) -> datetime | None:
     if not text:
         return None
     text = text.strip().rstrip(".")
+    text = re.sub(r"^at\s+", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"\s+at\s+", " ", text, count=1, flags=re.IGNORECASE)
     now = datetime.now()
 
     # Relative: "in 2 hr 59 min", "2h 59m", "6 hr 29 min"
@@ -163,14 +237,62 @@ def _normalize_percent(percent: float | None, kind: str) -> float | None:
     return percent
 
 
+def _is_codex_analytics_url(url: str) -> bool:
+    normalized = url.split("?", maxsplit=1)[0].split("#", maxsplit=1)[0]
+    return normalized == CODEX_ANALYTICS_URL
+
+
+def _payload_has_usage_signal(payload: dict[str, Any]) -> bool:
+    if bool(payload.get("has_percent_text")) or bool(payload.get("has_usage_text")):
+        return True
+    page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
+    return "%" in page_text or "usage limit" in page_text or "usage" in page_text
+
+
+def _parse_body_card(
+    body_text: str,
+    label: str,
+    next_labels: tuple[str, ...] = (),
+) -> dict[str, Any] | None:
+    text = re.sub(r"\s+", " ", body_text or "").strip()
+    lower_text = text.lower()
+    start = lower_text.find(label.lower())
+    if start < 0:
+        return None
+
+    end = len(text)
+    for next_label in next_labels:
+        candidate = lower_text.find(next_label.lower(), start + len(label))
+        if candidate >= 0:
+            end = min(end, candidate)
+    window = text[start:end].strip()
+    pct_match = re.search(r"(\d+(?:\.\d+)?)\s*%", window)
+    if not pct_match:
+        return None
+
+    reset_match = re.search(
+        r"Resets?\s+(?:(?:at|on|in)\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current|Personal|Team|5 hour)\b|\s+\d+(?:\.\d+)?\s*%)",
+        window,
+        re.IGNORECASE,
+    )
+    remaining = re.search(r"\bremaining\b", window, re.IGNORECASE)
+    used = re.search(r"\bused\b", window, re.IGNORECASE)
+    return {
+        "raw": window[:400],
+        "percent": float(pct_match.group(1)),
+        "kind": "remaining" if remaining else ("used" if used else "unknown"),
+        "reset_text": reset_match.group(1).strip() if reset_match else None,
+    }
+
+
 def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
     url = str(payload.get("url") or "")
-    if not url.startswith(CODEX_USAGE_URL.split("#", maxsplit=1)[0]):
+    if not _is_codex_analytics_url(url):
         return False
-    page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
-    if "%" in page_text or "usage limit" in page_text:
+    if _payload_has_usage_signal(payload):
         return False
-    return any(marker in page_text for marker in ("codex", "chatgpt", "tasks", "cloud"))
+    body_text = str(payload.get("body_text") or "").lower()
+    return any(marker in body_text for marker in ("codex", "chatgpt", "tasks", "cloud"))
 
 
 def _empty_usage_metrics() -> list[UsageMetric]:
@@ -202,18 +324,22 @@ def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
     )
 
 
-def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
+def _build_snapshot(
+    payload: dict[str, Any],
+    *,
+    account_id: str = "codex",
+) -> UsageSnapshot:
     page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
     if _is_logged_out_payload(payload):
         log_page_diagnosis(
             log,
-            provider="codex",
+            provider=account_id,
             classification="logged_out",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
         )
         return UsageSnapshot(
-            provider="codex",
+            provider=account_id,
             status=SnapshotStatus.AUTH_REQUIRED,
             error="Not signed in to ChatGPT.",
             raw=payload,
@@ -225,21 +351,29 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
     ):
         log_page_diagnosis(
             log,
-            provider="codex",
+            provider=account_id,
             classification="security_verification",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
         )
         return UsageSnapshot(
-            provider="codex",
+            provider=account_id,
             status=SnapshotStatus.AUTH_REQUIRED,
             error="ChatGPT security verification required. Click Connect and complete the browser check.",
             raw=payload,
         )
 
     metrics: list[UsageMetric] = []
-    for key, label in (("session", "Session"), ("weekly", "Weekly")):
-        card = payload.get(key)
+    body_text = str(payload.get("body_text") or "")
+    for key, label, source_label, next_labels in (
+        ("session", "Session", "5 hour usage limit", ("Weekly usage limit",)),
+        ("weekly", "Weekly", "Weekly usage limit", ("Personal usage", "Team usage")),
+    ):
+        card = payload.get(key) or _parse_body_card(
+            body_text,
+            source_label,
+            next_labels,
+        )
         if not card:
             continue
         percent = _normalize_percent(card.get("percent"), card.get("kind", ""))
@@ -258,6 +392,7 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
                 resets_at=resets_at,
                 reset_label=reset_label,
                 note=note,
+                window=reset_window,
             )
         )
 
@@ -265,34 +400,34 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
         if _looks_like_empty_signed_in_usage(payload):
             log_page_diagnosis(
                 log,
-                provider="codex",
+                provider=account_id,
                 classification="empty_signed_in_usage",
                 payload=payload,
                 expected_rows=_EXPECTED_ROWS,
             )
             return UsageSnapshot(
-                provider="codex",
+                provider=account_id,
                 status=SnapshotStatus.OK,
                 metrics=_empty_usage_metrics(),
                 raw=payload,
             )
         log_page_diagnosis(
             log,
-            provider="codex",
+            provider=account_id,
             classification="layout_changed",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
             level=logging.WARNING,
         )
         return UsageSnapshot(
-            provider="codex",
+            provider=account_id,
             status=SnapshotStatus.ERROR,
             error="Could not read usage from page (layout may have changed).",
             raw=payload,
         )
 
     return UsageSnapshot(
-        provider="codex",
+        provider=account_id,
         status=SnapshotStatus.OK,
         metrics=metrics,
         raw=payload,
@@ -303,16 +438,17 @@ class CodexProvider(Provider):
     name = "codex"
     display_name = "Codex"
 
-    def __init__(self, parent: QObject | None = None):
+    def __init__(self, parent: QObject | None = None, account_id: str = "codex"):
         self._parent = parent
         self._scraper: HeadlessScraper | None = None  # held to prevent GC
+        self._account_id = account_id
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         def _handle(result: Any, error: str) -> None:
             self._scraper = None
             if error or not isinstance(result, dict):
                 snapshot = UsageSnapshot(
-                    provider="codex",
+                    provider=self._account_id,
                     status=SnapshotStatus.ERROR,
                     error=error or "no data extracted",
                 )
@@ -321,7 +457,7 @@ class CodexProvider(Provider):
                 )
                 on_done(snapshot)
                 return
-            snapshot = _build_snapshot(result)
+            snapshot = _build_snapshot(result, account_id=self._account_id)
             if snapshot.status == SnapshotStatus.ERROR:
                 log.warning(
                     "provider snapshot error provider=codex reason=%s", snapshot.error
@@ -329,7 +465,7 @@ class CodexProvider(Provider):
             on_done(snapshot)
 
         self._scraper = HeadlessScraper(
-            provider="codex",
+            provider=self._account_id,
             url=CODEX_USAGE_URL,
             extractor_js=EXTRACTOR_JS,
             wait_ms=5000,

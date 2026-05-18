@@ -13,6 +13,7 @@ from ..config import (
     Config,
     browser_accounts,
     get_provider_cookie,
+    webview_profile_dir,
 )
 from .profile import get_profile
 
@@ -173,10 +174,30 @@ def inject_session_cookie(
     return bool(pairs)
 
 
+def _profile_has_persistent_cookies(account_id: str) -> bool:
+    """Whether QtWebEngine has already persisted cookies for this profile.
+
+    Chromium writes the SQLite ``Cookies`` file once it starts persisting (any
+    cookie write, including our own first paste). If the file is non-empty,
+    the profile owns a copy of whatever session cookies the site has rotated
+    to, and we should not overwrite them with the keyring's stored blob.
+    """
+    cookies_path = webview_profile_dir(account_id) / "Cookies"
+    try:
+        return cookies_path.exists() and cookies_path.stat().st_size > 0
+    except OSError:
+        return False
+
+
 def hydrate_all_from_keyring(config: Config | None = None) -> list[str]:
     """On startup, push any saved cookies into their respective WebEngine profiles.
 
-    Returns the list of providers that had a cookie loaded.
+    Skips accounts whose profile already has Chromium-persisted cookies on
+    disk — re-injecting in that case would overwrite session tokens that the
+    site has rotated mid-session with the stale blob the user originally
+    pasted, which causes spurious "Sign in" prompts after restart.
+
+    Returns the list of providers that had a cookie injected.
     """
     loaded: list[str] = []
     account_specs = (
@@ -189,19 +210,32 @@ def hydrate_all_from_keyring(config: Config | None = None) -> list[str]:
         pairs = _parse_cookie_pairs(kind, value) if value else []
         names = sorted({name for name, _ in pairs})
         has_auth = _has_auth_cookie(kind, pairs) if pairs else False
-        if value and account_id != kind:
-            injected = inject_session_cookie(kind, value, account_id=account_id)
+        profile_has_cookies = _profile_has_persistent_cookies(account_id)
+
+        if not value:
+            injected = False
+            skip_reason = "no_stored_cookie"
+        elif profile_has_cookies:
+            injected = False
+            skip_reason = "profile_has_live_cookies"
         else:
-            injected = bool(value and inject_session_cookie(kind, value))
+            skip_reason = ""
+            if account_id != kind:
+                injected = inject_session_cookie(kind, value, account_id=account_id)
+            else:
+                injected = bool(inject_session_cookie(kind, value))
+
         log.info(
             "cookie hydration provider=%s kind=%s stored=%s parsed_cookie_names=%s "
-            "has_auth_cookie=%s injected=%s",
+            "has_auth_cookie=%s profile_has_cookies=%s injected=%s skip_reason=%s",
             account_id,
             kind,
             bool(value),
             names,
             has_auth,
+            profile_has_cookies,
             injected,
+            skip_reason or "-",
         )
         if injected:
             loaded.append(account_id)

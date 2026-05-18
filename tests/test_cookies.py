@@ -152,3 +152,82 @@ def test_cookie_hydration_uses_account_ids_for_secrets_and_profiles(monkeypatch)
     assert injected == [
         ("codex", "__Secure-next-auth.session-token=secret", "codex-work")
     ]
+
+
+def test_cookie_hydration_skips_injection_when_profile_has_persistent_cookies(
+    monkeypatch, caplog
+):
+    # If Chromium has already persisted cookies for this profile, re-injecting
+    # the stored blob would overwrite session tokens the site has rotated
+    # since the original paste. Skip injection in that case.
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="codex-home",
+            kind="codex",
+            name="Home",
+            enabled=True,
+        )
+    )
+
+    from aigauge.config import webview_profile_dir
+
+    profile_dir = webview_profile_dir("codex-home")
+    profile_dir.mkdir(parents=True, exist_ok=True)
+    (profile_dir / "Cookies").write_bytes(b"SQLite format 3\x00")
+
+    monkeypatch.setattr(
+        cookies,
+        "get_provider_cookie",
+        lambda account_id: (
+            "__Secure-next-auth.session-token=stale" if account_id == "codex-home" else None
+        ),
+    )
+    injected = []
+    monkeypatch.setattr(
+        cookies,
+        "inject_session_cookie",
+        lambda *a, **kw: injected.append((a, kw)) or True,
+    )
+    caplog.set_level("INFO", logger="aigauge.webview.cookies")
+
+    assert cookies.hydrate_all_from_keyring(config) == []
+    assert injected == []
+    assert "profile_has_cookies=True" in caplog.text
+    assert "skip_reason=profile_has_live_cookies" in caplog.text
+
+
+def test_cookie_hydration_injects_when_profile_cookies_file_is_missing(
+    monkeypatch,
+):
+    # Fresh profile (no Cookies file): hydration must seed it from the keyring
+    # so the first scrape can sign in.
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="codex-fresh",
+            kind="codex",
+            name="Fresh",
+            enabled=True,
+        )
+    )
+
+    monkeypatch.setattr(
+        cookies,
+        "get_provider_cookie",
+        lambda account_id: (
+            "__Secure-next-auth.session-token=fresh" if account_id == "codex-fresh" else None
+        ),
+    )
+    injected = []
+    monkeypatch.setattr(
+        cookies,
+        "inject_session_cookie",
+        lambda provider, value, *, account_id=None: injected.append(
+            (provider, account_id)
+        )
+        or True,
+    )
+
+    assert cookies.hydrate_all_from_keyring(config) == ["codex-fresh"]
+    assert injected == [("codex", "codex-fresh")]

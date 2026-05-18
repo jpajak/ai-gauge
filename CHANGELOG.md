@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.5.6 - 2026-05-18
+
+### Changed
+
+- Claude and Codex now share a single `ScrapeRunner` that drives the headless scraper and retries the whole scrape once when the snapshot builder reports a transient layout error. Codex previously had no build-level retry, so a half-rendered analytics page would surface as an immediate error instead of recovering on the second pass.
+- The Claude extractor now polls inside the same page load when the usage panel hasn't rendered yet (no `%` and no `Plan usage limits` text). This reuses the existing `__retry_after_ms` path that Codex uses for the Personal usage tab, so a slow-hydrating panel no longer requires tearing down the page and reloading it.
+- Shared helpers (`normalize_percent`, `idle_session_weekly_metrics`, `is_security_verification_page`) are factored out of the Claude and Codex providers into `providers/_common.py` so the two paths stop drifting.
+
+### Fixed
+
+- Reduced AI Gauge log noise on Claude scrapes. claude.ai's `[IsolatedSegment]` analytics iframe and Datadog RUM bundle previously produced ~25 info-level console lines per refresh; those fragments are now filtered, and remaining JS info-level console messages are routed to DEBUG so only warnings and errors from the embedded pages reach the file log. Warnings, errors, and AI Gauge's own scrape lifecycle lines are unchanged.
+- Cookie hydration no longer overwrites Chromium's persisted cookies for an account on every startup. The keyring's stored blob is only re-injected when the profile has no `Cookies` file yet (first launch after Paste cookie, or a wiped profile). Once Chromium has its own cookie store on disk, session tokens that the site rotates mid-session now survive AI Gauge restarts instead of being clobbered back to the original paste, which had been causing pasted-cookie accounts to drift into a "Sign in" state after a few restarts.
+
 ## 0.5.5 - 2026-05-07
 
 ### Changed

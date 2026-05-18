@@ -7,7 +7,13 @@ from typing import Any, Callable
 from PyQt6.QtCore import QObject
 
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
-from ..webview.scraper import HeadlessScraper
+from ._common import (
+    idle_session_weekly_metrics,
+    is_security_verification_page,
+    normalize_percent,
+    page_text,
+)
+from ._scrape_runner import ScrapeRunner
 from .codex import _parse_reset_text  # reuse the same heuristic parser
 from .base import Provider
 from .diagnostics import log_page_diagnosis
@@ -21,6 +27,11 @@ log = logging.getLogger("aigauge.providers.claude")
 #   "Current session  Resets in 2 hr 59 min  [bar]  64% used"
 #   "All models       Resets in 6 hr 29 min  [bar]  30% used"
 # We locate each row by its label text, then read the % and reset string.
+#
+# If the page is signed in but the usage panel hasn't hydrated yet (no `%`
+# and no "Plan usage limits" text), the extractor asks the scraper to poll
+# again in-page rather than failing. The scraper caps in-page reruns at 5,
+# so this adds at most a few extra seconds before giving up.
 EXTRACTOR_JS = r"""
 (() => {
   const ROW_LABELS = [
@@ -76,29 +87,46 @@ EXTRACTOR_JS = r"""
     };
   }
 
+  const bodyText = (document.body.textContent || '').replace(/\s+/g, ' ').trim();
   const isLoggedOut =
     !!document.querySelector('a[href*="/login"]') &&
-    !document.body.textContent.includes('Plan usage limits');
+    !bodyText.includes('Plan usage limits');
+
+  const session = readRow('Current session');
+  const weeklyAll = readRow('All models');
+  const weeklyDesign = readRow('Claude Design');
+
+  // Page is on the usage URL, signed in, but the panel hasn't rendered yet:
+  // no `%` text anywhere and no "Plan usage limits" header. Poll again
+  // in-page so we don't tear down the load and lose the warmed React tree.
+  const onUsageUrl = /\/settings\/usage/.test(location.pathname);
+  const usagePanelRendered = /Plan usage limits/i.test(bodyText) || /%/.test(bodyText);
+  const allRowsEmpty = !session && !weeklyAll && !weeklyDesign;
+  if (!isLoggedOut && onUsageUrl && !usagePanelRendered && allRowsEmpty) {
+    return {
+      __retry_after_ms: 1000,
+      __retry_reason: 'usage panel not rendered',
+      logged_out: false,
+      session: null,
+      weekly_all: null,
+      weekly_design: null,
+      url: location.href,
+      title: document.title,
+      body_text: bodyText.slice(0, 8000),
+    };
+  }
 
   return {
     logged_out: isLoggedOut,
-    session: readRow('Current session'),
-    weekly_all: readRow('All models'),
-    weekly_design: readRow('Claude Design'),
+    session: session,
+    weekly_all: weeklyAll,
+    weekly_design: weeklyDesign,
     url: location.href,
     title: document.title,
-    body_text: (document.body.textContent || '').replace(/\s+/g, ' ').trim().slice(0, 8000),
+    body_text: bodyText.slice(0, 8000),
   };
 })();
 """
-
-
-def _normalize_percent(percent: float | None, kind: str) -> float | None:
-    if percent is None:
-        return None
-    if kind == "remaining":
-        return max(0.0, 100.0 - percent)
-    return percent
 
 
 def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
@@ -107,36 +135,17 @@ def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
     title = str(payload.get("title") or "").strip().lower()
     if title != "claude":
         return False
-    page_text = str(payload.get("body_text") or "").lower()
+    body = str(payload.get("body_text") or "").lower()
     # Require positive evidence the usage panel actually rendered. Without
     # this, a partially-loaded page (sidebar only, main pane still fetching)
     # gets misclassified as idle and shown as 0/0.
-    if "plan usage limits" not in page_text:
+    if "plan usage limits" not in body:
         return False
     # If percent text is on the page but the row extractor missed it, that's
     # a layout change — not idle.
-    if "%" in page_text:
+    if "%" in body:
         return False
     return True
-
-
-def _empty_usage_metrics() -> list[UsageMetric]:
-    return [
-        UsageMetric(
-            "Session",
-            0.0,
-            None,
-            "idle",
-            "Countdown starts when you next use this limit.",
-        ),
-        UsageMetric(
-            "Weekly",
-            0.0,
-            None,
-            "idle",
-            "Countdown starts when you next use this limit.",
-        ),
-    ]
 
 
 def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
@@ -145,11 +154,11 @@ def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
 
 
 def _is_load_failed_payload(payload: dict[str, Any]) -> bool:
-    page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
+    text = page_text(payload)
     return (
-        "can't reach claude" in page_text
-        or "check your connection" in page_text
-        or "try again" in page_text and "claude" in page_text
+        "can't reach claude" in text
+        or "check your connection" in text
+        or ("try again" in text and "claude" in text)
     )
 
 
@@ -159,7 +168,6 @@ def _build_snapshot(
     account_id: str = "claude",
     show_design: bool = False,
 ) -> UsageSnapshot:
-    page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
     if _is_logged_out_payload(payload):
         log_page_diagnosis(
             log,
@@ -189,11 +197,7 @@ def _build_snapshot(
             error="Claude page load failed. Check your connection and try again.",
             raw=payload,
         )
-    if (
-        "verify you are human" in page_text
-        or "just a moment" in page_text
-        or "cloudflare" in page_text
-    ):
+    if is_security_verification_page(payload):
         log_page_diagnosis(
             log,
             provider=account_id,
@@ -219,7 +223,7 @@ def _build_snapshot(
         card = payload.get(key)
         if not card:
             continue
-        percent = _normalize_percent(card.get("percent"), card.get("kind", ""))
+        percent = normalize_percent(card.get("percent"), card.get("kind", ""))
         if percent is None:
             continue
         resets_at = _parse_reset_text(card.get("reset_text"))
@@ -248,7 +252,7 @@ def _build_snapshot(
                 payload=payload,
                 expected_rows=_EXPECTED_ROWS,
             )
-            metrics = _empty_usage_metrics()
+            metrics = idle_session_weekly_metrics()
         else:
             log_page_diagnosis(
                 log,
@@ -277,8 +281,6 @@ class ClaudeProvider(Provider):
     name = "claude"
     display_name = "Claude"
 
-    _MAX_BUILD_ATTEMPTS = 2
-
     def __init__(
         self,
         parent: QObject | None = None,
@@ -286,67 +288,27 @@ class ClaudeProvider(Provider):
         account_id: str = "claude",
     ):
         self._parent = parent
-        self._scraper: HeadlessScraper | None = None
         self._show_design = show_design
         self._account_id = account_id
+        self._runner: ScrapeRunner | None = None  # held to prevent GC
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
-        # Connect via a closure rather than a bound method on `self`. PyQt6's
-        # frozen Windows build was observed to drop bound-method temporaries
-        # on non-QObject receivers, breaking the `done` signal silently —
-        # CodexProvider uses the same closure shape for the same reason.
-        attempts = [0]
-
-        def _handle(result: Any, error: str) -> None:
-            self._scraper = None
-            if error or not isinstance(result, dict):
-                snapshot = UsageSnapshot(
-                    provider=self._account_id,
-                    status=SnapshotStatus.ERROR,
-                    error=error or "no data extracted",
-                )
-                log.warning(
-                    "provider snapshot error provider=claude reason=%s",
-                    snapshot.error,
-                )
-                on_done(snapshot)
-                return
-            snapshot = _build_snapshot(
-                result,
+        def _build(payload: dict[str, Any]) -> UsageSnapshot:
+            return _build_snapshot(
+                payload,
                 account_id=self._account_id,
                 show_design=self._show_design,
             )
-            if (
-                snapshot.status == SnapshotStatus.ERROR
-                and attempts[0] < self._MAX_BUILD_ATTEMPTS
-            ):
-                # The page loaded but the usage panel hadn't populated.
-                # Retry the whole scrape — usually the second attempt sees
-                # the rendered DOM.
-                log.warning(
-                    "provider transient error provider=claude attempt=%s reason=%s — retrying",
-                    attempts[0],
-                    snapshot.error,
-                )
-                _start_scrape()
-                return
-            if snapshot.status == SnapshotStatus.ERROR:
-                log.warning(
-                    "provider snapshot error provider=claude reason=%s",
-                    snapshot.error,
-                )
-            on_done(snapshot)
 
-        def _start_scrape() -> None:
-            attempts[0] += 1
-            self._scraper = HeadlessScraper(
-                provider=self._account_id,
-                url=CLAUDE_USAGE_URL,
-                extractor_js=EXTRACTOR_JS,
-                wait_ms=5000,
-                max_attempts=2,
-                parent=self._parent,
-            )
-            self._scraper.done.connect(_handle)
-
-        _start_scrape()
+        self._runner = ScrapeRunner(
+            account_id=self._account_id,
+            url=CLAUDE_USAGE_URL,
+            extractor_js=EXTRACTOR_JS,
+            build=_build,
+            log=log,
+            wait_ms=5000,
+            transport_max_attempts=2,
+            build_max_attempts=2,
+            parent=self._parent,
+        )
+        self._runner.run(on_done)

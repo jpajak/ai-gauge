@@ -8,7 +8,12 @@ from typing import Any, Callable
 from PyQt6.QtCore import QObject
 
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
-from ..webview.scraper import HeadlessScraper
+from ._common import (
+    idle_session_weekly_metrics,
+    is_security_verification_page,
+    normalize_percent,
+)
+from ._scrape_runner import ScrapeRunner
 from .base import Provider
 from .diagnostics import log_page_diagnosis
 from .idle import idle_reset_state
@@ -229,14 +234,6 @@ def _parse_reset_text(text: str | None) -> datetime | None:
     return None
 
 
-def _normalize_percent(percent: float | None, kind: str) -> float | None:
-    if percent is None:
-        return None
-    if kind == "remaining":
-        return max(0.0, 100.0 - percent)
-    return percent
-
-
 def _is_codex_analytics_url(url: str) -> bool:
     normalized = url.split("?", maxsplit=1)[0].split("#", maxsplit=1)[0]
     return normalized == CODEX_ANALYTICS_URL
@@ -295,25 +292,6 @@ def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
     return any(marker in body_text for marker in ("codex", "chatgpt", "tasks", "cloud"))
 
 
-def _empty_usage_metrics() -> list[UsageMetric]:
-    return [
-        UsageMetric(
-            "Session",
-            0.0,
-            None,
-            "idle",
-            "Countdown starts when you next use this limit.",
-        ),
-        UsageMetric(
-            "Weekly",
-            0.0,
-            None,
-            "idle",
-            "Countdown starts when you next use this limit.",
-        ),
-    ]
-
-
 def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
     url = str(payload.get("url") or "").lower()
     return (
@@ -329,7 +307,6 @@ def _build_snapshot(
     *,
     account_id: str = "codex",
 ) -> UsageSnapshot:
-    page_text = f"{payload.get('title', '')} {payload.get('body_text', '')}".lower()
     if _is_logged_out_payload(payload):
         log_page_diagnosis(
             log,
@@ -344,11 +321,7 @@ def _build_snapshot(
             error="Not signed in to ChatGPT.",
             raw=payload,
         )
-    if (
-        "verify you are human" in page_text
-        or "just a moment" in page_text
-        or "cloudflare" in page_text
-    ):
+    if is_security_verification_page(payload):
         log_page_diagnosis(
             log,
             provider=account_id,
@@ -376,7 +349,7 @@ def _build_snapshot(
         )
         if not card:
             continue
-        percent = _normalize_percent(card.get("percent"), card.get("kind", ""))
+        percent = normalize_percent(card.get("percent"), card.get("kind", ""))
         resets_at = _parse_reset_text(card.get("reset_text"))
         reset_window = timedelta(hours=5) if key == "session" else timedelta(days=7)
         resets_at, reset_label, idle_note = idle_reset_state(
@@ -408,7 +381,7 @@ def _build_snapshot(
             return UsageSnapshot(
                 provider=account_id,
                 status=SnapshotStatus.OK,
-                metrics=_empty_usage_metrics(),
+                metrics=idle_session_weekly_metrics(),
                 raw=payload,
             )
         log_page_diagnosis(
@@ -440,35 +413,22 @@ class CodexProvider(Provider):
 
     def __init__(self, parent: QObject | None = None, account_id: str = "codex"):
         self._parent = parent
-        self._scraper: HeadlessScraper | None = None  # held to prevent GC
         self._account_id = account_id
+        self._runner: ScrapeRunner | None = None  # held to prevent GC
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
-        def _handle(result: Any, error: str) -> None:
-            self._scraper = None
-            if error or not isinstance(result, dict):
-                snapshot = UsageSnapshot(
-                    provider=self._account_id,
-                    status=SnapshotStatus.ERROR,
-                    error=error or "no data extracted",
-                )
-                log.warning(
-                    "provider snapshot error provider=codex reason=%s", snapshot.error
-                )
-                on_done(snapshot)
-                return
-            snapshot = _build_snapshot(result, account_id=self._account_id)
-            if snapshot.status == SnapshotStatus.ERROR:
-                log.warning(
-                    "provider snapshot error provider=codex reason=%s", snapshot.error
-                )
-            on_done(snapshot)
+        def _build(payload: dict[str, Any]) -> UsageSnapshot:
+            return _build_snapshot(payload, account_id=self._account_id)
 
-        self._scraper = HeadlessScraper(
-            provider=self._account_id,
+        self._runner = ScrapeRunner(
+            account_id=self._account_id,
             url=CODEX_USAGE_URL,
             extractor_js=EXTRACTOR_JS,
+            build=_build,
+            log=log,
             wait_ms=5000,
+            transport_max_attempts=1,
+            build_max_attempts=2,
             parent=self._parent,
         )
-        self._scraper.done.connect(_handle)
+        self._runner.run(on_done)

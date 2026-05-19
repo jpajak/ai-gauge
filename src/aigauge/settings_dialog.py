@@ -47,7 +47,6 @@ from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
 from .startup import set_start_at_login
 
-
 log = logging.getLogger("aigauge.settings_dialog")
 
 _COPILOT_PLAN_QUOTAS = (
@@ -459,9 +458,7 @@ class SettingsDialog(QDialog):
         copilot_form.addRow("Personal Access Token:", self.gh_pat_edit)
 
         self.clear_pat_cb = QCheckBox("Clear saved GitHub PAT")
-        self.clear_pat_cb.setToolTip(
-            "Remove the token from the system keychain."
-        )
+        self.clear_pat_cb.setToolTip("Remove the token from the system keychain.")
         self.clear_pat_cb.setVisible(self._had_existing_pat)
         if self._had_existing_pat:
             copilot_form.addRow("", self.clear_pat_cb)
@@ -589,9 +586,7 @@ class SettingsDialog(QDialog):
         self.or_daily_budget.setSingleStep(1.0)
         self.or_daily_budget.setPrefix("$ ")
         self.or_daily_budget.setSpecialValueText("(no gauge)")
-        self.or_daily_budget.setValue(
-            float(config.openrouter.daily_budget or 0.0)
-        )
+        self.or_daily_budget.setValue(float(config.openrouter.daily_budget or 0.0))
         openrouter_form.addRow("Daily budget:", self.or_daily_budget)
 
         budget_hint = _hint_label(
@@ -693,7 +688,8 @@ class SettingsDialog(QDialog):
 
     def _remove_browser_account(self, account_id: str) -> None:
         self._browser_accounts = [
-            account for account in self._current_browser_accounts()
+            account
+            for account in self._current_browser_accounts()
             if account.id != account_id
         ]
         self._removed_browser_account_ids.append(account_id)
@@ -722,7 +718,9 @@ class SettingsDialog(QDialog):
                 self._browser_account_rows.append(row)
                 layout.addWidget(row)
             add_btn = QPushButton(f"Add another {provider_base_name(kind)}")
-            add_btn.clicked.connect(lambda _checked=False, k=kind: self._add_browser_account(k))
+            add_btn.clicked.connect(
+                lambda _checked=False, k=kind: self._add_browser_account(k)
+            )
             add_btn.setFixedWidth(150)
             layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignLeft)
 

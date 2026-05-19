@@ -33,7 +33,9 @@ def test_paste_cookie_button_emits_paste_cookie_signal(qtbot):
 
 def test_claude_open_usage_button_launches_browser(qtbot, monkeypatch):
     opened = []
-    monkeypatch.setattr(settings_dialog, "_open_in_browser", lambda url: opened.append(url))
+    monkeypatch.setattr(
+        settings_dialog, "_open_in_browser", lambda url: opened.append(url)
+    )
 
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
@@ -44,7 +46,9 @@ def test_claude_open_usage_button_launches_browser(qtbot, monkeypatch):
 
 def test_codex_open_usage_button_launches_browser(qtbot, monkeypatch):
     opened = []
-    monkeypatch.setattr(settings_dialog, "_open_in_browser", lambda url: opened.append(url))
+    monkeypatch.setattr(
+        settings_dialog, "_open_in_browser", lambda url: opened.append(url)
+    )
 
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
@@ -71,7 +75,11 @@ def test_add_codex_account_creates_named_secondary_row(qtbot, monkeypatch):
 def test_remove_secondary_account_clears_cookie(qtbot, monkeypatch):
     removed = []
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
-    monkeypatch.setattr(settings_dialog, "set_provider_cookie", lambda key, value: removed.append((key, value)))
+    monkeypatch.setattr(
+        settings_dialog,
+        "set_provider_cookie",
+        lambda key, value: removed.append((key, value)),
+    )
     config = Config()
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
@@ -99,8 +107,12 @@ def test_claude_design_limit_is_optional(qtbot, monkeypatch):
 
 def test_clear_saved_pat_checkbox_removes_existing_pat(qtbot, monkeypatch):
     calls = []
-    monkeypatch.setattr(settings_dialog, "get_github_pat", lambda: None if calls else "saved")
-    monkeypatch.setattr(settings_dialog, "set_github_pat", lambda value: calls.append(value))
+    monkeypatch.setattr(
+        settings_dialog, "get_github_pat", lambda: None if calls else "saved"
+    )
+    monkeypatch.setattr(
+        settings_dialog, "set_github_pat", lambda value: calls.append(value)
+    )
 
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)

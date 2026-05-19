@@ -5,6 +5,7 @@ import json
 import logging
 import os
 import sys
+from dataclasses import replace
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import QObject, QLockFile, QPoint, Qt, QTimer
@@ -157,6 +158,21 @@ def _raw_summary(raw: dict) -> str:
         return json.dumps(_summarize_for_log(raw), sort_keys=True, default=str)
     except TypeError:
         return repr(raw)
+
+
+def _preserve_error_metrics(
+    snapshot: UsageSnapshot,
+    previous: UsageSnapshot | None,
+) -> UsageSnapshot:
+    if (
+        snapshot.status == SnapshotStatus.ERROR
+        and not snapshot.metrics
+        and previous is not None
+        and previous.status in (SnapshotStatus.OK, SnapshotStatus.ERROR)
+        and previous.metrics
+    ):
+        return replace(snapshot, metrics=list(previous.metrics))
+    return snapshot
 
 
 def _acquire_instance_lock() -> QLockFile | None:
@@ -538,6 +554,10 @@ class App(QObject):
             )
 
     def _on_snapshot(self, snapshot: UsageSnapshot) -> None:
+        snapshot = _preserve_error_metrics(
+            snapshot,
+            self._snapshots.get(snapshot.provider),
+        )
         self._snapshots[snapshot.provider] = snapshot
         self._cycle_signatures[snapshot.provider] = _snapshot_signature(snapshot)
         self._inflight.discard(snapshot.provider)

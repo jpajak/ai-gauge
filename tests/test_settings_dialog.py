@@ -31,6 +31,28 @@ def test_paste_cookie_button_emits_paste_cookie_signal(qtbot):
     assert signal.args == ["codex"]
 
 
+def test_claude_open_usage_button_launches_browser(qtbot, monkeypatch):
+    opened = []
+    monkeypatch.setattr(settings_dialog, "_open_in_browser", lambda url: opened.append(url))
+
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    _button(dialog, "claude_open_usage_btn").click()
+
+    assert opened == [settings_dialog.CLAUDE_USAGE_URL]
+
+
+def test_codex_open_usage_button_launches_browser(qtbot, monkeypatch):
+    opened = []
+    monkeypatch.setattr(settings_dialog, "_open_in_browser", lambda url: opened.append(url))
+
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    _button(dialog, "codex_open_usage_btn").click()
+
+    assert opened == [settings_dialog.CODEX_USAGE_URL]
+
+
 def test_add_codex_account_creates_named_secondary_row(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
     config = Config()

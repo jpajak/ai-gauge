@@ -289,6 +289,33 @@ def test_collapsed_mode_shows_session_summary(qtbot):
     assert all("Weekly" not in text for text in _collapsed_chip_texts(widget))
 
 
+def test_error_snapshot_can_show_stale_metrics(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.ERROR,
+            error="extractor retry limit exceeded",
+            metrics=[
+                UsageMetric("Session", 50.0, None),
+                UsageMetric("Weekly", 12.0, None),
+            ],
+        ),
+        "Claude",
+    )
+
+    tile = widget._tiles["claude"]  # noqa: SLF001
+    assert "error · stale" in tile.status.text()
+    assert [row.label.text() for row in tile._rows] == ["Session", "Weekly"]  # noqa: SLF001
+    assert tile._rows[0].pct.text() == "50%"  # noqa: SLF001
+
+    widget.set_collapsed(True)
+
+    assert _collapsed_chip_texts(widget) == ["Claude 50% stale"]
+
+
 def test_collapsed_mode_shows_openrouter_balance(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)

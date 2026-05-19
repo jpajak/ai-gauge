@@ -757,20 +757,43 @@ class _ProviderTile(QFrame):
             return
 
         if snapshot.status == SnapshotStatus.ERROR:
-            label = _short_error_reason(snapshot.error)
+            label = (
+                "error · stale"
+                if snapshot.metrics
+                else _short_error_reason(snapshot.error)
+            )
             self.status.setText(
                 f'<a href="details" style="color:#ef4444; text-decoration:none;">{label}</a>'
             )
             self.status.setStyleSheet(
                 "color: #ef4444; font-size: 10px; font-style: normal;"
             )
-            self.status.setToolTip(
-                (snapshot.error or "unknown error") + "\n\nClick for details."
-            )
+            tooltip = (snapshot.error or "unknown error") + "\n\nClick for details."
+            if snapshot.metrics:
+                tooltip += "\nLast successful values are still shown below."
+            self.status.setToolTip(tooltip)
             self.status.setCursor(Qt.CursorShape.PointingHandCursor)
             self.action_btn.setVisible(False)
-            self.expand_btn.setVisible(False)
-            self._set_rows([])
+            has_breakdown = any(m.tag for m in snapshot.metrics)
+            self.expand_btn.setVisible(has_breakdown)
+            self._update_expand_btn_glyph()
+            visible = [
+                m for m in snapshot.metrics if not m.tag or self._expanded
+            ]
+            self._set_rows(
+                [
+                    (
+                        m.label,
+                        m.percent_used,
+                        m.resets_at,
+                        m.reset_label,
+                        m.note,
+                        m.window,
+                        m.tag,
+                    )
+                    for m in visible
+                ]
+            )
             return
 
         # OK
@@ -1259,6 +1282,12 @@ class UsageWidget(QWidget):
         if snapshot.status == SnapshotStatus.AUTH_REQUIRED:
             return f"{display} sign in"
         if snapshot.status == SnapshotStatus.ERROR:
+            metric = next(
+                (m for m in snapshot.metrics if m.label.lower() == "session"),
+                snapshot.metrics[0] if snapshot.metrics else None,
+            )
+            if metric is not None:
+                return f"{display} {_format_summary_percent(metric.percent_used)} stale"
             return f"{display} error"
         metric = next(
             (m for m in snapshot.metrics if m.label.lower() == "session"),
@@ -1332,8 +1361,21 @@ class UsageWidget(QWidget):
             tooltip = snapshot.error or "Sign in required."
             kind = "auth"
         elif snapshot.status == SnapshotStatus.ERROR:
-            text = f"{display} error"
-            tooltip = snapshot.error or "Refresh failed."
+            metric = next(
+                (m for m in snapshot.metrics if m.label.lower() == "session"),
+                snapshot.metrics[0] if snapshot.metrics else None,
+            )
+            if metric is not None:
+                percent = metric.percent_used
+                pace = _time_elapsed_percent(metric.resets_at, metric.window)
+                text = f"{display} {_format_summary_percent(percent)} stale"
+                tooltip = snapshot.error or "Refresh failed."
+                pace_line = _pace_tooltip_line(metric.resets_at, metric.window)
+                if pace_line:
+                    tooltip += "\n\n" + pace_line
+            else:
+                text = f"{display} error"
+                tooltip = snapshot.error or "Refresh failed."
             kind = "error"
         elif provider == "openrouter":
             text, tooltip = _openrouter_compact_text(snapshot)

@@ -3,7 +3,8 @@ from __future__ import annotations
 import logging
 import uuid
 
-from PyQt6.QtCore import Qt, pyqtSignal
+from PyQt6.QtCore import Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import QDesktopServices
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -42,6 +43,8 @@ from .config import (
 )
 from .error_dialog import reveal_path
 from .logging_setup import log_path
+from .providers.claude import CLAUDE_USAGE_URL
+from .providers.codex import CODEX_USAGE_URL
 from .startup import set_start_at_login
 
 
@@ -201,6 +204,10 @@ def _hint_label(text: str) -> QLabel:
     label.setOpenExternalLinks(True)
     label.setWordWrap(True)
     return label
+
+
+def _open_in_browser(url: str) -> None:
+    QDesktopServices.openUrl(QUrl(url))
 
 
 class _BrowserAccountRow(QWidget):
@@ -388,6 +395,16 @@ class SettingsDialog(QDialog):
                 "because embedded browsers often cannot complete that flow."
             )
         )
+        claude_usage_btn = QPushButton("Open usage in browser")
+        claude_usage_btn.setObjectName("claude_open_usage_btn")
+        claude_usage_btn.setToolTip("Open Claude's usage page in your default browser.")
+        claude_usage_btn.clicked.connect(
+            lambda _checked=False: _open_in_browser(CLAUDE_USAGE_URL)
+        )
+        claude_accounts_layout.addWidget(
+            claude_usage_btn,
+            alignment=Qt.AlignmentFlag.AlignLeft,
+        )
         self._claude_accounts_layout = QVBoxLayout()
         self._claude_accounts_layout.setSpacing(6)
         claude_accounts_layout.addLayout(self._claude_accounts_layout)
@@ -403,6 +420,16 @@ class SettingsDialog(QDialog):
                 "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
                 "because embedded browsers often cannot complete that flow."
             )
+        )
+        codex_usage_btn = QPushButton("Open usage in browser")
+        codex_usage_btn.setObjectName("codex_open_usage_btn")
+        codex_usage_btn.setToolTip("Open Codex's usage page in your default browser.")
+        codex_usage_btn.clicked.connect(
+            lambda _checked=False: _open_in_browser(CODEX_USAGE_URL)
+        )
+        codex_accounts_layout.addWidget(
+            codex_usage_btn,
+            alignment=Qt.AlignmentFlag.AlignLeft,
         )
         self._codex_accounts_layout = QVBoxLayout()
         self._codex_accounts_layout.setSpacing(6)

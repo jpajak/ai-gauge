@@ -55,7 +55,12 @@ class HeadlessScraper(QObject):
 
     done = pyqtSignal(object, str)  # (result_or_None, error_or_empty_string)
 
-    _RETRYABLE_ERRORS = ("timeout", "page failed to load", "extractor returned null")
+    _RETRYABLE_ERRORS = (
+        "timeout",
+        "page failed to load",
+        "extractor returned null",
+        "extractor retry limit exceeded",
+    )
 
     def __init__(
         self,

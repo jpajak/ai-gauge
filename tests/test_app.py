@@ -6,6 +6,7 @@ from aigauge.app import (
     _acquire_instance_lock,
     _adaptive_refresh_minutes,
     _enabled_providers,
+    _preserve_error_metrics,
     _refresh_provider_order,
     _raw_summary,
 )
@@ -236,6 +237,43 @@ def test_raw_summary_includes_sanitized_payload_details():
     assert "xxx" in summary
     assert "more" in summary
     assert len(summary) < 700
+
+
+def test_error_snapshot_preserves_previous_metrics():
+    previous = UsageSnapshot(
+        provider="claude",
+        status=SnapshotStatus.OK,
+        metrics=[UsageMetric("Session", 42.0, None)],
+    )
+    current = UsageSnapshot(
+        provider="claude",
+        status=SnapshotStatus.ERROR,
+        error="extractor retry limit exceeded",
+    )
+
+    merged = _preserve_error_metrics(current, previous)
+
+    assert merged.status == SnapshotStatus.ERROR
+    assert merged.error == "extractor retry limit exceeded"
+    assert [(m.label, m.percent_used) for m in merged.metrics] == [("Session", 42.0)]
+
+
+def test_repeated_error_snapshot_keeps_stale_metrics():
+    previous = UsageSnapshot(
+        provider="claude",
+        status=SnapshotStatus.ERROR,
+        error="previous failure",
+        metrics=[UsageMetric("Session", 42.0, None)],
+    )
+    current = UsageSnapshot(
+        provider="claude",
+        status=SnapshotStatus.ERROR,
+        error="extractor retry limit exceeded",
+    )
+
+    merged = _preserve_error_metrics(current, previous)
+
+    assert [(m.label, m.percent_used) for m in merged.metrics] == [("Session", 42.0)]
 
 
 def test_lifecycle_context_includes_refresh_state():

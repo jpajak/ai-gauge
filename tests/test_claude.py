@@ -20,6 +20,73 @@ def test_claude_cloudflare_payload_is_auth_required():
     assert "security verification" in (snapshot.error or "")
 
 
+def test_claude_usage_rows_ignore_cloudflare_chat_titles():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": {"percent": 5, "kind": "used", "reset_text": "6 min"},
+            "weekly_all": {"percent": 26, "kind": "used", "reset_text": "Thu 9:59 AM"},
+            "weekly_design": {"percent": 0, "kind": "used", "reset_text": None},
+            "title": "Claude",
+            "url": CLAUDE_USAGE_URL,
+            "body_text": (
+                "New chat Search Chats Projects Recents "
+                "Cloudflare push model for local GitHub repos "
+                "Plan usage limits Current session 5% used All models 26% used"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly"]
+
+
+def test_claude_usage_rows_ignore_connectivity_chat_titles():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": {"percent": 5, "kind": "used", "reset_text": "6 min"},
+            "weekly_all": {"percent": 26, "kind": "used", "reset_text": "Thu 9:59 AM"},
+            "weekly_design": None,
+            "title": "Claude",
+            "url": CLAUDE_USAGE_URL,
+            "body_text": (
+                "New chat Search Chats Projects Recents "
+                "Can't reach Claude, check your connection and try again "
+                "Plan usage limits Current session 5% used All models 26% used"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly"]
+
+
+def test_claude_idle_usage_ignores_cloudflare_chat_titles():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly_all": None,
+            "weekly_design": None,
+            "title": "Claude",
+            "url": CLAUDE_USAGE_URL,
+            "body_text": (
+                "New chat Search Chats Projects Recents "
+                "Just a moment debugging Cloudflare "
+                "Plan usage limits Current session Resets when you next use this limit "
+                "All models Resets when you next use this limit"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(metric.label, metric.percent_used) for metric in snapshot.metrics] == [
+        ("Session", 0.0),
+        ("Weekly", 0.0),
+    ]
+
+
 def test_claude_logout_payload_is_auth_required():
     snapshot = _build_snapshot(
         {

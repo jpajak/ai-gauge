@@ -8,6 +8,7 @@ from PyQt6.QtCore import QObject
 
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from ._common import (
+    has_usage_page_signal,
     idle_session_weekly_metrics,
     is_security_verification_page,
     normalize_percent,
@@ -154,6 +155,8 @@ def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
 
 
 def _is_load_failed_payload(payload: dict[str, Any]) -> bool:
+    if has_usage_page_signal(payload):
+        return False
     text = page_text(payload)
     return (
         "can't reach claude" in text

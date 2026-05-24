@@ -2,16 +2,17 @@
 
 ## Unreleased
 
+## 0.5.7 - 2026-05-18
+
 ### Added
 
 - Claude and Codex settings tabs now include an `Open usage in browser` button so you can jump straight to each provider's web usage page from the app.
-
-## 0.5.7 - 2026-05-18
 
 ### Fixed
 
 - Claude's in-page usage-panel polling timeout is now treated as a retryable scrape failure, so the configured second full page-load attempt actually runs instead of surfacing `extractor retry limit exceeded` immediately.
 - Provider tiles now keep showing the last successful metric rows when a later refresh fails, with an `error · stale` status so the stale values remain useful but clearly marked.
+- Claude and Codex no longer treat incidental `Cloudflare` text inside normal signed-in page content as a browser-check interstitial. The shared security-verification detector now requires stronger challenge signals and ignores pages with usage-page evidence, preventing false `Click Connect` auth errors on valid usage pages.
 
 ## 0.5.6 - 2026-05-18
 

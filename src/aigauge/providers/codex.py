@@ -9,6 +9,7 @@ from PyQt6.QtCore import QObject
 
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from ._common import (
+    has_usage_page_signal,
     idle_session_weekly_metrics,
     is_security_verification_page,
     normalize_percent,
@@ -294,12 +295,13 @@ def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
 
 def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
     url = str(payload.get("url") or "").lower()
-    return (
-        bool(payload.get("logged_out"))
-        or "/auth/login" in url
-        or "/login" in url
-        or "/logout" in url
-    )
+    if "/auth/login" in url or "/login" in url or "/logout" in url:
+        return True
+    if bool(payload.get("logged_out")):
+        return not (
+            has_usage_page_signal(payload) or _looks_like_empty_signed_in_usage(payload)
+        )
+    return False
 
 
 def _build_snapshot(

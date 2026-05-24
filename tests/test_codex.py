@@ -48,6 +48,41 @@ def test_codex_logged_out_payload_is_auth_required():
     assert "Not signed in" in (snapshot.error or "")
 
 
+def test_codex_idle_usage_ignores_login_task_titles():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": True,
+            "session": None,
+            "weekly": None,
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": "Codex cloud tasks Sign in flow debugging",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [(metric.label, metric.percent_used) for metric in snapshot.metrics] == [
+        ("Session", 0.0),
+        ("Weekly", 0.0),
+    ]
+
+
+def test_codex_usage_rows_ignore_stale_logged_out_flag():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": True,
+            "session": {"percent": 12, "kind": "used", "reset_text": "4 hr 10 min"},
+            "weekly": {"percent": 31, "kind": "used", "reset_text": "Mon 6:00 PM"},
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": "Codex Tasks Sign in debugging 5 hour usage limit 12% used",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly"]
+
+
 def test_codex_cloudflare_payload_is_auth_required():
     snapshot = _build_snapshot(
         {
@@ -61,6 +96,62 @@ def test_codex_cloudflare_payload_is_auth_required():
 
     assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
     assert "security verification" in (snapshot.error or "")
+
+
+def test_codex_cloudflare_soft_payload_is_auth_required():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly": None,
+            "title": "Just a moment...",
+            "body_text": "Checking if the site connection is secure. Cloudflare",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
+    assert "security verification" in (snapshot.error or "")
+
+
+def test_codex_usage_rows_ignore_cloudflare_mentions():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": {"percent": 12, "kind": "used", "reset_text": "4 hr 10 min"},
+            "weekly": {"percent": 31, "kind": "used", "reset_text": "Mon 6:00 PM"},
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": (
+                "Codex Tasks Cloudflare tunnel debugging 5 hour usage limit 12% used "
+                "Weekly usage limit 31% used"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly"]
+
+
+def test_codex_body_text_fallback_ignores_cloudflare_task_titles():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly": None,
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": (
+                "Codex Tasks Just a moment Cloudflare tunnel debugging "
+                "Personal usage 5 hour usage limit 88% remaining Resets at 4:47 PM "
+                "Weekly usage limit 75% remaining Resets Mon 6:00 PM"
+            ),
+            "has_usage_text": True,
+            "has_percent_text": True,
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.percent_used for metric in snapshot.metrics] == [12.0, 25.0]
 
 
 def test_codex_signed_in_empty_usage_payload_is_idle_zero():

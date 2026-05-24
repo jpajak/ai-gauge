@@ -122,7 +122,10 @@ def test_claude_signed_in_empty_usage_payload_is_idle_zero():
     )
 
     assert snapshot.status == SnapshotStatus.OK
-    assert [(metric.label, metric.percent_used, metric.reset_label) for metric in snapshot.metrics] == [
+    assert [
+        (metric.label, metric.percent_used, metric.reset_label)
+        for metric in snapshot.metrics
+    ] == [
         ("Session", 0.0, "idle"),
         ("Weekly", 0.0, "idle"),
     ]
@@ -237,7 +240,11 @@ def test_claude_design_limit_can_be_shown():
     snapshot = _build_snapshot(payload, show_design=True)
 
     assert snapshot.status == SnapshotStatus.OK
-    assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly", "Design"]
+    assert [metric.label for metric in snapshot.metrics] == [
+        "Session",
+        "Weekly",
+        "Design",
+    ]
     assert [metric.window for metric in snapshot.metrics] == [
         timedelta(hours=5),
         timedelta(days=7),

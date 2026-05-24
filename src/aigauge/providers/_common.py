@@ -4,7 +4,6 @@ from typing import Any
 
 from ..models import UsageMetric
 
-
 SECURITY_VERIFICATION_STRONG_MARKERS = (
     "verify you are human",
     "verifying you are human",
@@ -15,13 +14,9 @@ SECURITY_VERIFICATION_STRONG_MARKERS = (
     "performance & security by cloudflare",
 )
 
-SECURITY_VERIFICATION_SOFT_MARKERS = (
-    "cloudflare",
-)
+SECURITY_VERIFICATION_SOFT_MARKERS = ("cloudflare",)
 
-SECURITY_VERIFICATION_TITLE_MARKERS = (
-    "just a moment",
-)
+SECURITY_VERIFICATION_TITLE_MARKERS = ("just a moment",)
 
 USAGE_PAGE_MARKERS = (
     "plan usage limits",
@@ -69,9 +64,9 @@ def is_security_verification_page(payload: dict[str, Any]) -> bool:
     text = page_text(payload)
     if any(marker in text for marker in SECURITY_VERIFICATION_STRONG_MARKERS):
         return True
-    return any(marker in title for marker in SECURITY_VERIFICATION_TITLE_MARKERS) and any(
-        marker in text for marker in SECURITY_VERIFICATION_SOFT_MARKERS
-    )
+    return any(
+        marker in title for marker in SECURITY_VERIFICATION_TITLE_MARKERS
+    ) and any(marker in text for marker in SECURITY_VERIFICATION_SOFT_MARKERS)
 
 
 def idle_session_weekly_metrics() -> list[UsageMetric]:

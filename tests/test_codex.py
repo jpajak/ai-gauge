@@ -167,7 +167,10 @@ def test_codex_signed_in_empty_usage_payload_is_idle_zero():
     )
 
     assert snapshot.status == SnapshotStatus.OK
-    assert [(metric.label, metric.percent_used, metric.reset_label) for metric in snapshot.metrics] == [
+    assert [
+        (metric.label, metric.percent_used, metric.reset_label)
+        for metric in snapshot.metrics
+    ] == [
         ("Session", 0.0, "idle"),
         ("Weekly", 0.0, "idle"),
     ]

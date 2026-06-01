@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+## 0.5.9 - 2026-06-01
+
+### Fixed
+
+- The session-to-weekly burn rate now treats a mid-week weekly reset (Claude occasionally zeroes the weekly counter while keeping the same reset date) as the same week rather than a new one. Previously any weekly percent drop was read as a rollover, which could record a spurious partial week and restart the current week's estimate. Now only a forward jump of the weekly reset date starts a new week; a same-date drop is skipped as a discontinuity while the week's accumulation is kept, so the estimate just drifts toward the new ratio that week and locks onto it the following week.
+
 ## 0.5.8 - 2026-06-01
 
 ### Added

@@ -273,17 +273,30 @@ class RatioStore:
         last_session_resets = _parse_iso(state.last_session_resets_at)
         last_weekly_resets = _parse_iso(state.last_weekly_resets_at)
 
-        weekly_rolled = self._rolled_over(
-            last_weekly_resets, weekly.resets_at, last_weekly, weekly.pct
+        # A true new week is signalled by the weekly reset time jumping forward.
+        # A weekly percent that drops while the reset time stays put is NOT a new
+        # week: Claude occasionally zeroes the weekly counter mid-period (same end
+        # date). Treat that as a discontinuity (skip the crossing interval) rather
+        # than a rollover, so we neither write a spurious partial-week record nor
+        # discard the week's accumulation so far.
+        weekly_period_rolled = self._resets_jumped(
+            last_weekly_resets, weekly.resets_at
         )
-        session_reset = self._rolled_over(
-            last_session_resets, session.resets_at, last_session, session.pct
+        session_reset = self._resets_jumped(
+            last_session_resets, session.resets_at
+        ) or (last_session is not None and session.pct < last_session)
+        weekly_mid_reset = (
+            not weekly_period_rolled
+            and last_weekly is not None
+            and weekly.pct < last_weekly
         )
 
-        if weekly_rolled:
+        if weekly_period_rolled:
             self._finalize_bucket(state, snapshot.provider)
             self._start_bucket(state, weekly, observed_at)
-        elif not session_reset and last_session is not None and last_weekly is not None:
+        elif session_reset or weekly_mid_reset:
+            pass  # discontinuity within the same week: skip this interval's delta
+        elif last_session is not None and last_weekly is not None:
             ds = session.pct - last_session
             dw = weekly.pct - last_weekly
             if ds > 0 and dw >= 0:
@@ -355,20 +368,19 @@ class RatioStore:
             bucket_last_seen_at=_isoformat(observed_at),
         )
 
-    def _rolled_over(
-        self,
-        old_resets: datetime | None,
-        new_resets: datetime,
-        old_pct: float | None,
-        new_pct: float,
+    def _resets_jumped(
+        self, old_resets: datetime | None, new_resets: datetime
     ) -> bool:
-        if old_resets is not None and new_resets >= old_resets + _ROLLOVER_THRESHOLD:
-            return True
-        # A percent drop without a parsed reset jump (e.g. reset text failed to
-        # parse on one side) still means the window rolled over.
-        if old_pct is not None and new_pct < old_pct:
-            return True
-        return False
+        """True when the reset time moved forward enough to be a new period.
+
+        Used as the sole signal for a weekly rollover (a same-date percent drop
+        is a mid-period reset, handled separately) and as one of the signals for
+        a session reset.
+        """
+        return (
+            old_resets is not None
+            and new_resets >= old_resets + _ROLLOVER_THRESHOLD
+        )
 
     def _start_bucket(
         self, state: RatioTrackerState, weekly: _LiveMetric, observed_at: datetime

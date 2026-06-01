@@ -156,6 +156,71 @@ def test_weekly_rollover_finalizes_record_and_resets_bucket(store, tmp_path):
     assert not cur.confident
 
 
+def test_weekly_mid_period_reset_keeps_bucket(store):
+    base = datetime(2026, 5, 1, 10, 0, 0)
+    s_reset = base + timedelta(hours=5)
+    w_reset = base + timedelta(days=7)
+    # Accumulate part of the week: 10->30->50, weekly 6->8->10.
+    for i, (s, w) in enumerate(((10.0, 6.0), (30.0, 8.0), (50.0, 10.0))):
+        store.record_snapshot(
+            _snap(
+                "claude",
+                s,
+                w,
+                fetched_at=base + timedelta(minutes=10 * i),
+                session_resets=s_reset,
+                weekly_resets=w_reset,
+            )
+        )
+    assert store._state["claude"].sum_session_delta == pytest.approx(40.0)  # noqa: SLF001
+
+    # Claude zeroes the weekly counter mid-week but keeps the SAME end date.
+    # The 0% reading is out of band (no-op); when it climbs back in band the
+    # drop is detected with the reset time unchanged -> NOT a new week.
+    store.record_snapshot(
+        _snap(
+            "claude",
+            60.0,
+            0.0,
+            fetched_at=base + timedelta(minutes=40),
+            session_resets=s_reset,
+            weekly_resets=w_reset,
+        )
+    )
+    store.record_snapshot(
+        _snap(
+            "claude",
+            70.0,
+            2.0,
+            fetched_at=base + timedelta(minutes=50),
+            session_resets=s_reset,
+            weekly_resets=w_reset,
+        )
+    )
+    # No spurious week was finalized, and the bucket kept its accumulation.
+    assert store.history("claude") == []
+    state = store._state["claude"]  # noqa: SLF001
+    assert state.sum_session_delta == pytest.approx(40.0)
+    assert state.sum_weekly_delta == pytest.approx(4.0)
+
+    # Accumulation resumes within the same week after the reset.
+    store.record_snapshot(
+        _snap(
+            "claude",
+            90.0,
+            4.0,
+            fetched_at=base + timedelta(minutes=60),
+            session_resets=s_reset,
+            weekly_resets=w_reset,
+        )
+    )
+    assert store.history("claude") == []
+    est = store.current_estimate("claude")
+    assert est.confident
+    assert est.sessions_per_week == pytest.approx(10.0)
+    assert est.sample_count == 3
+
+
 def test_display_estimate_prefers_confident_current_then_history(store):
     base = datetime(2026, 5, 1, 10, 0)
     s_reset = base + timedelta(hours=5)

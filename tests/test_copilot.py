@@ -100,6 +100,25 @@ def test_build_snapshot_falls_back_to_credit_amount():
     assert snap.metrics[0].percent_used == pytest.approx(12 / 1500 * 100)
 
 
+def test_build_snapshot_accepts_github_ai_unit_sku():
+    payload = {
+        "usageItems": [
+            {
+                "product": "Copilot",
+                "sku": "copilot_ai_unit",
+                "unitType": "ai-units",
+                "grossQuantity": 68.5548,
+                "grossAmount": 0.685548,
+                "netQuantity": 0.0,
+            }
+        ]
+    }
+    snap = _build_snapshot(payload, quota=1500)
+    metric = snap.metrics[0]
+    assert metric.percent_used == pytest.approx(68.5548 / 1500 * 100)
+    assert "68.6/1500" in metric.label
+
+
 def test_build_snapshot_handles_empty_usage():
     snap = _build_snapshot({"usageItems": []}, quota=1500)
     assert snap.status == SnapshotStatus.OK

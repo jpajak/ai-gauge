@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timezone
 from typing import Callable
+from urllib.parse import parse_qsl, urlparse
 
 import requests
 
@@ -14,6 +15,7 @@ GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2026-03-10"
 COPILOT_PRODUCT = "copilot"
 COPILOT_AI_CREDITS_SKU = "copilot_ai_credits"
+COPILOT_AI_UNIT_SKU = "copilot_ai_unit"
 LEGACY_PREMIUM_REQUEST_SKU = "copilot_premium_request"
 log = logging.getLogger("aigauge.providers.copilot")
 
@@ -77,7 +79,7 @@ def _fetch_user_premium_usage(pat: str, username: str) -> dict:
     )
     r.raise_for_status()
     payload = r.json()
-    _log_payload("legacy_premium_usage", "org", r, payload)
+    _log_payload("legacy_premium_usage", "user", r, payload)
     return payload
 
 
@@ -90,7 +92,7 @@ def _fetch_user_credit_usage(pat: str, username: str) -> dict:
     )
     r.raise_for_status()
     payload = r.json()
-    _log_payload("legacy_premium_usage", "user", r, payload)
+    _log_payload("credit_usage", "user", r, payload)
     return payload
 
 
@@ -103,7 +105,7 @@ def _fetch_org_premium_usage(pat: str, org: str, username: str) -> dict:
     )
     r.raise_for_status()
     payload = r.json()
-    _log_payload("credit_usage", "org", r, payload)
+    _log_payload("legacy_premium_usage", "org", r, payload)
     return payload
 
 
@@ -116,7 +118,7 @@ def _fetch_org_credit_usage(pat: str, org: str) -> dict:
     )
     r.raise_for_status()
     payload = r.json()
-    _log_payload("credit_usage", "user", r, payload)
+    _log_payload("credit_usage", "org", r, payload)
     return payload
 
 
@@ -136,6 +138,7 @@ def _norm(value: object) -> str:
 
 def _item_summary(item: dict) -> dict[str, object]:
     return {
+        "keys": sorted(str(key) for key in item.keys()),
         "product": item.get("product"),
         "sku": item.get("sku"),
         "unitType": item.get("unitType") or item.get("unit_type"),
@@ -145,6 +148,43 @@ def _item_summary(item: dict) -> dict[str, object]:
         "grossAmount": item.get("grossAmount"),
         "netQuantity": item.get("netQuantity"),
         "netAmount": item.get("netAmount"),
+    }
+
+
+def _safe_scalar(value: object) -> object:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        return value if len(value) <= 120 else value[:117] + "..."
+    return type(value).__name__
+
+
+def _payload_scalar_summary(payload: dict) -> dict[str, object]:
+    return {
+        str(key): _safe_scalar(value)
+        for key, value in payload.items()
+        if not isinstance(value, (dict, list))
+    }
+
+
+def _payload_collection_summary(payload: dict) -> dict[str, object]:
+    summary: dict[str, object] = {}
+    for key, value in payload.items():
+        if isinstance(value, list):
+            summary[str(key)] = f"list[{len(value)}]"
+        elif isinstance(value, dict):
+            summary[str(key)] = f"dict[{len(value)}]"
+    return summary
+
+
+def _query_summary(response: requests.Response) -> dict[str, object]:
+    parsed = urlparse(response.url)
+    query = dict(parse_qsl(parsed.query, keep_blank_values=True))
+    return {
+        "year": query.get("year"),
+        "month": query.get("month"),
+        "product": query.get("product"),
+        "has_user_param": "user" in query,
     }
 
 
@@ -161,7 +201,8 @@ def _log_payload(
         "provider api diagnosis provider=copilot "
         "classification=payload endpoint=%s scope=%s status=%s request_id=%s "
         "payload_keys=%s item_count=%s credit_item_count=%s "
-        "legacy_item_count=%s sample=%r",
+        "legacy_item_count=%s query=%r scalar_fields=%r collection_sizes=%r "
+        "sample=%r",
         endpoint,
         scope,
         response.status_code,
@@ -174,6 +215,9 @@ def _log_payload(
             for item in items
             if isinstance(item, dict) and _is_legacy_premium_item(item)
         ),
+        _query_summary(response),
+        _payload_scalar_summary(payload),
+        _payload_collection_summary(payload),
         sample,
     )
 
@@ -183,10 +227,13 @@ def _is_credit_item(item: dict) -> bool:
     unit = _norm(item.get("unitType") or item.get("unit_type"))
     product = _norm(item.get("product"))
     return (
-        sku == COPILOT_AI_CREDITS_SKU
+        sku in (COPILOT_AI_CREDITS_SKU, COPILOT_AI_UNIT_SKU)
         or "ai_credit" in sku
+        or "ai_unit" in sku
         or "ai_credit" in unit
+        or "ai_unit" in unit
         or (product == COPILOT_PRODUCT and "credit" in unit)
+        or (product == COPILOT_PRODUCT and "unit" in unit)
     )
 
 
@@ -238,6 +285,10 @@ def _net_quantity(item: dict) -> float:
     return float(item.get("netQuantity", 0) or 0)
 
 
+def _format_quantity(value: float) -> str:
+    return f"{value:.1f}" if value % 1 else f"{int(value)}"
+
+
 def _build_snapshot(payload: dict, quota: int, *, unit: str = "auto") -> UsageSnapshot:
     items = payload.get("usageItems", []) or []
     if unit == "auto":
@@ -275,7 +326,7 @@ def _build_snapshot(payload: dict, quota: int, *, unit: str = "auto") -> UsageSn
     window = next_utc - this_utc
 
     metric = UsageMetric(
-        label=f"{label_unit} ({used:g}/{quota})",
+        label=f"{label_unit} ({_format_quantity(used)}/{quota})",
         percent_used=percent,
         resets_at=next_utc.astimezone().replace(tzinfo=None),
         note=(

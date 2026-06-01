@@ -32,6 +32,8 @@ from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
 from .providers.copilot import CopilotProvider
 from .providers.openrouter import OpenRouterProvider
+from .ratio import RatioStore, sessions_per_week
+from .ratio_dialog import RatioHistoryDialog
 from .settings_dialog import SettingsDialog
 from .webview.cookies import hydrate_all_from_keyring
 from .webview.login_window import LoginWindow
@@ -211,6 +213,7 @@ class App(QObject):
         self._config = Config.load()
         self._snapshots: dict[str, UsageSnapshot] = {}
         self._history = HistoryStore()
+        self._ratio = RatioStore()
         self._signals = ProviderSignals()
         self._signals.snapshot_ready.connect(self._on_snapshot)
         self._inflight: set[str] = set()
@@ -234,6 +237,7 @@ class App(QObject):
         self._widget.settings_requested.connect(self.open_settings)
         self._widget.sign_in_requested.connect(self.open_login)
         self._widget.details_requested.connect(self.open_error_details)
+        self._widget.ratio_history_requested.connect(self.open_ratio_history)
         self._widget.tile_expanded_changed.connect(self._on_tile_expanded_changed)
         self._widget.activated_requested.connect(self._on_widget_activated)
         self._widget.closed.connect(self._on_widget_closed)
@@ -581,8 +585,21 @@ class App(QObject):
             self._history.record_snapshot(snapshot)
         except Exception:  # noqa: BLE001
             log.exception("history.record_snapshot failed")
+        try:
+            self._ratio.record_snapshot(snapshot)
+        except Exception:  # noqa: BLE001
+            log.exception("ratio.record_snapshot failed")
         display_name = display_name_for_account(self._config, snapshot.provider)
         self._widget.update_snapshot(snapshot, display_name)
+        try:
+            self._widget.set_ratio(
+                snapshot.provider,
+                self._ratio.display_estimate(snapshot.provider),
+                self._ratio_recent(snapshot.provider),
+                self._ratio.current_estimate(snapshot.provider),
+            )
+        except Exception:  # noqa: BLE001
+            log.exception("widget.set_ratio failed")
 
         if self._refresh_queue:
             QTimer.singleShot(0, self._start_next_refresh)
@@ -715,6 +732,38 @@ class App(QObject):
             return
         display_name = display_name_for_account(self._config, provider)
         dlg = ErrorDetailsDialog(provider, display_name, snapshot, parent=self._widget)
+        dlg.exec()
+
+    def _ratio_recent(self, provider: str) -> list[float]:
+        """Recent finalized sessions/week values (oldest -> newest) for tooltips."""
+        out: list[float] = []
+        for record in self._ratio.history(provider)[-4:]:
+            value = sessions_per_week(
+                record.sum_session_delta, record.sum_weekly_delta
+            )
+            if value is not None:
+                out.append(value)
+        return out
+
+    def _current_weekly_pct(self, provider: str) -> float | None:
+        snapshot = self._snapshots.get(provider)
+        if snapshot is None or snapshot.status != SnapshotStatus.OK:
+            return None
+        for metric in snapshot.metrics:
+            if metric.label.lower() == "weekly" and metric.percent_used is not None:
+                return metric.percent_used
+        return None
+
+    def open_ratio_history(self, provider: str) -> None:
+        display_name = display_name_for_account(self._config, provider)
+        dlg = RatioHistoryDialog(
+            provider,
+            display_name,
+            self._ratio.history(provider),
+            self._ratio.current_estimate(provider),
+            weekly_pct_used=self._current_weekly_pct(provider),
+            parent=self._widget,
+        )
         dlg.exec()
 
     # ----- Settings -----

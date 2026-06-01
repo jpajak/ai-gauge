@@ -5,7 +5,37 @@ from PyQt6.QtCore import Qt
 
 from aigauge.config import BrowserAccount, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
-from aigauge.widget import UsageWidget, _MetricRow, _SummaryChip
+from aigauge.ratio import RatioEstimate
+from aigauge.widget import (
+    UsageWidget,
+    _format_ratio_inline,
+    _MetricRow,
+    _SummaryChip,
+)
+
+
+def _ok_snapshot(provider: str) -> UsageSnapshot:
+    fetched = datetime(2026, 4, 27, 12, 0)
+    return UsageSnapshot(
+        provider=provider,
+        status=SnapshotStatus.OK,
+        metrics=[
+            UsageMetric("Session", 40.0, fetched + timedelta(hours=2)),
+            UsageMetric("Weekly", 20.0, fetched + timedelta(days=5)),
+        ],
+        fetched_at=fetched,
+    )
+
+
+def _estimate(confident: bool, n: float | None, source: str = "current") -> RatioEstimate:
+    return RatioEstimate(
+        sessions_per_week=n if confident else None,
+        weekly_pct_per_session=(100.0 / n) if (confident and n) else None,
+        coverage_pct=40.0,
+        sample_count=12,
+        confident=confident,
+        source=source,
+    )
 
 
 def _tile_order(widget: UsageWidget) -> list[str]:
@@ -68,6 +98,106 @@ def test_browser_account_tiles_group_by_provider_kind(qtbot):
         "codex-work",
         "copilot",
     ]
+
+
+def test_format_ratio_inline_states():
+    assert _format_ratio_inline(None) is None
+    assert _format_ratio_inline(_estimate(True, 9.24)) == "~9.2/wk"
+    assert _format_ratio_inline(_estimate(False, None)) == "burn ~?"
+
+
+def test_ratio_label_shows_when_ok_and_confident(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    widget.set_ratio("claude", _estimate(True, 9.2), recent=[10.0, 9.5, 9.2])
+
+    label = widget._tiles["claude"].ratio_label  # noqa: SLF001
+    assert not label.isHidden()
+    assert "9.2/wk" in label.text()
+    assert "sessions/week" in label.toolTip()
+
+
+def test_ratio_label_calibrating_placeholder(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("codex"), "Codex")
+    calibrating = RatioEstimate(
+        sessions_per_week=None,
+        weekly_pct_per_session=None,
+        coverage_pct=1.2,
+        sample_count=2,
+        confident=False,
+        source="current",
+        session_delta=12.0,
+    )
+    widget.set_ratio("codex", calibrating, recent=[])
+
+    label = widget._tiles["codex"].ratio_label  # noqa: SLF001
+    assert not label.isHidden()
+    assert "burn ~?" in label.text()
+    tip = label.toolTip().lower()
+    assert "calibrating" in tip
+    # Calibration progress is visible so the wait is not a mystery.
+    assert "12/30" in label.toolTip()
+    assert "2/3" in label.toolTip()
+
+
+def test_ratio_label_carry_over_dimmed_with_progress(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    last_week = _estimate(True, 9.2, source="history")
+    this_week = RatioEstimate(
+        sessions_per_week=None,
+        weekly_pct_per_session=None,
+        coverage_pct=1.0,
+        sample_count=1,
+        confident=False,
+        source="current",
+        session_delta=6.0,
+    )
+    widget.set_ratio("claude", last_week, recent=[9.5, 9.2], live=this_week)
+
+    label = widget._tiles["claude"].ratio_label  # noqa: SLF001
+    assert not label.isHidden()
+    assert "9.2/wk°" in label.text()  # carry-over marker
+    assert "#6b7280" in label.text()  # dimmed color
+    tip = label.toolTip()
+    assert "Last week" in tip
+    assert "This week calibrating" in tip
+    assert "6/30" in tip
+
+
+def test_ratio_label_hidden_when_not_ok(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Not signed in.",
+            fetched_at=datetime(2026, 4, 27, 12, 0),
+        ),
+        "Claude",
+    )
+    # Even a confident estimate must not show on a non-OK tile.
+    widget.set_ratio("claude", _estimate(True, 9.2), recent=[9.2])
+
+    label = widget._tiles["claude"].ratio_label  # noqa: SLF001
+    assert label.isHidden()
+
+
+def test_ratio_history_signal_emitted_on_link_click(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    widget.set_ratio("claude", _estimate(True, 9.2), recent=[9.2])
+
+    seen: list[str] = []
+    widget.ratio_history_requested.connect(seen.append)
+    widget._tiles["claude"].ratio_label.linkActivated.emit("ratio-history")  # noqa: SLF001
+    assert seen == ["claude"]
 
 
 def test_mark_loading_preserves_existing_data_and_dims_tile(qtbot):

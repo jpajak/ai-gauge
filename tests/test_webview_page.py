@@ -30,3 +30,17 @@ def test_isolated_segment_and_datadog_messages_are_noise():
     )
     for sample in samples:
         assert any(fragment in sample for fragment in _NOISY_CONSOLE_FRAGMENTS), sample
+
+
+def test_embedded_page_capability_chatter_is_noise():
+    # Third-party page console output from the headless scrape: harmless, but it
+    # was filling the file log. These must be suppressed.
+    samples = (
+        "Potential permissions policy violation: autoplay is not allowed in this document.",
+        "Potential permissions policy violation: gamepad is not allowed in this document.",
+        "%c%d font-size:0;color:transparent NaN",
+        "Failed to create WebGPU Context Provider",
+        "[object QuotaExceededError] [object Object]",
+    )
+    for sample in samples:
+        assert any(fragment in sample for fragment in _NOISY_CONSOLE_FRAGMENTS), sample

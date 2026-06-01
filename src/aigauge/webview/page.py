@@ -21,6 +21,13 @@ _NOISY_CONSOLE_FRAGMENTS = (
     # Datadog RUM init banner from claude.ai's bundle.
     "[O11Y] [DatadogRUM]",
     "DatadogRUM",
+    # The embedded pages request browser features the offscreen webview does not
+    # grant, log a styled anti-debug banner, and probe WebGPU / storage that the
+    # throwaway profile lacks. None of it affects reading usage numbers.
+    "Potential permissions policy violation:",
+    "font-size:0;color:transparent",
+    "Failed to create WebGPU Context Provider",
+    "QuotaExceededError",
 )
 
 

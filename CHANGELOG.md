@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### Added
+
+- Claude and Codex tiles now show a session-to-weekly burn rate on the right of the tile header (e.g. `~9.2/wk`), meaning how many full sessions you can run before the weekly limit is used up. It is measured empirically from the readings AI Gauge already collects (no extra scraping): while a session is counting, weekly usage climbs in proportion, so the ratio of those increments gives a stable estimate. Hovering shows the percent-of-weekly-per-session framing plus a recent-weeks trend, and clicking opens a small history dialog with a sparkline and the last 26 weekly ratios so you can see how the providers retune their limits over time. The dialog also shows two at-a-glance views of the current ratio: how much each full session costs in weekly percent, and how many full sessions remain in the current week (based on the live weekly percent used), plus a `Typical (last N weeks)` median once a few weeks are recorded. The header value is the usage-weighted average across all sessions in the current weekly period and keeps refining as the week goes; at a new week it carries over last week's value (dimmed, with a `°` marker and the new week's calibration progress in the tooltip) until the new week has enough data to stand on its own. Idle/unused windows are ignored, and readings outside 2-99% (start-of-window floors such as Codex's idle `1%`, and saturated tails) are excluded so neither end can skew the estimate. The value reads `burn ~?` while calibrating until there is enough usage for a stable reading.
+
 ## 0.5.7 - 2026-05-18
 
 ### Added

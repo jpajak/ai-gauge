@@ -50,10 +50,13 @@ from .startup import set_start_at_login
 log = logging.getLogger("aigauge.settings_dialog")
 
 _COPILOT_PLAN_QUOTAS = (
-    ("Pro", 300),
-    ("Pro+", 1500),
-    ("Business", 300),
-    ("Enterprise", 1000),
+    ("Pro", 1500),
+    ("Pro+", 7000),
+    ("Max", 20000),
+    ("Business", 1900),
+    ("Enterprise", 3900),
+    ("Business promo", 3000),
+    ("Enterprise promo", 7000),
     ("Free", 50),
 )
 
@@ -495,19 +498,20 @@ class SettingsDialog(QDialog):
             self.gh_plan.addItem(f"{plan} ({quota:,})", quota)
         self.gh_plan.addItem("Custom", None)
         self.gh_plan.currentIndexChanged.connect(self._sync_custom_quota_enabled)
-        copilot_form.addRow("Plan / quota:", self.gh_plan)
+        copilot_form.addRow("Plan / credits:", self.gh_plan)
 
         self.gh_quota = QSpinBox()
         self.gh_quota.setRange(1, 100000)
         self.gh_quota.setValue(config.copilot.monthly_quota)
         self.gh_quota.setMinimumWidth(110)
-        self.gh_quota_label = QLabel("Custom quota:")
+        self.gh_quota_label = QLabel("Custom credits:")
         copilot_form.addRow(self.gh_quota_label, self.gh_quota)
         self._set_quota_selection(config.copilot.monthly_quota)
 
         quota_hint = _hint_label(
-            "GitHub does not expose a reliable personal-plan quota through the API; "
-            "choose your plan here or Custom for a different allowance."
+            "GitHub reports usage, not a reliable personal-plan allowance through "
+            "the API; choose your plan here or Custom for a different monthly "
+            "AI credit allowance."
         )
         copilot_form.addRow("", quota_hint)
 

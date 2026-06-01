@@ -12,6 +12,9 @@ from .base import Provider
 
 GITHUB_API = "https://api.github.com"
 GITHUB_API_VERSION = "2026-03-10"
+COPILOT_PRODUCT = "copilot"
+COPILOT_AI_CREDITS_SKU = "copilot_ai_credits"
+LEGACY_PREMIUM_REQUEST_SKU = "copilot_premium_request"
 log = logging.getLogger("aigauge.providers.copilot")
 
 
@@ -31,13 +34,19 @@ def _usage_params(username: str | None = None) -> dict[str, int | str]:
     return params
 
 
+def _summary_params(username: str | None = None) -> dict[str, int | str]:
+    params = _usage_params(username)
+    params["product"] = COPILOT_PRODUCT
+    return params
+
+
 def _this_month_start_utc(now_utc: datetime) -> datetime:
     """First day of this calendar month in UTC."""
     return datetime(now_utc.year, now_utc.month, 1, tzinfo=timezone.utc)
 
 
 def _next_month_start_utc(now_utc: datetime) -> datetime:
-    """First day of next calendar month — Copilot premium requests reset monthly."""
+    """First day of next calendar month - Copilot usage resets monthly."""
     if now_utc.month == 12:
         return datetime(now_utc.year + 1, 1, 1, tzinfo=timezone.utc)
     return datetime(now_utc.year, now_utc.month + 1, 1, tzinfo=timezone.utc)
@@ -67,7 +76,22 @@ def _fetch_user_premium_usage(pat: str, username: str) -> dict:
         timeout=15,
     )
     r.raise_for_status()
-    return r.json()
+    payload = r.json()
+    _log_payload("legacy_premium_usage", "org", r, payload)
+    return payload
+
+
+def _fetch_user_credit_usage(pat: str, username: str) -> dict:
+    r = requests.get(
+        f"{GITHUB_API}/users/{username}/settings/billing/usage/summary",
+        params=_summary_params(),
+        headers=_github_headers(pat),
+        timeout=15,
+    )
+    r.raise_for_status()
+    payload = r.json()
+    _log_payload("legacy_premium_usage", "user", r, payload)
+    return payload
 
 
 def _fetch_org_premium_usage(pat: str, org: str, username: str) -> dict:
@@ -78,12 +102,122 @@ def _fetch_org_premium_usage(pat: str, org: str, username: str) -> dict:
         timeout=15,
     )
     r.raise_for_status()
-    return r.json()
+    payload = r.json()
+    _log_payload("credit_usage", "org", r, payload)
+    return payload
+
+
+def _fetch_org_credit_usage(pat: str, org: str) -> dict:
+    r = requests.get(
+        f"{GITHUB_API}/organizations/{org}/settings/billing/usage/summary",
+        params=_summary_params(),
+        headers=_github_headers(pat),
+        timeout=15,
+    )
+    r.raise_for_status()
+    payload = r.json()
+    _log_payload("credit_usage", "user", r, payload)
+    return payload
 
 
 def _fetch_premium_usage(pat: str, username: str) -> dict:
     """Backward-compatible alias for tests and callers."""
     return _fetch_user_premium_usage(pat, username)
+
+
+def _fetch_credit_usage(pat: str, username: str) -> dict:
+    """Fetch current usage-based Copilot AI credit usage for an individual."""
+    return _fetch_user_credit_usage(pat, username)
+
+
+def _norm(value: object) -> str:
+    return str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+
+
+def _item_summary(item: dict) -> dict[str, object]:
+    return {
+        "product": item.get("product"),
+        "sku": item.get("sku"),
+        "unitType": item.get("unitType") or item.get("unit_type"),
+        "model": item.get("model"),
+        "grossQuantity": item.get("grossQuantity"),
+        "quantity": item.get("quantity"),
+        "grossAmount": item.get("grossAmount"),
+        "netQuantity": item.get("netQuantity"),
+        "netAmount": item.get("netAmount"),
+    }
+
+
+def _log_payload(
+    endpoint: str,
+    scope: str,
+    response: requests.Response,
+    payload: dict,
+) -> None:
+    raw_items = payload.get("usageItems", []) or []
+    items = raw_items if isinstance(raw_items, list) else []
+    sample = [_item_summary(item) for item in items[:5] if isinstance(item, dict)]
+    log.info(
+        "provider api diagnosis provider=copilot "
+        "classification=payload endpoint=%s scope=%s status=%s request_id=%s "
+        "payload_keys=%s item_count=%s credit_item_count=%s "
+        "legacy_item_count=%s sample=%r",
+        endpoint,
+        scope,
+        response.status_code,
+        response.headers.get("x-github-request-id", ""),
+        sorted(str(key) for key in payload.keys()),
+        len(items),
+        sum(1 for item in items if isinstance(item, dict) and _is_credit_item(item)),
+        sum(
+            1
+            for item in items
+            if isinstance(item, dict) and _is_legacy_premium_item(item)
+        ),
+        sample,
+    )
+
+
+def _is_credit_item(item: dict) -> bool:
+    sku = _norm(item.get("sku"))
+    unit = _norm(item.get("unitType") or item.get("unit_type"))
+    product = _norm(item.get("product"))
+    return (
+        sku == COPILOT_AI_CREDITS_SKU
+        or "ai_credit" in sku
+        or "ai_credit" in unit
+        or (product == COPILOT_PRODUCT and "credit" in unit)
+    )
+
+
+def _is_legacy_premium_item(item: dict) -> bool:
+    sku = _norm(item.get("sku"))
+    unit = _norm(item.get("unitType") or item.get("unit_type"))
+    return (
+        sku == LEGACY_PREMIUM_REQUEST_SKU
+        or "premium_request" in sku
+        or "premium_request" in unit
+    )
+
+
+def _credit_quantity(item: dict, *, net: bool = False) -> float:
+    if net:
+        value = item.get("netQuantity")
+        if value is not None:
+            return float(value or 0)
+        amount = item.get("netAmount")
+        if amount is not None:
+            return float(amount or 0) * 100.0
+        return 0.0
+    keys = ("grossQuantity", "quantity")
+    for key in keys:
+        value = item.get(key)
+        if value is not None:
+            return float(value or 0)
+    amount = item.get("grossAmount")
+    if amount is not None:
+        return float(amount or 0) * 100.0
+    return 0.0
 
 
 def _item_quantity(item: dict) -> float:
@@ -104,10 +238,36 @@ def _net_quantity(item: dict) -> float:
     return float(item.get("netQuantity", 0) or 0)
 
 
-def _build_snapshot(payload: dict, quota: int) -> UsageSnapshot:
+def _build_snapshot(payload: dict, quota: int, *, unit: str = "auto") -> UsageSnapshot:
     items = payload.get("usageItems", []) or []
-    used = sum(_item_quantity(item) for item in items)
-    billed = sum(_net_quantity(item) for item in items)
+    if unit == "auto":
+        unit = (
+            "premium_requests"
+            if any(_is_legacy_premium_item(item) for item in items)
+            and not any(_is_credit_item(item) for item in items)
+            else "credits"
+        )
+    if unit == "credits":
+        usage_items = [item for item in items if _is_credit_item(item)]
+        used = sum(_credit_quantity(item) for item in usage_items)
+        billed = sum(_credit_quantity(item, net=True) for item in usage_items)
+        label_unit = "Credits"
+        billable_text = "AI credits"
+        empty_note = (
+            "No Copilot AI credit usage returned yet. GitHub usage reporting can "
+            "lag, and org-billed usage may only appear at the billing organization."
+        )
+    else:
+        usage_items = [item for item in items if _is_legacy_premium_item(item)] or items
+        used = sum(_item_quantity(item) for item in usage_items)
+        billed = sum(_net_quantity(item) for item in usage_items)
+        label_unit = "Premium"
+        billable_text = "premium requests"
+        empty_note = (
+            "No user-billed premium requests returned. If Copilot is billed "
+            "through an organization or enterprise, GitHub omits it from this "
+            "user-level endpoint."
+        )
     percent = (used / quota * 100.0) if quota > 0 else None
     now_utc = datetime.now(timezone.utc)
     this_utc = _this_month_start_utc(now_utc)
@@ -115,15 +275,13 @@ def _build_snapshot(payload: dict, quota: int) -> UsageSnapshot:
     window = next_utc - this_utc
 
     metric = UsageMetric(
-        label=f"Premium ({int(used)}/{quota})",
+        label=f"{label_unit} ({used:g}/{quota})",
         percent_used=percent,
         resets_at=next_utc.astimezone().replace(tzinfo=None),
         note=(
-            f"{billed:g} billable premium requests beyond included allowance."
-            if items
-            else "No user-billed premium requests returned. If Copilot is billed "
-            "through an organization or enterprise, GitHub omits it from this "
-            "user-level endpoint."
+            f"{billed:g} billable {billable_text} beyond included allowance."
+            if usage_items
+            else empty_note
         ),
         window=window,
     )
@@ -132,6 +290,28 @@ def _build_snapshot(payload: dict, quota: int) -> UsageSnapshot:
         status=SnapshotStatus.OK,
         metrics=[metric],
         raw=payload,
+    )
+
+
+def _build_legacy_snapshot(payload: dict, quota: int) -> UsageSnapshot:
+    return _build_snapshot(payload, quota, unit="premium_requests")
+
+
+def _log_snapshot_decision(
+    *,
+    endpoint: str,
+    quota: int,
+    snapshot: UsageSnapshot,
+) -> None:
+    metric = snapshot.metrics[0] if snapshot.metrics else None
+    log.info(
+        "provider api diagnosis provider=copilot "
+        "classification=snapshot endpoint=%s quota=%s label=%r percent=%s note=%r",
+        endpoint,
+        quota,
+        metric.label if metric else None,
+        metric.percent_used if metric else None,
+        metric.note if metric else None,
     )
 
 
@@ -180,9 +360,9 @@ class CopilotProvider(Provider):
             billing_org = config.copilot.billing_org
             try:
                 if billing_org:
-                    payload = _fetch_org_premium_usage(pat, billing_org, username)
+                    payload = _fetch_org_credit_usage(pat, billing_org)
                 else:
-                    payload = _fetch_user_premium_usage(pat, username)
+                    payload = _fetch_user_credit_usage(pat, username)
             except requests.HTTPError as exc:
                 status = exc.response.status_code if exc.response is not None else 0
                 request_id = (
@@ -192,7 +372,7 @@ class CopilotProvider(Provider):
                 )
                 log.warning(
                     "provider api diagnosis provider=copilot "
-                    "classification=http_error status=%s scope=%s "
+                    "classification=http_error endpoint=credit_usage status=%s scope=%s "
                     "billing_org_configured=%s username_configured=%s request_id=%s",
                     status,
                     "org" if billing_org else "user",
@@ -200,6 +380,29 @@ class CopilotProvider(Provider):
                     bool(config.copilot.username),
                     request_id,
                 )
+                if status in (400, 404):
+                    try:
+                        if billing_org:
+                            legacy_payload = _fetch_org_premium_usage(
+                                pat, billing_org, username
+                            )
+                        else:
+                            legacy_payload = _fetch_user_premium_usage(pat, username)
+                        snapshot = _build_legacy_snapshot(
+                            legacy_payload, config.copilot.monthly_quota
+                        )
+                        _log_snapshot_decision(
+                            endpoint="legacy_premium_usage_after_credit_error",
+                            quota=config.copilot.monthly_quota,
+                            snapshot=snapshot,
+                        )
+                        return snapshot
+                    except requests.HTTPError:
+                        log.info(
+                            "provider api diagnosis provider=copilot "
+                            "classification=legacy_usage_unavailable scope=%s",
+                            "org" if billing_org else "user",
+                        )
                 if status in (401, 403):
                     detail = (
                         " Re-issue with organization Administration read permission "
@@ -217,7 +420,48 @@ class CopilotProvider(Provider):
                     status=SnapshotStatus.ERROR,
                     error=f"GitHub API {status}",
                 )
-            return _build_snapshot(payload, config.copilot.monthly_quota)
+            if any(_is_credit_item(item) for item in payload.get("usageItems", []) or []):
+                snapshot = _build_snapshot(payload, config.copilot.monthly_quota)
+                _log_snapshot_decision(
+                    endpoint="credit_usage",
+                    quota=config.copilot.monthly_quota,
+                    snapshot=snapshot,
+                )
+                return snapshot
+
+            try:
+                if billing_org:
+                    legacy_payload = _fetch_org_premium_usage(
+                        pat, billing_org, username
+                    )
+                else:
+                    legacy_payload = _fetch_user_premium_usage(pat, username)
+                if any(
+                    _is_legacy_premium_item(item)
+                    for item in legacy_payload.get("usageItems", []) or []
+                ):
+                    snapshot = _build_legacy_snapshot(
+                        legacy_payload, config.copilot.monthly_quota
+                    )
+                    _log_snapshot_decision(
+                        endpoint="legacy_premium_usage",
+                        quota=config.copilot.monthly_quota,
+                        snapshot=snapshot,
+                    )
+                    return snapshot
+            except requests.HTTPError:
+                log.info(
+                    "provider api diagnosis provider=copilot "
+                    "classification=legacy_usage_unavailable scope=%s",
+                    "org" if billing_org else "user",
+                )
+            snapshot = _build_snapshot(payload, config.copilot.monthly_quota)
+            _log_snapshot_decision(
+                endpoint="credit_usage_empty",
+                quota=config.copilot.monthly_quota,
+                snapshot=snapshot,
+            )
+            return snapshot
 
         self._run_async(work, on_done)
 

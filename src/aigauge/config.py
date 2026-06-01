@@ -90,7 +90,7 @@ class BrowserAccount(BaseModel):
 class CopilotConfig(BaseModel):
     username: str | None = None
     billing_org: str | None = None
-    monthly_quota: int = Field(default=300, ge=1)  # Pro=300, Pro+=1500, Business=300
+    monthly_quota: int = Field(default=1500, ge=1)  # AI credits; Pro=1500
 
 
 class OpenRouterConfig(BaseModel):
@@ -189,6 +189,9 @@ class Config(BaseModel):
                 window["width"] = WINDOW_WIDTH
             if isinstance(height, int):
                 window["height"] = max(WINDOW_MIN_HEIGHT, min(height, WINDOW_MAX_HEIGHT))
+        copilot = data.get("copilot")
+        if isinstance(copilot, dict) and copilot.get("monthly_quota") == 300:
+            copilot["monthly_quota"] = 1500
 
     def save(self) -> None:
         path = config_path()

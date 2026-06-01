@@ -21,7 +21,7 @@ def test_defaults():
     assert [a.kind for a in c.browser_accounts] == ["claude", "codex"]
     assert c.providers.copilot is True
     assert c.start_at_login is False
-    assert c.copilot.monthly_quota == 300
+    assert c.copilot.monthly_quota == 1500
     assert c.window.always_on_top is True
     assert c.window.collapsed is False
 
@@ -85,6 +85,18 @@ def test_load_migrates_old_refresh_interval_to_active_rate():
         ("claude", "claude", True),
         ("codex", "codex", True),
     ]
+
+
+def test_load_migrates_legacy_copilot_pro_request_quota_to_credits():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"copilot": {"monthly_quota": 300}}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert c.copilot.monthly_quota == 1500
 
 
 def test_load_migrates_legacy_provider_toggles_to_browser_accounts():

@@ -4,9 +4,16 @@
 
 ## 0.5.9 - 2026-06-01
 
+### Changed
+
+- Claude usage scraping now targets Claude's app-shell usage dialog route and no longer carries the retired separate design-generation limit through settings, config, or tile rendering.
+
 ### Fixed
 
 - The session-to-weekly burn rate now treats a mid-week weekly reset (Claude occasionally zeroes the weekly counter while keeping the same reset date) as the same week rather than a new one. Previously any weekly percent drop was read as a rollover, which could record a spurious partial week and restart the current week's estimate. Now only a forward jump of the weekly reset date starts a new week; a same-date drop is skipped as a discontinuity while the week's accumulation is kept, so the estimate just drifts toward the new ratio that week and locks onto it the following week.
+- Session-to-weekly history now normalizes old split records that were finalized for the same weekly reset, so stale fragments like a 1% coverage tail no longer appear as fake prior weeks. The history dialog now labels rows by their actual observed dates and shows `n/a` for low-confidence ratio values instead of displaying noisy estimates.
+- Claude refreshes now wait for the Session and Weekly usage rows specifically, so unrelated percentage text in the shell no longer causes a premature stale error while the usage dialog is still hydrating.
+- Stale error snapshots now pull the next automatic refresh forward to a short recovery retry instead of drifting into the idle backoff cadence.
 
 ## 0.5.8 - 2026-06-01
 
@@ -192,7 +199,6 @@
 - Widget width is fixed at the compact 340 px panel size, and height is clamped on load/refit/save so cross-monitor DPI changes cannot stretch the panel into an oversized banner.
 - Claude signed-in pages with no usage yet now show idle zero rows instead of a layout-changed error.
 - Codex signed-in pages with no usage yet now show idle zero rows instead of a layout-changed error.
-- Claude Design usage is now hidden by default with an optional Settings checkbox for users who want to track that separate limit.
 - Claude weekly resets like `Mon 6:00 PM` are now parsed and displayed even when weekly usage is still 0%.
 - Codex signed-out pages are now classified as `not signed in` instead of `layout changed` when the login page omits the expected link selector.
 - Cloudflare / `Just a moment...` interstitials are now classified as authentication required instead of a generic layout error.

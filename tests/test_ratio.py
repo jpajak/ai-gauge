@@ -10,6 +10,7 @@ from aigauge.ratio import (
     MAX_HISTORY,
     RatioStore,
     WeeklyRatioRecord,
+    sessions_per_week,
     typical_sessions_per_week,
 )
 
@@ -535,6 +536,45 @@ def test_typical_needs_min_weeks_and_skips_low_confidence():
     assert typical_sessions_per_week([_record(80.0, 8.0)]) is None
     low = _record(5.0, 0.5, samples=1)  # below confidence floors
     assert typical_sessions_per_week([_record(80.0, 8.0), low]) is None
+
+
+def test_load_history_collapses_split_records_for_same_week(tmp_path):
+    payload = {
+        "claude": [
+            {
+                "provider": "claude",
+                "week_started_at": "2026-06-01T00:08:37",
+                "week_ended_at": "2026-06-01T13:22:21",
+                "weekly_resets_at": "2026-06-01T17:59:37",
+                "sum_session_delta": 27.0,
+                "sum_weekly_delta": 1.0,
+                "sample_count": 7,
+            },
+            {
+                "provider": "claude",
+                "week_started_at": "2026-06-01T14:01:27",
+                "week_ended_at": "2026-06-01T15:14:48",
+                "weekly_resets_at": "2026-06-01T17:59:27",
+                "sum_session_delta": 78.0,
+                "sum_weekly_delta": 7.0,
+                "sample_count": 12,
+            },
+        ]
+    }
+    (tmp_path / "ratios.json").write_text(json.dumps(payload), encoding="utf-8")
+
+    store = RatioStore(tmp_path)
+
+    records = store.history("claude")
+    assert len(records) == 1
+    assert records[0].sum_session_delta == 78.0
+    assert records[0].sum_weekly_delta == 7.0
+    assert sessions_per_week(
+        records[0].sum_session_delta,
+        records[0].sum_weekly_delta,
+    ) == pytest.approx(78.0 / 7.0)
+    persisted = json.loads((tmp_path / "ratios.json").read_text(encoding="utf-8"))
+    assert len(persisted["claude"]) == 1
 
 
 def test_error_snapshot_ignored(store, tmp_path):

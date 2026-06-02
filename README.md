@@ -116,7 +116,7 @@ If the embedded-browser sign-in doesn't work for you (e.g. your account requires
    `chatgpt.com` request, and copy the full **Request Headers → Cookie:** value.
    This includes split session cookies plus companion auth cookies such as
    `__Secure-oai-is`.
-3. For Claude, press **F12** → **Network**, reload `https://claude.ai/settings/usage`,
+3. For Claude, press **F12** → **Network**, reload `https://claude.ai/new#settings/usage`,
    click a `claude.ai` request, and copy the full **Request Headers → Cookie:**
    value. It must include `sessionKey`.
 4. In the app: Settings → Claude or Settings → Codex → click **Paste cookie** next to the account, paste, Save.

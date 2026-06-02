@@ -47,6 +47,7 @@ LOGIN_URLS = {
 }
 
 _ACTIVE_MODE_MINUTES = 30
+_STALE_ERROR_RETRY_MINUTES = 1
 _HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 _LOG_VALUE_LIMIT = 300
 
@@ -401,7 +402,6 @@ class App(QObject):
             if account.kind == "claude":
                 self._providers[account.id] = ClaudeProvider(
                     parent=self,
-                    show_design=self._config.providers.claude_design,
                     account_id=account.id,
                 )
             elif account.kind == "codex":
@@ -430,15 +430,16 @@ class App(QObject):
     def _schedule_next_refresh(self) -> None:
         if self._inflight or self._refresh_queue:
             return
+        now = datetime.now()
         max_minutes = max(1, self._config.refresh_interval_minutes)
-        active = datetime.now() < self._active_until
+        active = now < self._active_until
         minutes = _adaptive_refresh_minutes(
             active=active,
             active_minutes=self._config.active_refresh_interval_minutes,
             unchanged_cycles=self._unchanged_cycles,
             max_minutes=max_minutes,
         )
-        next_refresh_at = datetime.now() + timedelta(minutes=minutes)
+        next_refresh_at = now + timedelta(minutes=minutes)
         # Don't let an idle backoff stretch past a known reset — otherwise the
         # panel keeps showing 100% for tens of minutes after the limit has
         # actually rolled over. Pull the refresh forward so we re-read shortly
@@ -446,6 +447,13 @@ class App(QObject):
         soon_after_reset = self._earliest_reset_refresh_time()
         if soon_after_reset is not None and soon_after_reset < next_refresh_at:
             next_refresh_at = soon_after_reset
+            minutes = max(
+                1,
+                int((next_refresh_at - datetime.now()).total_seconds() // 60) or 1,
+            )
+        stale_retry = self._stale_error_retry_time(now)
+        if stale_retry is not None and stale_retry < next_refresh_at:
+            next_refresh_at = stale_retry
             minutes = max(
                 1,
                 int((next_refresh_at - datetime.now()).total_seconds() // 60) or 1,
@@ -486,6 +494,15 @@ class App(QObject):
                 if earliest is None or target < earliest:
                     earliest = target
         return earliest
+
+    def _stale_error_retry_time(self, now: datetime | None = None) -> datetime | None:
+        """Soonest recovery refresh for errors that still have stale metrics."""
+        if not any(
+            snap.status == SnapshotStatus.ERROR and bool(snap.metrics)
+            for snap in self._snapshots.values()
+        ):
+            return None
+        return (now or datetime.now()) + timedelta(minutes=_STALE_ERROR_RETRY_MINUTES)
 
     # ----- Refresh -----
 

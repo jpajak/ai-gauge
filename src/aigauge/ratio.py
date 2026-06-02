@@ -162,6 +162,70 @@ def record_estimate(record: WeeklyRatioRecord) -> RatioEstimate:
     )
 
 
+def _merge_history_records(records: list[WeeklyRatioRecord]) -> WeeklyRatioRecord:
+    first = records[0]
+
+    def _min_iso(values: list[str]) -> str:
+        parsed = [dt for dt in (_parse_iso(value) for value in values) if dt is not None]
+        return _isoformat(min(parsed)) if parsed else values[0]
+
+    def _max_iso(values: list[str]) -> str:
+        parsed = [dt for dt in (_parse_iso(value) for value in values) if dt is not None]
+        return _isoformat(max(parsed)) if parsed else values[-1]
+
+    return WeeklyRatioRecord(
+        provider=first.provider,
+        week_started_at=_min_iso([record.week_started_at for record in records]),
+        week_ended_at=_max_iso([record.week_ended_at for record in records]),
+        weekly_resets_at=_max_iso([record.weekly_resets_at for record in records]),
+        sum_session_delta=sum(record.sum_session_delta for record in records),
+        sum_weekly_delta=sum(record.sum_weekly_delta for record in records),
+        sample_count=sum(record.sample_count for record in records),
+    )
+
+
+def _normalize_history_records(
+    records: list[WeeklyRatioRecord],
+) -> list[WeeklyRatioRecord]:
+    """Collapse old split records that represent the same weekly reset.
+
+    Early builds could finalize multiple fragments for one Claude weekly period
+    when the weekly percent dropped without the reset date moving. Reset times
+    are parsed from rendered text and can jitter by seconds, so records within
+    the rollover threshold belong to the same weekly bucket.
+    """
+    if len(records) < 2:
+        return records
+
+    def _reset_key(record: WeeklyRatioRecord) -> datetime:
+        return _parse_iso(record.weekly_resets_at) or datetime.min
+
+    normalized: list[WeeklyRatioRecord] = []
+    for record in sorted(records, key=_reset_key):
+        reset_at = _parse_iso(record.weekly_resets_at)
+        if not normalized or reset_at is None:
+            normalized.append(record)
+            continue
+        previous = normalized[-1]
+        previous_reset = _parse_iso(previous.weekly_resets_at)
+        if previous_reset is None or abs(reset_at - previous_reset) >= _ROLLOVER_THRESHOLD:
+            normalized.append(record)
+            continue
+
+        group = [previous, record]
+        confident = [
+            item
+            for item in group
+            if is_confident(
+                item.sum_session_delta,
+                item.sum_weekly_delta,
+                item.sample_count,
+            )
+        ]
+        normalized[-1] = _merge_history_records(confident or group)
+    return normalized
+
+
 def typical_sessions_per_week(
     records: list[WeeklyRatioRecord], *, min_weeks: int = 2
 ) -> tuple[float, int] | None:
@@ -243,7 +307,9 @@ class RatioStore:
         self._state_path = self._dir / "ratio_state.json"
         self._history_path = self._dir / "ratios.json"
         self._state: dict[str, RatioTrackerState] = self._load_state()
-        self._history: dict[str, list[WeeklyRatioRecord]] = self._load_history()
+        self._history, history_dirty = self._load_history()
+        if history_dirty:
+            self._save_history()
 
     # ---- public API ----
 
@@ -436,11 +502,12 @@ class RatioStore:
                 continue
         return out
 
-    def _load_history(self) -> dict[str, list[WeeklyRatioRecord]]:
+    def _load_history(self) -> tuple[dict[str, list[WeeklyRatioRecord]], bool]:
         data = _read_json(self._history_path)
         out: dict[str, list[WeeklyRatioRecord]] = {}
         if not isinstance(data, dict):
-            return out
+            return out, False
+        dirty = False
         for provider, raw_list in data.items():
             if not isinstance(raw_list, list):
                 continue
@@ -452,8 +519,11 @@ class RatioStore:
                     records.append(WeeklyRatioRecord(**raw))
                 except TypeError:
                     continue
-            out[provider] = records[-MAX_HISTORY:]
-        return out
+            normalized = _normalize_history_records(records)
+            if normalized != records:
+                dirty = True
+            out[provider] = normalized[-MAX_HISTORY:]
+        return out, dirty
 
     def _save_state(self) -> None:
         try:

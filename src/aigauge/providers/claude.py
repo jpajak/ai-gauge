@@ -3,6 +3,7 @@ from __future__ import annotations
 import logging
 from datetime import timedelta
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 from PyQt6.QtCore import QObject
 
@@ -20,25 +21,24 @@ from .base import Provider
 from .diagnostics import log_page_diagnosis
 from .idle import idle_reset_state
 
-CLAUDE_USAGE_URL = "https://claude.ai/settings/usage"
-_EXPECTED_ROWS = ("session", "weekly_all", "weekly_design")
+CLAUDE_USAGE_URL = "https://claude.ai/new#settings/usage"
+_EXPECTED_ROWS = ("session", "weekly_all")
 log = logging.getLogger("aigauge.providers.claude")
 
-# Claude's settings/usage page renders rows like:
+# Claude's usage dialog renders rows like:
 #   "Current session  Resets in 2 hr 59 min  [bar]  64% used"
 #   "All models       Resets in 6 hr 29 min  [bar]  30% used"
 # We locate each row by its label text, then read the % and reset string.
 #
-# If the page is signed in but the usage panel hasn't hydrated yet (no `%`
-# and no "Plan usage limits" text), the extractor asks the scraper to poll
-# again in-page rather than failing. The scraper caps in-page reruns at 5,
-# so this adds at most a few extra seconds before giving up.
+# If Claude lands in the signed-in app shell before the usage dialog has
+# hydrated, the extractor asks the scraper to poll again in-page rather than
+# failing on sidebar/chat text. It waits for the Session/Weekly rows, not just
+# any percent text elsewhere in the shell.
 EXTRACTOR_JS = r"""
 (() => {
   const ROW_LABELS = [
     'Current session',
     'All models',
-    'Claude Design',
     'Daily included routine runs'
   ];
 
@@ -95,22 +95,50 @@ EXTRACTOR_JS = r"""
 
   const session = readRow('Current session');
   const weeklyAll = readRow('All models');
-  const weeklyDesign = readRow('Claude Design');
 
-  // Page is on the usage URL, signed in, but the panel hasn't rendered yet:
-  // no `%` text anywhere and no "Plan usage limits" header. Poll again
-  // in-page so we don't tear down the load and lose the warmed React tree.
-  const onUsageUrl = /\/settings\/usage/.test(location.pathname);
-  const usagePanelRendered = /Plan usage limits/i.test(bodyText) || /%/.test(bodyText);
-  const allRowsEmpty = !session && !weeklyAll && !weeklyDesign;
-  if (!isLoggedOut && onUsageUrl && !usagePanelRendered && allRowsEmpty) {
+  function onUsageRoute() {
+    return /\/settings\/usage/.test(location.pathname) ||
+      /settings\/usage/i.test(location.hash);
+  }
+
+  function ensureUsageRoute() {
+    if (onUsageRoute()) return null;
+    if (location.hostname !== 'claude.ai') return null;
+    if (/Plan usage limits|Current session|All models/i.test(bodyText)) return null;
+    location.href = '/new#settings/usage';
+    return 'opened usage dialog';
+  }
+
+  const routeReason = !isLoggedOut ? ensureUsageRoute() : null;
+  if (routeReason) {
     return {
-      __retry_after_ms: 1000,
-      __retry_reason: 'usage panel not rendered',
+      __retry_after_ms: 1200,
+      __retry_reason: routeReason,
       logged_out: false,
       session: null,
       weekly_all: null,
-      weekly_design: null,
+      url: location.href,
+      title: document.title,
+      body_text: bodyText.slice(0, 8000),
+    };
+  }
+
+  // The current Claude UI opens usage as a shell/dialog route. Percent text
+  // elsewhere in the shell is not enough; wait for the Session/Weekly rows
+  // or for the explicit idle-zero usage panel before handing data to Python.
+  const usagePanelSignals = /Plan usage limits|Current session|All models/i.test(bodyText);
+  const idleUsagePanel = /Plan usage limits/i.test(bodyText) &&
+    /Current session/i.test(bodyText) &&
+    /All models/i.test(bodyText) &&
+    !/%/.test(bodyText);
+  const requiredRowsReady = !!session && !!weeklyAll;
+  if (!isLoggedOut && (onUsageRoute() || usagePanelSignals) && !requiredRowsReady && !idleUsagePanel) {
+    return {
+      __retry_after_ms: 1200,
+      __retry_reason: 'usage dialog not ready',
+      logged_out: false,
+      session: null,
+      weekly_all: null,
       url: location.href,
       title: document.title,
       body_text: bodyText.slice(0, 8000),
@@ -121,7 +149,6 @@ EXTRACTOR_JS = r"""
     logged_out: isLoggedOut,
     session: session,
     weekly_all: weeklyAll,
-    weekly_design: weeklyDesign,
     url: location.href,
     title: document.title,
     body_text: bodyText.slice(0, 8000),
@@ -130,8 +157,15 @@ EXTRACTOR_JS = r"""
 """
 
 
+def _is_claude_usage_url(url: str) -> bool:
+    parsed = urlparse(url)
+    if parsed.netloc and parsed.netloc != "claude.ai":
+        return False
+    return parsed.path == "/settings/usage" or "settings/usage" in parsed.fragment
+
+
 def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
-    if payload.get("url") != CLAUDE_USAGE_URL:
+    if not _is_claude_usage_url(str(payload.get("url") or "")):
         return False
     title = str(payload.get("title") or "").strip().lower()
     if title != "claude":
@@ -169,7 +203,6 @@ def _build_snapshot(
     payload: dict[str, Any],
     *,
     account_id: str = "claude",
-    show_design: bool = False,
 ) -> UsageSnapshot:
     if _is_logged_out_payload(payload):
         log_page_diagnosis(
@@ -219,8 +252,6 @@ def _build_snapshot(
         ("session", "Session", timedelta(hours=5)),
         ("weekly_all", "Weekly", timedelta(days=7)),
     )
-    if show_design:
-        rows += (("weekly_design", "Design", timedelta(days=7)),)
     metrics: list[UsageMetric] = []
     for key, label, reset_window in rows:
         card = payload.get(key)
@@ -287,21 +318,15 @@ class ClaudeProvider(Provider):
     def __init__(
         self,
         parent: QObject | None = None,
-        show_design: bool = False,
         account_id: str = "claude",
     ):
         self._parent = parent
-        self._show_design = show_design
         self._account_id = account_id
         self._runner: ScrapeRunner | None = None  # held to prevent GC
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         def _build(payload: dict[str, Any]) -> UsageSnapshot:
-            return _build_snapshot(
-                payload,
-                account_id=self._account_id,
-                show_design=self._show_design,
-            )
+            return _build_snapshot(payload, account_id=self._account_id)
 
         self._runner = ScrapeRunner(
             account_id=self._account_id,
@@ -309,7 +334,7 @@ class ClaudeProvider(Provider):
             extractor_js=EXTRACTOR_JS,
             build=_build,
             log=log,
-            wait_ms=5000,
+            wait_ms=7000,
             transport_max_attempts=2,
             build_max_attempts=2,
             parent=self._parent,

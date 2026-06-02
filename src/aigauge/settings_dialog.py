@@ -363,13 +363,6 @@ class SettingsDialog(QDialog):
         self.claude_cb.setChecked(config.providers.claude)
         providers_layout.addWidget(self.claude_cb)
 
-        self.claude_design_cb = QCheckBox("Show Claude Design limit")
-        self.claude_design_cb.setToolTip(
-            "Show Claude's separate design-generation usage limit when Claude exposes it."
-        )
-        self.claude_design_cb.setChecked(config.providers.claude_design)
-        providers_layout.addWidget(self.claude_design_cb)
-
         self.codex_cb = QCheckBox("Codex")
         self.codex_cb.setToolTip("Show Codex accounts in the panel.")
         self.codex_cb.setChecked(config.providers.codex)
@@ -900,7 +893,6 @@ class SettingsDialog(QDialog):
         accounts = self._current_browser_accounts()
         config.browser_accounts = accounts
         config.providers.claude = self.claude_cb.isChecked()
-        config.providers.claude_design = self.claude_design_cb.isChecked()
         config.providers.codex = self.codex_cb.isChecked()
         config.providers.copilot = self.copilot_cb.isChecked()
         config.providers.openrouter = self.openrouter_cb.isChecked()

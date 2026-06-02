@@ -372,3 +372,21 @@ def test_schedule_ignores_unused_metric_resets():
     scheduled_minutes = app._timer.started_ms / 60_000  # noqa: SLF001
     # Falls back to adaptive backoff (5 min × 2^5 = 160, capped at 60).
     assert scheduled_minutes >= 30
+
+
+def test_schedule_pulls_stale_error_refresh_forward():
+    app = _schedule_app_stub()
+    app._snapshots = {  # noqa: SLF001
+        "claude": UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.ERROR,
+            error="Could not read usage from page.",
+            metrics=[UsageMetric(label="Session", percent_used=80.0)],
+        ),
+    }
+
+    app._schedule_next_refresh()  # noqa: SLF001
+
+    assert app._timer.started_ms is not None  # noqa: SLF001
+    scheduled_minutes = app._timer.started_ms / 60_000  # noqa: SLF001
+    assert 0 < scheduled_minutes <= 1.2

@@ -74,7 +74,6 @@ class WindowState(BaseModel):
 
 class ProviderToggles(BaseModel):
     claude: bool = True
-    claude_design: bool = False
     codex: bool = True
     copilot: bool = True
     openrouter: bool = False

@@ -47,10 +47,22 @@ def _parse(iso: str) -> datetime | None:
         return None
 
 
-def _period_label(index_from_newest: int, record: WeeklyRatioRecord) -> str:
-    if index_from_newest == 0:
-        return "last week"
-    return f"{index_from_newest + 1} wks ago"
+def _period_label(record: WeeklyRatioRecord) -> str:
+    start = _parse(record.week_started_at)
+    end = _parse(record.week_ended_at)
+    if start is None or end is None:
+        return "unknown"
+    if start.date() == end.date():
+        label = start.strftime("%b %d")
+    else:
+        label = f"{start.strftime('%b %d')} -> {end.strftime('%b %d')}"
+    if not is_confident(
+        record.sum_session_delta,
+        record.sum_weekly_delta,
+        record.sample_count,
+    ):
+        label += " partial"
+    return label
 
 
 def _date_range(record: WeeklyRatioRecord) -> str:
@@ -275,7 +287,7 @@ class RatioHistoryDialog(QDialog):
             return container
 
         # newest first
-        for row, (offset, record) in enumerate(enumerate(reversed(records)), start=1):
+        for row, record in enumerate(reversed(records), start=1):
             n = sessions_per_week(record.sum_session_delta, record.sum_weekly_delta)
             r = weekly_pct_per_session(
                 record.sum_session_delta, record.sum_weekly_delta
@@ -287,9 +299,9 @@ class RatioHistoryDialog(QDialog):
             )
             color = "#e5e7eb" if confident else "#6b7280"
             cells = (
-                _period_label(offset, record),
-                "n/a" if n is None else f"{n:.1f}",
-                "n/a" if r is None else f"{r:.0f}%",
+                _period_label(record),
+                "n/a" if n is None or not confident else f"{n:.1f}",
+                "n/a" if r is None or not confident else f"{r:.0f}%",
                 f"{record.sum_weekly_delta:.0f}%",
                 str(record.sample_count),
             )

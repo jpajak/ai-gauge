@@ -24,7 +24,7 @@ AI Gauge is a local desktop utility for monitoring AI service usage across Claud
 - Cross-platform desktop app for Windows, macOS, and Linux, packaged with PyInstaller and runnable from source via `ai-gauge`.
 - Floating widget on Windows/Linux, compact pill mode, tray/menu actions, no-tray Linux fallback, and native macOS menu-bar popover.
 - Provider tiles for Claude, Codex, GitHub Copilot, and OpenRouter.
-- Claude usage scraping from `https://claude.ai/settings/usage`, including session, weekly, and optional Claude Design limit.
+- Claude usage scraping from `https://claude.ai/new#settings/usage`, including session and weekly limits.
 - Codex usage scraping from `https://chatgpt.com/codex/cloud/settings/analytics#personal-usage`, including session and weekly limits.
 - GitHub Copilot AI credit usage via GitHub REST billing summary endpoints for user or organization billing scopes, with a legacy premium-request fallback.
 - OpenRouter account/key data via `/credits`, `/key`, and `/activity`, including balance, UTC day/month spend, optional daily budget gauge, and top model activity.

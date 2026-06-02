@@ -15,7 +15,6 @@ def test_defaults():
     assert c.active_refresh_interval_minutes == 5
     assert c.refresh_interval_minutes == 60
     assert c.providers.claude is True
-    assert c.providers.claude_design is False
     assert c.providers.codex is True
     assert [a.id for a in c.browser_accounts] == ["claude", "codex"]
     assert [a.kind for a in c.browser_accounts] == ["claude", "codex"]

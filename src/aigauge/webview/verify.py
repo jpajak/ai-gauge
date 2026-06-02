@@ -13,7 +13,7 @@ from .profile import get_profile
 # either redirects to /login or shows an interstitial.
 VERIFY_TARGETS = {
     "claude": (
-        "https://claude.ai/settings/usage",
+        "https://claude.ai/new#settings/usage",
         "(() => document.body && document.body.innerText.includes('Plan usage limits'))()",
     ),
     "codex": (

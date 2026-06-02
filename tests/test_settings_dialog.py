@@ -92,19 +92,6 @@ def test_remove_secondary_account_clears_cookie(qtbot, monkeypatch):
     assert removed == [(account_id, None)]
 
 
-def test_claude_design_limit_is_optional(qtbot, monkeypatch):
-    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
-    config = Config()
-    dialog = SettingsDialog(config)
-    qtbot.addWidget(dialog)
-
-    assert dialog.claude_design_cb.isChecked() is False
-    dialog.claude_design_cb.setChecked(True)
-    dialog.apply_to(config)
-
-    assert config.providers.claude_design is True
-
-
 def test_clear_saved_pat_checkbox_removes_existing_pat(qtbot, monkeypatch):
     calls = []
     monkeypatch.setattr(

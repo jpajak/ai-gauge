@@ -3,8 +3,15 @@ from __future__ import annotations
 import logging
 import uuid
 
-from PyQt6.QtCore import Qt, QUrl, pyqtSignal
-from PyQt6.QtGui import QDesktopServices
+from PyQt6.QtCore import QPointF, Qt, QUrl, pyqtSignal
+from PyQt6.QtGui import (
+    QColor,
+    QDesktopServices,
+    QPainter,
+    QPen,
+    QPixmap,
+    QPolygonF,
+)
 from PyQt6.QtWidgets import (
     QCheckBox,
     QComboBox,
@@ -31,6 +38,7 @@ from .config import (
     BrowserAccount,
     Config,
     account_display_name,
+    app_data_dir,
     browser_accounts,
     get_github_pat,
     get_openrouter_key,
@@ -123,9 +131,18 @@ QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
     border-color: #3b82f6;
 }
 QComboBox::drop-down {
-    width: 22px;
+    width: 20px;
     border: none;
+    border-left: 1px solid #374151;
+    background: transparent;
+}
+QComboBox::drop-down:hover {
     background: #374151;
+}
+QComboBox::down-arrow {
+    image: url("__DOWN_ARROW__");
+    width: 11px;
+    height: 11px;
 }
 QComboBox QAbstractItemView {
     background: #111827;
@@ -133,16 +150,22 @@ QComboBox QAbstractItemView {
     selection-background-color: #2563eb;
 }
 QSpinBox::up-button, QSpinBox::down-button {
-    width: 16px;
-    background: #374151;
-    border: none;
+    width: 18px;
+    background: transparent;
+    border-left: 1px solid #374151;
 }
 QSpinBox::up-button:hover, QSpinBox::down-button:hover {
-    background: #4b5563;
+    background: #374151;
 }
-QSpinBox::up-arrow, QSpinBox::down-arrow {
-    width: 8px;
-    height: 8px;
+QSpinBox::up-arrow {
+    image: url("__UP_ARROW__");
+    width: 9px;
+    height: 9px;
+}
+QSpinBox::down-arrow {
+    image: url("__DOWN_ARROW__");
+    width: 9px;
+    height: 9px;
 }
 QCheckBox {
     color: #e5e7eb;
@@ -198,6 +221,54 @@ QSlider::sub-page:horizontal {
     border-radius: 2px;
 }
 """
+
+
+def _chevron_png_path(direction: str) -> str:
+    """Render a chevron arrow and cache it on disk for QSS `image: url(...)`.
+
+    Styling QComboBox::drop-down / QSpinBox buttons without supplying an arrow
+    image leaves Qt drawing an empty grey block (the "bad" indicators), so we
+    draw our own light chevron that reads cleanly on the dark field. Rendered
+    larger than displayed so it stays crisp when the whole UI is scaled up.
+    """
+    src = 48
+    pixmap = QPixmap(src, src)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    pen = QPen(QColor("#cbd5e1"))
+    pen.setWidthF(src * 0.10)
+    pen.setCapStyle(Qt.PenCapStyle.RoundCap)
+    pen.setJoinStyle(Qt.PenJoinStyle.RoundJoin)
+    painter.setPen(pen)
+    left, mid_x, right = src * 0.30, src * 0.5, src * 0.70
+    if direction == "down":
+        outer_y, inner_y = src * 0.42, src * 0.60
+    else:
+        outer_y, inner_y = src * 0.58, src * 0.40
+    painter.drawPolyline(
+        QPolygonF(
+            [
+                QPointF(left, outer_y),
+                QPointF(mid_x, inner_y),
+                QPointF(right, outer_y),
+            ]
+        )
+    )
+    painter.end()
+
+    cache_dir = app_data_dir() / "cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    path = cache_dir / f"settings-chevron-{direction}.png"
+    pixmap.save(str(path), "PNG")
+    return path.as_posix()
+
+
+def _build_stylesheet() -> str:
+    """Inject the cached chevron paths into the static dark stylesheet."""
+    return _DARK_STYLESHEET.replace(
+        "__DOWN_ARROW__", _chevron_png_path("down")
+    ).replace("__UP_ARROW__", _chevron_png_path("up"))
 
 
 def _hint_label(text: str) -> QLabel:
@@ -286,7 +357,7 @@ class SettingsDialog(QDialog):
         self.setModal(False)
         self.resize(620, 520)
         self.setMinimumSize(560, 420)
-        self.setStyleSheet(_DARK_STYLESHEET)
+        self.setStyleSheet(_build_stylesheet())
         self._config = config
         self._browser_account_rows: list[_BrowserAccountRow] = []
         self._removed_browser_account_ids: list[str] = []
@@ -346,6 +417,33 @@ class SettingsDialog(QDialog):
         op_row.addWidget(self.opacity_value)
         general_grid.addWidget(QLabel("Opacity:"), 2, 0)
         general_grid.addLayout(op_row, 2, 1, 1, 3)
+
+        self.ui_scale_changed = False
+        self.start_at_login_error = False
+        self._initial_ui_scale = float(getattr(config.window, "ui_scale", 1.0))
+        self.ui_scale_combo = QComboBox()
+        self.ui_scale_combo.setMinimumWidth(110)
+        self.ui_scale_combo.setToolTip(
+            "Enlarge the whole widget, e.g. on a high-resolution (4K) display. "
+            "Takes effect after restarting AI Gauge."
+        )
+        scale_values = [0.75, 0.9, 1.0, 1.25, 1.5, 1.75, 2.0, 2.5, 3.0, 4.0]
+        if self._initial_ui_scale not in scale_values:
+            scale_values = sorted(set(scale_values) | {self._initial_ui_scale})
+        for value in scale_values:
+            self.ui_scale_combo.addItem(f"{round(value * 100)}%", value)
+        current_index = self.ui_scale_combo.findData(self._initial_ui_scale)
+        if current_index >= 0:
+            self.ui_scale_combo.setCurrentIndex(current_index)
+        scale_hint = QLabel("applies after restart")
+        scale_hint.setStyleSheet("color:#6b7280; font-size:11px; font-style:italic;")
+        scale_row = QHBoxLayout()
+        scale_row.setContentsMargins(0, 0, 0, 0)
+        scale_row.addWidget(self.ui_scale_combo)
+        scale_row.addWidget(scale_hint)
+        scale_row.addStretch(1)
+        general_grid.addWidget(QLabel("UI scale:"), 3, 0)
+        general_grid.addLayout(scale_row, 3, 1, 1, 3)
 
         # ----- Providers -----
         providers = QGroupBox("Providers")
@@ -890,6 +988,9 @@ class SettingsDialog(QDialog):
         config.start_at_login = self.startup_cb.isChecked()
         config.window.always_on_top = self.always_on_top_cb.isChecked()
         config.window.opacity = self.opacity_slider.value() / 100.0
+        new_ui_scale = float(self.ui_scale_combo.currentData())
+        self.ui_scale_changed = abs(new_ui_scale - self._initial_ui_scale) > 1e-3
+        config.window.ui_scale = new_ui_scale
         accounts = self._current_browser_accounts()
         config.browser_accounts = accounts
         config.providers.claude = self.claude_cb.isChecked()
@@ -908,6 +1009,14 @@ class SettingsDialog(QDialog):
         )
         budget = self.or_daily_budget.value()
         config.openrouter.daily_budget = budget if budget > 0 else None
-        set_start_at_login(config.start_at_login)
 
+        # Persist all settings first: wiring up OS autostart can fail (e.g. a
+        # rejected Task Scheduler entry), and that must neither lose the user's
+        # other changes nor crash the app via an exception escaping this slot.
         config.save()
+        self.start_at_login_error = False
+        try:
+            set_start_at_login(config.start_at_login)
+        except Exception:  # noqa: BLE001
+            log.exception("failed to update start-at-login")
+            self.start_at_login_error = True

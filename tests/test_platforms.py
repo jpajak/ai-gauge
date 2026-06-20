@@ -7,6 +7,8 @@ mac/Linux impls also get coverage by injecting a fake keyring backend.
 from __future__ import annotations
 
 import sys
+import xml.etree.ElementTree as ET
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -14,6 +16,7 @@ import pytest
 from aigauge.platforms import autostart_command, get_platform
 from aigauge.platforms.linux import LinuxPlatform
 from aigauge.platforms.macos import MacOSPlatform
+from aigauge.platforms.windows import TASK_DESCRIPTION, TASK_NAME, WindowsPlatform
 
 
 class _FakeKeyring:
@@ -33,6 +36,10 @@ class _FakeKeyring:
             import keyring
 
             raise keyring.errors.PasswordDeleteError("not found")
+
+
+def _completed(returncode=0):
+    return SimpleNamespace(returncode=returncode, stdout="", stderr="")
 
 
 def test_get_platform_returns_an_instance_with_a_name():
@@ -80,6 +87,83 @@ def test_macos_default_ui_mode_is_menubar():
 
 def test_linux_default_ui_mode_is_floating_widget():
     assert LinuxPlatform().default_ui_mode() == "floating_widget"
+
+
+def test_windows_autostart_creates_named_scheduled_task(monkeypatch):
+    calls = []
+    captured_xml = []
+
+    def fake_run(command, **kwargs):
+        calls.append((command, kwargs))
+        if "/XML" in command:
+            xml_path = command[command.index("/XML") + 1]
+            captured_xml.append(open(xml_path, "rb").read())
+        return _completed()
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr(
+        "aigauge.platforms.windows._schtasks_path",
+        lambda: r"C:\Windows\System32\schtasks.exe",
+    )
+    monkeypatch.setattr("aigauge.platforms.windows.subprocess.run", fake_run)
+    monkeypatch.setattr(
+        "aigauge.platforms.windows.autostart_command",
+        lambda: [r"C:\Tools\ai-gauge\ai-gauge.exe"],
+    )
+
+    WindowsPlatform().set_autostart(True)
+
+    assert calls[0][0][:4] == [
+        r"C:\Windows\System32\schtasks.exe",
+        "/Create",
+        "/TN",
+        TASK_NAME,
+    ]
+    assert calls[0][0][-1] == "/F"
+    assert calls[0][1]["creationflags"] == 0 or isinstance(
+        calls[0][1]["creationflags"], int
+    )
+    assert captured_xml
+
+    # schtasks /XML rejects the file unless it is UTF-16 and the declaration's
+    # encoding matches the bytes ("unable to switch the encoding"). Lock both in.
+    raw = captured_xml[0]
+    assert raw[:2] == b"\xff\xfe"  # UTF-16 little-endian BOM
+    assert 'encoding="UTF-16"' in raw.decode("utf-16").splitlines()[0]
+
+    root = ET.fromstring(raw)
+    ns = {"task": "http://schemas.microsoft.com/windows/2004/02/mit/task"}
+    assert (
+        root.findtext("task:RegistrationInfo/task:Description", namespaces=ns)
+        == TASK_DESCRIPTION
+    )
+    assert root.find("task:Triggers/task:LogonTrigger", namespaces=ns) is not None
+    assert (
+        root.findtext("task:Actions/task:Exec/task:Command", namespaces=ns)
+        == r"C:\Tools\ai-gauge\ai-gauge.exe"
+    )
+    # Scoped to the current user (UserId on both the trigger and the principal)
+    # so registering the task needs no admin — otherwise schtasks denies it.
+    assert root.findtext("task:Triggers/task:LogonTrigger/task:UserId", namespaces=ns)
+    assert root.findtext("task:Principals/task:Principal/task:UserId", namespaces=ns)
+
+
+def test_windows_autostart_delete_checks_task_first(monkeypatch):
+    calls = []
+
+    def fake_run(command, **kwargs):
+        calls.append(command)
+        if "/Query" in command:
+            return _completed(1)
+        return _completed()
+
+    monkeypatch.setattr(sys, "platform", "win32")
+    monkeypatch.setattr("aigauge.platforms.windows._schtasks_path", lambda: "schtasks.exe")
+    monkeypatch.setattr("aigauge.platforms.windows.subprocess.run", fake_run)
+
+    WindowsPlatform().set_autostart(False)
+
+    assert calls == [["schtasks.exe", "/Query", "/TN", TASK_NAME]]
 
 
 def test_linux_autostart_writes_desktop_file(tmp_path, monkeypatch):

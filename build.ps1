@@ -19,6 +19,9 @@ if (-not (Test-Path $venvPython)) {
 
 & $venvPython -m pip install --quiet pyinstaller
 
+$versionInfo = Join-Path $PSScriptRoot "build\pyinstaller-version-info.txt"
+& $venvPython (Join-Path $PSScriptRoot "tools\write_pyinstaller_version_info.py") $versionInfo
+
 if ($OneFile) {
     $targetExe = Join-Path $PSScriptRoot "dist\ai-gauge.exe"
     if (Test-Path $targetExe) {
@@ -37,6 +40,7 @@ $args = @(
     "--windowed",
     "--noupx",
     "--name", "ai-gauge",
+    "--version-file", $versionInfo,
     "--paths", "src",
     "--collect-all", "PyQt6.QtWebEngineWidgets",
     "--collect-all", "PyQt6.QtWebEngineCore",

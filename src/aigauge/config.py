@@ -70,6 +70,11 @@ class WindowState(BaseModel):
     collapsed: bool = False
     always_on_top: bool = True
     opacity: float = Field(default=1.0, ge=0.3, le=1.0)
+    # Whole-widget zoom. >1 enlarges for high-resolution (4K) displays; <1
+    # makes it more compact. Floor is 0.75 — below that the fixed 10-12px fonts
+    # become illegible. Applied via Qt's QT_SCALE_FACTOR at launch — see
+    # qt_scale_factor_env().
+    ui_scale: float = Field(default=1.0, ge=0.75, le=4.0)
 
 
 class ProviderToggles(BaseModel):
@@ -199,6 +204,20 @@ class Config(BaseModel):
             json.dumps(self.model_dump(), indent=2, default=str),
             encoding="utf-8",
         )
+
+
+def qt_scale_factor_env(config: Config) -> str | None:
+    """QT_SCALE_FACTOR string for the configured UI scale, or None at 1.0.
+
+    Qt reads QT_SCALE_FACTOR once, before QApplication is constructed, and uses
+    it to scale the whole (otherwise fixed-pixel) widget — the lever behind the
+    Settings "UI scale" option. Returns None when the scale is effectively 1.0
+    so Qt's own per-monitor DPI handling is left untouched.
+    """
+    scale = float(getattr(config.window, "ui_scale", 1.0) or 1.0)
+    if abs(scale - 1.0) <= 1e-3:
+        return None
+    return f"{scale:g}"
 
 
 def provider_base_name(kind: str) -> str:

@@ -4,13 +4,20 @@ import atexit
 import json
 import logging
 import os
+import subprocess
 import sys
 from dataclasses import replace
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import QObject, QLockFile, QPoint, Qt, QTimer
 from PyQt6.QtGui import QAction, QColor, QCursor, QIcon, QPainter, QPixmap
-from PyQt6.QtWidgets import QApplication, QDialog, QMenu, QSystemTrayIcon
+from PyQt6.QtWidgets import (
+    QApplication,
+    QDialog,
+    QMenu,
+    QMessageBox,
+    QSystemTrayIcon,
+)
 
 from . import __version__
 from .config import (
@@ -19,6 +26,7 @@ from .config import (
     app_data_dir,
     browser_accounts,
     display_name_for_account,
+    qt_scale_factor_env,
 )
 from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
@@ -26,7 +34,7 @@ from .history import HistoryStore
 from .logging_setup import setup_logging
 from .menubar import render_menubar_pixmap
 from .models import SnapshotStatus, UsageSnapshot
-from .platforms import get_platform
+from .platforms import autostart_command, get_platform
 from .providers.base import Provider, ProviderSignals
 from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
@@ -211,6 +219,7 @@ class App(QObject):
             app_data_dir(),
         )
         self._started_at = datetime.now()
+        self._instance_lock: QLockFile | None = None
         self._config = Config.load()
         self._snapshots: dict[str, UsageSnapshot] = {}
         self._history = HistoryStore()
@@ -785,6 +794,35 @@ class App(QObject):
 
     # ----- Settings -----
 
+    def set_instance_lock(self, lock: QLockFile | None) -> None:
+        """Hold the single-instance lock so restart() can release it cleanly."""
+        self._instance_lock = lock
+
+    def restart(self) -> None:
+        """Relaunch the app so a new UI scale (QT_SCALE_FACTOR) takes effect.
+
+        QT_SCALE_FACTOR is latched when QApplication is constructed, so a scale
+        change only applies on a fresh process.
+        """
+        log.info("restarting to apply new UI scale")
+        # Release the single-instance lock first so the relaunched process can
+        # acquire it without racing this one's shutdown.
+        if self._instance_lock is not None:
+            try:
+                self._instance_lock.unlock()
+            except Exception:  # noqa: BLE001
+                pass
+        _flush_log_handlers()
+        # Drop any inherited QT_SCALE_FACTOR so the child recomputes it from the
+        # freshly saved config rather than reusing this process's value.
+        child_env = dict(os.environ)
+        child_env.pop("QT_SCALE_FACTOR", None)
+        try:
+            subprocess.Popen(autostart_command(), env=child_env, close_fds=True)
+        except Exception:  # noqa: BLE001
+            log.exception("failed to relaunch for UI scale change")
+        QApplication.instance().quit()
+
     def open_settings(self) -> None:
         if self._settings_dialog is not None:
             self._raise_settings_dialog()
@@ -847,6 +885,25 @@ class App(QObject):
                 self._rerender_openrouter(new_openrouter_budget)
             self._restart_timer()
             self.refresh_now(manual=True)
+            if getattr(dlg, "start_at_login_error", False):
+                QMessageBox.warning(
+                    self._widget,
+                    "Start at login",
+                    "AI Gauge couldn't update the Windows start-at-login task. "
+                    "Your other settings were saved.",
+                )
+            if getattr(dlg, "ui_scale_changed", False):
+                answer = QMessageBox.question(
+                    self._widget,
+                    "Restart to apply scale",
+                    "AI Gauge needs to restart to apply the new UI scale.\n\n"
+                    "Restart now?",
+                    QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                    QMessageBox.StandardButton.Yes,
+                )
+                if answer == QMessageBox.StandardButton.Yes:
+                    self.restart()
+                    return
         dlg.deleteLater()
 
     def _on_widget_activated(self) -> None:
@@ -952,23 +1009,63 @@ class App(QObject):
         pass
 
 
+def _install_excepthook() -> None:
+    """Log otherwise-fatal uncaught exceptions.
+
+    PyQt aborts the process when an exception escapes a slot, and a windowed
+    build has nowhere to print the traceback — so it vanishes silently. Routing
+    it through the file log leaves a diagnosable trace.
+    """
+    previous = sys.excepthook
+
+    def _hook(exc_type, exc, tb):
+        log.critical("unhandled exception", exc_info=(exc_type, exc, tb))
+        previous(exc_type, exc, tb)
+
+    sys.excepthook = _hook
+
+
+def _apply_ui_scale_env() -> None:
+    """Translate the saved UI scale into QT_SCALE_FACTOR before QApplication.
+
+    Qt latches the factor when QApplication is constructed, so a change only
+    takes effect on the next launch — the Settings dialog tells the user as
+    much. An explicit QT_SCALE_FACTOR in the environment always wins.
+    """
+    if "QT_SCALE_FACTOR" in os.environ:
+        return
+    try:
+        factor = qt_scale_factor_env(Config.load())
+    except Exception:  # noqa: BLE001 - never block startup over a scale read
+        return
+    if factor is not None:
+        os.environ["QT_SCALE_FACTOR"] = factor
+
+
 def main() -> int:
     instance_lock = _acquire_instance_lock()
     if instance_lock is None:
         return 0
+    setup_logging()
+    _install_excepthook()
     # QtWebEngine requires this attribute set before QApplication is constructed.
     QApplication.setAttribute(Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True)
     # Importing QtWebEngineWidgets before the QApplication forces its OpenGL
     # initialisation to happen at the right time.
     from PyQt6 import QtWebEngineWidgets  # noqa: F401
 
-    QApplication.setQuitOnLastWindowClosed(False)
+    _apply_ui_scale_env()
+
     qt_app = QApplication(sys.argv)
+    # Must be set on the live instance: a tray-resident app keeps running with
+    # no visible windows, and closing a transient dialog/message box must not
+    # quit it. (Called pre-construction this silently no-ops.)
+    qt_app.setQuitOnLastWindowClosed(False)
     qt_app.setApplicationName("ai-gauge")
     qt_app.setOrganizationName("ai-gauge")
     qt_app.setApplicationVersion(__version__)
     _app = App()  # noqa: F841 - keeps refs alive
-    _instance_lock = instance_lock  # noqa: F841 - keep the single-instance lock alive
+    _app.set_instance_lock(instance_lock)
     return qt_app.exec()
 
 

@@ -12,9 +12,9 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, **GitHub Copilot**, and **
 - **Windows / Linux** — always-on-top draggable frameless widget plus a system-tray icon.
 - **macOS** — Stats-style menu-bar item (`● 42% ● 78% ● 15%`); the panel opens as a popover when you click it.
 
-> **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Run key / LaunchAgent / `~/.config/autostart`).
+> **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Windows Task Scheduler / LaunchAgent / `~/.config/autostart`).
 
-Current version: **0.5.9**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.6.0**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
 utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
@@ -58,7 +58,7 @@ Pre-built binaries for each release are published on the [Releases page](https:/
 | macOS   | `ai-gauge-<version>-macos.tar.gz`    | extract, drag `ai-gauge.app` to Applications |
 | Linux   | `ai-gauge-<version>-linux.tar.gz`    | extract, run `./ai-gauge/ai-gauge` |
 
-SHA256 sums are published alongside each archive. Builds are unsigned — see the [first-launch warnings](#build-a-standalone-binary) section below for SmartScreen / Gatekeeper handling.
+SHA256 sums are published alongside each archive. Builds are unsigned - see the [first-launch warnings](#build-a-standalone-binary) section below for SmartScreen / Gatekeeper handling.
 
 ## Run from source
 
@@ -149,9 +149,9 @@ Bundles are ~150-200 MB because the Chromium runtime ships inside. User data sti
 
 For a single-file binary (slower first launch), pass `-OneFile` (PowerShell) or `--onefile` (bash). On macOS the `.app` bundle is recommended over the single-file form.
 
-**First-launch warnings on signed-OS-bundle systems** — release artifacts are unsigned:
+**First-launch warnings on signed-OS-bundle systems** - release artifacts are unsigned:
 
-- **Windows:** SmartScreen → "More info" → "Run anyway".
+- **Windows:** SmartScreen -> "More info" -> "Run anyway". Windows builds include product/version metadata, but unsigned low-prevalence binaries can still trigger SmartScreen or Microsoft Defender reputation warnings.
 - **macOS:** Gatekeeper blocks on first launch. Either right-click the `.app` → Open the first time, or run `xattr -dr com.apple.quarantine ai-gauge.app` once.
 - **Linux:** no signing layer; just make `ai-gauge` executable if it isn't already.
 

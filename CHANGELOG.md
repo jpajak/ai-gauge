@@ -1,6 +1,23 @@
 # Changelog
 
-## Unreleased
+## 0.6.0 - 2026-06-19
+
+### Added
+
+- A **UI scale** setting (Settings → General) resizes the whole widget from 75% up to 400% — enlarging it for high-resolution (4K) displays where the otherwise fixed-pixel layout could render very small, or shrinking it for a more compact footprint. It is applied through Qt's display scaling (`QT_SCALE_FACTOR`) so fonts, bars, and icons stay crisp; changing it offers to restart AI Gauge so the new size takes effect immediately.
+
+### Changed
+
+- Windows Start at login now creates a named Task Scheduler entry instead of writing an `HKCU\Software\Microsoft\Windows\CurrentVersion\Run` value, reducing Defender false-positive risk from Run-key persistence.
+- Windows PyInstaller builds now include generated executable version metadata for product, company, description, filename, and version fields.
+
+### Fixed
+
+- **Start at login** on Windows now actually registers, and saving Settings with it enabled no longer crashes the app. The Task Scheduler entry had two bugs: it was written as UTF-8 (rejected by `schtasks /XML` as malformed — "unable to switch the encoding"; now UTF-16), and its logon trigger/principal had no user scope, so Windows treated it as an all-users task and refused to register it without admin ("Access is denied"). It is now scoped to the current user via `UserId`, so no elevation is needed. Settings are also persisted *before* autostart is wired up, and any remaining autostart failure surfaces a warning instead of aborting the app.
+- Unhandled exceptions are now written to the log via an excepthook, so a crash in a Qt slot leaves a diagnosable trace instead of silently terminating a windowed build.
+- The app no longer quits when a dialog or message box is the last window dismissed: `setQuitOnLastWindowClosed(False)` is now applied to the live `QApplication` instead of (ineffectively) before it was constructed, so the tray-resident app stays running.
+- Settings dropdown and spin-box arrows now render as proper chevrons instead of empty grey blocks.
+- The sign-in window's **I'm signed in** check no longer hangs and falsely reports `Could not load verification page (timeout)` right after a successful sign-in. Because the embedded browser was already on `claude.ai/new`, navigating it to the `…/new#settings/usage` verification URL was a same-document (fragment-only) change that never emits a load-finished event, so verification waited out its full timeout. It now polls for the signed-in marker on a timer instead of depending on that event, while still fast-failing a genuine load error.
 
 ## 0.5.9 - 2026-06-01
 

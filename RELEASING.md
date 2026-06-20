@@ -18,6 +18,7 @@ For AI Gauge, the release page should include:
   - Linux: tar.gz of `dist/ai-gauge/`
 - SHA256 checksums for each downloadable artifact.
 - A short note that the app is unsigned unless code signing has been added.
+- Windows artifact SHA256 and Authenticode status for Defender triage.
 
 ## Release Checklist (automated path)
 
@@ -120,14 +121,41 @@ Native UI per OS: floating widget on Windows / Linux, menu-bar item on macOS.
 SHA256: see the `.sha256` next to each archive.
 ```
 
+## Windows Defender / Reputation Notes
+
+Windows releases are built with PyInstaller metadata generated from
+`pyproject.toml` so `ai-gauge.exe` has a stable ProductName, CompanyName,
+FileDescription, FileVersion, ProductVersion, OriginalFilename, and copyright.
+The app's Start at login setting uses a named Task Scheduler entry (`AI Gauge`)
+instead of writing to `HKCU\Software\Microsoft\Windows\CurrentVersion\Run`.
+
+Before publishing a Windows release, record these details from the built exe:
+
+```powershell
+Get-FileHash ".\dist\ai-gauge\ai-gauge.exe" -Algorithm SHA256
+Get-AuthenticodeSignature ".\dist\ai-gauge\ai-gauge.exe"
+```
+
+If Defender reports a false positive, submit the exact release artifact to
+Microsoft as a software developer false-positive sample and include:
+
+- Detection name and Defender security intelligence version.
+- SHA256 hash and Git commit/tag that produced the artifact.
+- File path where it was detected.
+- Product name `AI Gauge` and company `AloeDesk`.
+- A note that startup is user opt-in and registered through Task Scheduler.
+
 ## Signing Notes
 
-Release artifacts are unsigned on every OS:
+Release artifacts are unsigned unless a maintainer provides signing material:
 
-- **Windows** — Microsoft Defender SmartScreen warns on new downloads.
-- **macOS** — Gatekeeper blocks first launch (quarantine attribute).
-- **Linux** — no signing layer, so no warning.
+- **Windows** - SmartScreen and Microsoft Defender may warn on new or
+  low-prevalence downloads. Authenticode signing with a consistent publisher
+  certificate is recommended before broad distribution.
+- **macOS** - Gatekeeper blocks first launch (quarantine attribute) until
+  Developer ID signing/notarization is added.
+- **Linux** - no OS signing layer, so no equivalent first-launch warning.
 
 Code signing / notarization can reduce friction but costs money and adds
-maintenance. It is reasonable to wait until there is real external usage
-before investing.
+maintenance. Unsigned internal builds should still come from CI, keep their
+SHA256 hashes, and avoid ad hoc binaries from developer machines.

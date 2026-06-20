@@ -310,12 +310,22 @@ class LoginWindow(QDialog):
             pass
         self._page.loadFinished.connect(self._on_verify_load_finished)
 
+        self._verify_attempts = 0
+        self._verify_polling = False
         self._verify_timeout = QTimer(self)
         self._verify_timeout.setSingleShot(True)
         self._verify_timeout.timeout.connect(self._on_verify_timeout)
         self._verify_timeout.start(20000)
 
         self._view.load(QUrl(url))
+        # loadFinished does NOT fire for a same-document (fragment-only)
+        # navigation. After a fresh sign-in the view is already sitting on
+        # https://claude.ai/new, so loading .../new#settings/usage only changes
+        # the hash — loadFinished never fires and verification would hang until
+        # the 20s timeout ("Could not load verification page (timeout)"). Drive
+        # polling from a timer so the check runs regardless; loadFinished, when
+        # it does fire (full cross-document load), only fast-fails real errors.
+        QTimer.singleShot(1500, self._begin_verify_polling)
 
     def _on_verify_load_finished(self, ok: bool) -> None:
         try:
@@ -323,13 +333,25 @@ class LoginWindow(QDialog):
         except (TypeError, RuntimeError):
             pass
         if not ok:
-            self._verify_finish(False, "page failed to load")
+            if not self._verify_polling:
+                self._verify_finish(False, "page failed to load")
             return
+        # A real cross-document load just completed. Reset the budget so the
+        # freshly loaded page gets the full polling window from here, in case
+        # it loaded slowly, then ensure polling is running.
+        self._verify_attempts = 0
+        self._begin_verify_polling()
+
+    def _begin_verify_polling(self) -> None:
         # SPA hydration is async — poll the JS check rather than sampling
         # once. Claude's usage page renders skeleton first, then fills in
         # "Plan usage limits" a beat later.
-        self._verify_attempts = 0
-        QTimer.singleShot(1500, self._run_verify_check)
+        if getattr(self, "_verify_timeout", None) is None:
+            return  # already finished (timeout or success)
+        if self._verify_polling:
+            return  # already polling
+        self._verify_polling = True
+        self._run_verify_check()
 
     def _run_verify_check(self) -> None:
         if getattr(self, "_verify_timeout", None) is None:

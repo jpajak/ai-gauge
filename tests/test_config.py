@@ -6,6 +6,7 @@ from aigauge.config import (
     browser_accounts,
     config_path,
     display_name_for_account,
+    qt_scale_factor_env,
     webview_profile_dir,
 )
 
@@ -23,6 +24,25 @@ def test_defaults():
     assert c.copilot.monthly_quota == 1500
     assert c.window.always_on_top is True
     assert c.window.collapsed is False
+    assert c.window.ui_scale == 1.0
+
+
+def test_ui_scale_round_trips_and_maps_to_qt_factor():
+    c = Config()
+    # Default scale leaves Qt's own DPI handling untouched.
+    assert qt_scale_factor_env(c) is None
+
+    c.window.ui_scale = 1.5
+    assert qt_scale_factor_env(c) == "1.5"
+    c.window.ui_scale = 2.0
+    assert qt_scale_factor_env(c) == "2"
+
+
+def test_ui_scale_persists(tmp_path, monkeypatch):
+    c = Config()
+    c.window.ui_scale = 1.25
+    c.save()
+    assert Config.load().window.ui_scale == 1.25
 
 
 def test_round_trip(tmp_path, monkeypatch):

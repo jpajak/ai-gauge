@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.6.1 - 2026-06-20
+
+### Fixed
+
+- The widget no longer vanishes at high Windows display scales (175%/200%) while the tray icon and Settings stay reachable. The last position is saved in device-independent pixels; raising the OS scale shrinks the logical desktop, so a spot that was on-screen at 100–150% could fall entirely outside the visible area — leaving the app running but the widget parked off-screen. The saved position is now clamped onto the nearest visible screen both when it is restored and on every show, so a scale or monitor change can never strand the widget out of view.
+
 ## 0.6.0 - 2026-06-19
 
 ### Added

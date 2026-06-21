@@ -26,6 +26,7 @@ from PyQt6.QtGui import (
     QPolygonF,
 )
 from PyQt6.QtWidgets import (
+    QApplication,
     QFrame,
     QGraphicsOpacityEffect,
     QHBoxLayout,
@@ -1199,6 +1200,7 @@ class UsageWidget(QWidget):
         )
         if config.window.x is not None and config.window.y is not None:
             self.move(QPoint(config.window.x, config.window.y))
+            self._clamp_to_visible_screen()
 
         # Drag-by-anywhere
         self._drag_offset: QPoint | None = None
@@ -1609,6 +1611,41 @@ class UsageWidget(QWidget):
         self._apply_collapsed_state(save=False)
         if was_visible:
             self.show()  # re-applying flags hides the window
+
+    def _clamp_to_visible_screen(self) -> None:
+        """Pull the window fully onto a visible screen.
+
+        The saved x/y are device-independent pixels captured at whatever
+        display scale was active when the user last moved the widget. Raising
+        the OS scale (e.g. to 175% or 200%) shrinks the logical desktop, so a
+        spot that was on-screen at 100-150% can land entirely outside the
+        visible area — the app keeps running (tray icon, Settings) but the
+        widget never appears. Unplugging the monitor it was parked on does the
+        same. Clamp into the available geometry so it always comes back.
+        """
+        pos = self.pos()
+        screen = (
+            QApplication.screenAt(pos)
+            or self.screen()
+            or QApplication.primaryScreen()
+        )
+        if screen is None:
+            return
+        geo = screen.availableGeometry()
+        # geo.right()/bottom() are inclusive, so the last fully-visible top-left
+        # is right - width + 1 (clamped below left/top for tiny screens).
+        max_x = max(geo.left(), geo.right() - self.width() + 1)
+        max_y = max(geo.top(), geo.bottom() - self.height() + 1)
+        x = max(geo.left(), min(pos.x(), max_x))
+        y = max(geo.top(), min(pos.y(), max_y))
+        if x != pos.x() or y != pos.y():
+            self.move(x, y)
+
+    def showEvent(self, event):  # noqa: N802
+        # A DPI/scale or monitor change can happen while the widget is hidden;
+        # re-clamp on every show so it can never come back off-screen.
+        super().showEvent(event)
+        self._clamp_to_visible_screen()
 
     def show_as_popover(self, anchor_global_x: int, anchor_global_y: int) -> None:
         """Show the widget below ``(anchor_global_x, anchor_global_y)``.

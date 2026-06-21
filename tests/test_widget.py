@@ -2,6 +2,7 @@ from datetime import datetime, timedelta
 
 import pytest
 from PyQt6.QtCore import Qt
+from PyQt6.QtWidgets import QApplication
 
 from aigauge.config import BrowserAccount, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
@@ -59,6 +60,25 @@ def _collapsed_chip_texts(widget: UsageWidget) -> list[str]:
                 if child.layout() is not None:
                     stack.append(child.layout())
     return texts
+
+
+def test_offscreen_saved_position_is_clamped_on_screen(qtbot):
+    """A position saved at a lower display scale can land off the (smaller)
+    logical desktop at 175%/200%; the widget must reappear fully on-screen."""
+    geo = QApplication.primaryScreen().availableGeometry()
+    config = Config()
+    # Far past the bottom-right corner, as a high-DPI logical shrink would do
+    # to coordinates captured at 100%.
+    config.window.x = geo.right() + 5000
+    config.window.y = geo.bottom() + 5000
+
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    assert widget.x() >= geo.left()
+    assert widget.y() >= geo.top()
+    assert widget.x() + widget.width() <= geo.right() + 1
+    assert widget.y() + widget.height() <= geo.bottom() + 1
 
 
 def test_reenabled_provider_returns_to_canonical_order(qtbot):

@@ -1,6 +1,6 @@
 [project]
 name = "ai-gauge"
-version = "0.6.0"
+version = "0.6.1"
 description = "Compact always-on-top monitor for Claude.ai, ChatGPT Codex, and GitHub Copilot usage limits."
 readme = "README.md"
 requires-python = ">=3.11"

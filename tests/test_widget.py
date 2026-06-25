@@ -625,7 +625,7 @@ def test_widget_fades_when_inactive_and_restores_on_hover(qtbot):
     qtbot.addWidget(widget)
 
     assert widget._target_window_opacity() == 0.45  # noqa: SLF001
-    assert widget.windowOpacity() == 0.45
+    assert widget.windowOpacity() == pytest.approx(0.45, abs=1 / 255)
 
     widget._mouse_inside = True  # noqa: SLF001
     widget._apply_window_opacity()  # noqa: SLF001

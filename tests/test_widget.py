@@ -516,6 +516,33 @@ def test_collapsed_mode_resizes_immediately(qtbot):
 
     assert widget.height() == 58
 
+def test_openrouter_model_expand_resizes_immediately(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="openrouter",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Balance $11.50 left · Spend today $0.00", None),
+                UsageMetric("Models: last 30 completed UTC days", None, tag="models"),
+                UsageMetric("claude-sonnet-4", 42.0, tag="models"),
+                UsageMetric("gpt-4.1", 21.0, tag="models"),
+                UsageMetric("gemini-pro", 18.0, tag="models"),
+            ],
+        ),
+        "OpenRouter",
+    )
+    widget._do_refit_height()  # noqa: SLF001
+    collapsed_height = widget.height()
+
+    widget._tiles["openrouter"].set_expanded(True)  # noqa: SLF001
+    qtbot.waitUntil(lambda: widget.height() > collapsed_height)
+    expanded_height = widget.height()
+
+    widget._tiles["openrouter"].set_expanded(False)  # noqa: SLF001
+    qtbot.waitUntil(lambda: widget.height() < expanded_height)
+
 
 def test_collapsed_mode_wraps_all_account_chips_without_overflow(qtbot):
     config = Config()
@@ -579,6 +606,32 @@ def test_always_on_top_suspension_is_reference_counted(qtbot):
     widget.restore_always_on_top()
     assert widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
 
+def test_widget_is_solid_when_fade_disabled(qtbot):
+    config = Config()
+    config.window.fade_when_inactive = False
+    config.window.opacity = 0.4
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    assert widget._target_window_opacity() == 1.0  # noqa: SLF001
+    assert widget.windowOpacity() == 1.0
+
+
+def test_widget_fades_when_inactive_and_restores_on_hover(qtbot):
+    config = Config()
+    config.window.fade_when_inactive = True
+    config.window.opacity = 0.45
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    assert widget._target_window_opacity() == 0.45  # noqa: SLF001
+    assert widget.windowOpacity() == 0.45
+
+    widget._mouse_inside = True  # noqa: SLF001
+    widget._apply_window_opacity()  # noqa: SLF001
+
+    assert widget._target_window_opacity() == 1.0  # noqa: SLF001
+    assert widget.windowOpacity() == 1.0
 
 def test_metric_row_sets_pace_from_window(qtbot):
     row = _MetricRow()

@@ -13,7 +13,7 @@ AI Gauge is a local desktop utility for monitoring AI service usage across Claud
 ## Core Workflows
 
 - Launch the tray/widget utility on Windows/Linux or menu-bar utility on macOS.
-- Enable/hide providers and adjust refresh, opacity, always-on-top, and start-at-login settings.
+- Enable/hide providers and adjust refresh, fade-when-inactive, always-on-top, and start-at-login settings.
 - Sign in to Claude or ChatGPT Codex through embedded Chromium, paste cookies as a fallback, and manage multiple named Claude/Codex accounts.
 - Configure GitHub Copilot with a fine-grained PAT, optional username/billing organization, and a monthly AI credit allowance.
 - Configure OpenRouter with an inference key, optional management key, and optional daily budget.

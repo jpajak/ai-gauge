@@ -69,7 +69,8 @@ class WindowState(BaseModel):
     height: int = Field(default=220, ge=WINDOW_MIN_HEIGHT, le=WINDOW_MAX_HEIGHT)
     collapsed: bool = False
     always_on_top: bool = True
-    opacity: float = Field(default=1.0, ge=0.3, le=1.0)
+    opacity: float = Field(default=0.8, ge=0.3, le=1.0)
+    fade_when_inactive: bool = False
     # Whole-widget zoom. >1 enlarges for high-resolution (4K) displays; <1
     # makes it more compact. Floor is 0.75 — below that the fixed 10-12px fonts
     # become illegible. Applied via Qt's QT_SCALE_FACTOR at launch — see

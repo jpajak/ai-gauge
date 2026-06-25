@@ -403,20 +403,30 @@ class SettingsDialog(QDialog):
         self.startup_cb.setChecked(config.start_at_login)
         general_grid.addWidget(self.startup_cb, 1, 2, 1, 2)
 
+        self.fade_when_inactive_cb = QCheckBox("Fade when inactive")
+        self.fade_when_inactive_cb.setChecked(config.window.fade_when_inactive)
+        self.fade_when_inactive_cb.setToolTip(
+            "Fade the widget when it is not focused and the mouse is away."
+        )
+        general_grid.addWidget(self.fade_when_inactive_cb, 2, 0, 1, 4)
+
         self.opacity_slider = QSlider(Qt.Orientation.Horizontal)
         self.opacity_slider.setRange(30, 100)
         self.opacity_slider.setValue(int(config.window.opacity * 100))
+        self.opacity_slider.setEnabled(config.window.fade_when_inactive)
+        self.opacity_slider.setToolTip("Opacity used while the widget is faded.")
         self.opacity_value = QLabel(f"{int(config.window.opacity * 100)}%")
         self.opacity_value.setMinimumWidth(40)
         self.opacity_slider.valueChanged.connect(
             lambda v: self.opacity_value.setText(f"{v}%")
         )
+        self.fade_when_inactive_cb.toggled.connect(self.opacity_slider.setEnabled)
         op_row = QHBoxLayout()
         op_row.setContentsMargins(0, 0, 0, 0)
         op_row.addWidget(self.opacity_slider, 1)
         op_row.addWidget(self.opacity_value)
-        general_grid.addWidget(QLabel("Opacity:"), 2, 0)
-        general_grid.addLayout(op_row, 2, 1, 1, 3)
+        general_grid.addWidget(QLabel("Faded opacity:"), 3, 0)
+        general_grid.addLayout(op_row, 3, 1, 1, 3)
 
         self.ui_scale_changed = False
         self.start_at_login_error = False
@@ -442,8 +452,8 @@ class SettingsDialog(QDialog):
         scale_row.addWidget(self.ui_scale_combo)
         scale_row.addWidget(scale_hint)
         scale_row.addStretch(1)
-        general_grid.addWidget(QLabel("UI scale:"), 3, 0)
-        general_grid.addLayout(scale_row, 3, 1, 1, 3)
+        general_grid.addWidget(QLabel("UI scale:"), 4, 0)
+        general_grid.addLayout(scale_row, 4, 1, 1, 3)
 
         # ----- Providers -----
         providers = QGroupBox("Providers")
@@ -987,6 +997,7 @@ class SettingsDialog(QDialog):
         )
         config.start_at_login = self.startup_cb.isChecked()
         config.window.always_on_top = self.always_on_top_cb.isChecked()
+        config.window.fade_when_inactive = self.fade_when_inactive_cb.isChecked()
         config.window.opacity = self.opacity_slider.value() / 100.0
         new_ui_scale = float(self.ui_scale_combo.currentData())
         self.ui_scale_changed = abs(new_ui_scale - self._initial_ui_scale) > 1e-3

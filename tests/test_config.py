@@ -24,6 +24,8 @@ def test_defaults():
     assert c.copilot.monthly_quota == 1500
     assert c.window.always_on_top is True
     assert c.window.collapsed is False
+    assert c.window.fade_when_inactive is False
+    assert c.window.opacity == 0.8
     assert c.window.ui_scale == 1.0
 
 

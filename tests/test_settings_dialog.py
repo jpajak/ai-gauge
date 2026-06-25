@@ -91,6 +91,21 @@ def test_remove_secondary_account_clears_cookie(qtbot, monkeypatch):
 
     assert removed == [(account_id, None)]
 
+def test_fade_when_inactive_setting_applies(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert not dialog.fade_when_inactive_cb.isChecked()
+    assert not dialog.opacity_slider.isEnabled()
+
+    dialog.fade_when_inactive_cb.setChecked(True)
+    dialog.opacity_slider.setValue(62)
+    dialog.apply_to(config)
+
+    assert config.window.fade_when_inactive is True
+    assert config.window.opacity == 0.62
 
 def test_clear_saved_pat_checkbox_removes_existing_pat(qtbot, monkeypatch):
     calls = []

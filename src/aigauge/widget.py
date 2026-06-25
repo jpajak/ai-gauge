@@ -9,6 +9,7 @@ from PyQt6.QtCore import (
     QPoint,
     QPointF,
     QPropertyAnimation,
+    QEvent,
     QRectF,
     QSize,
     Qt,
@@ -1008,6 +1009,7 @@ class _ProviderTile(QFrame):
             for lbl in labels:
                 lbl.setFixedWidth(max_w + 4)
         self._layout.invalidate()
+        self.layout().activate()
         self.updateGeometry()
 
     def _set_skeleton(self, labels: list[str]) -> None:
@@ -1024,6 +1026,7 @@ class _ProviderTile(QFrame):
         for row, label in zip(self._rows, labels):
             row.set_skeleton(label)
         self._layout.invalidate()
+        self.layout().activate()
         self.updateGeometry()
 
 
@@ -1045,11 +1048,13 @@ class UsageWidget(QWidget):
             Qt.WindowType.FramelessWindowHint | Qt.WindowType.Tool,
         )
         self._config = config
+        self._mouse_inside = False
+        self._drag_offset: QPoint | None = None
         self.setFixedWidth(WINDOW_WIDTH)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         # Background is drawn in paintEvent; no widget-level stylesheet — that
         # would cascade into child dialogs (Settings) and break their layout.
-        self.setWindowOpacity(config.window.opacity)
+        self._apply_window_opacity()
 
         self._apply_always_on_top(config.window.always_on_top)
 
@@ -1203,7 +1208,6 @@ class UsageWidget(QWidget):
             self._clamp_to_visible_screen()
 
         # Drag-by-anywhere
-        self._drag_offset: QPoint | None = None
 
         # Update "Xs ago" and next-refresh countdown labels every second.
         self._tick = QTimer(self)
@@ -1230,6 +1234,9 @@ class UsageWidget(QWidget):
             tile.details_requested.connect(self.details_requested.emit)
             tile.ratio_history_requested.connect(self.ratio_history_requested.emit)
             tile.expanded_changed.connect(self.tile_expanded_changed.emit)
+            tile.expanded_changed.connect(
+                lambda _provider, _expanded: self._refit_height()
+            )
             if provider in (self._config.expanded_tiles or []):
                 tile.set_expanded(True, emit=False)
             self._tiles[provider] = tile
@@ -1600,10 +1607,20 @@ class UsageWidget(QWidget):
         if was_visible:
             self.show()
 
+    def _target_window_opacity(self) -> float:
+        if not self._config.window.fade_when_inactive:
+            return 1.0
+        if self._mouse_inside or self.isActiveWindow() or self._drag_offset is not None:
+            return 1.0
+        return self._config.window.opacity
+
+    def _apply_window_opacity(self) -> None:
+        self.setWindowOpacity(self._target_window_opacity())
+
     def apply_window_settings(self) -> None:
         """Re-read window-related fields from config and apply."""
         was_visible = self.isVisible()
-        self.setWindowOpacity(self._config.window.opacity)
+        self._apply_window_opacity()
         self._apply_always_on_top(
             self._config.window.always_on_top and not self._always_on_top_suspensions
         )
@@ -1611,6 +1628,7 @@ class UsageWidget(QWidget):
         self._apply_collapsed_state(save=False)
         if was_visible:
             self.show()  # re-applying flags hides the window
+            self._apply_window_opacity()
 
     def _clamp_to_visible_screen(self) -> None:
         """Pull the window fully onto a visible screen.
@@ -1646,6 +1664,22 @@ class UsageWidget(QWidget):
         # re-clamp on every show so it can never come back off-screen.
         super().showEvent(event)
         self._clamp_to_visible_screen()
+        self._apply_window_opacity()
+
+    def enterEvent(self, event):  # noqa: N802
+        self._mouse_inside = True
+        self._apply_window_opacity()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event):  # noqa: N802
+        self._mouse_inside = False
+        self._apply_window_opacity()
+        super().leaveEvent(event)
+
+    def changeEvent(self, event):  # noqa: N802
+        if event.type() == QEvent.Type.ActivationChange:
+            self._apply_window_opacity()
+        super().changeEvent(event)
 
     def show_as_popover(self, anchor_global_x: int, anchor_global_y: int) -> None:
         """Show the widget below ``(anchor_global_x, anchor_global_y)``.
@@ -1656,7 +1690,7 @@ class UsageWidget(QWidget):
         because they're separate top-level windows.
         """
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint | Qt.WindowType.Popup)
-        self.setWindowOpacity(self._config.window.opacity)
+        self.setWindowOpacity(1.0)
         self._refit_height()
         # Anchor: top of widget aligned just below the menu bar at the icon.
         # If the anchor would push the widget off the right edge of the
@@ -1681,6 +1715,7 @@ class UsageWidget(QWidget):
             self._drag_offset = (
                 event.globalPosition().toPoint() - self.frameGeometry().topLeft()
             )
+            self._apply_window_opacity()
             event.accept()
 
     def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
@@ -1693,6 +1728,7 @@ class UsageWidget(QWidget):
 
     def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
         self._drag_offset = None
+        self._apply_window_opacity()
         self._do_refit_height()
         # Persist position
         self._config.window.x = self.x()

@@ -1,5 +1,19 @@
 # Changelog
 
+## 0.6.2 - 2026-06-25
+
+### Added
+
+- Added a **Fade when inactive** setting. When enabled, the floating widget fades while it is unfocused and the mouse is away, then returns to full opacity when hovered, focused, or dragged.
+
+### Changed
+
+- **Fade when inactive** now defaults to 80% opacity, keeping the widget easier to read while still getting it out of the way.
+
+### Fixed
+
+- Expanding or collapsing the OpenRouter model breakdown now immediately refits the floating widget height, so the model rows appear or disappear without needing to drag or move the window first.
+
 ## 0.6.1 - 2026-06-20
 
 ### Fixed

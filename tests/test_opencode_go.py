@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from aigauge.models import SnapshotStatus
 from aigauge.providers.opencode_go import _build_snapshot, _parse_reset_text
@@ -44,10 +44,10 @@ def test_opencode_go_builds_three_usage_metrics_from_rows():
         ("Weekly", 14.0),
         ("Monthly", 7.0),
     ]
-    assert [m.window.days if m.window else None for m in snapshot.metrics] == [
-        None,
-        7,
-        30,
+    assert [m.window for m in snapshot.metrics] == [
+        timedelta(hours=5),
+        timedelta(days=7),
+        timedelta(days=30),
     ]
     assert all(m.resets_at is not None for m in snapshot.metrics)
 

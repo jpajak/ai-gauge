@@ -60,11 +60,8 @@ def test_codex_empty_shell_with_login_task_titles_is_transient_error():
         }
     )
 
-    assert snapshot.status == SnapshotStatus.OK
-    assert [(metric.label, metric.percent_used) for metric in snapshot.metrics] == [
-        ("Session", 0.0),
-        ("Weekly", 0.0),
-    ]
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "without usage cards" in (snapshot.error or "")
 
 
 def test_codex_usage_rows_ignore_stale_logged_out_flag():

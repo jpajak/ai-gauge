@@ -328,6 +328,25 @@ def test_secondary_browser_account_auth_tile_uses_sign_in_button(qtbot):
     assert not tile.action_btn.isHidden()
 
 
+
+
+def test_opencode_go_auth_tile_uses_sign_in_button(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="opencode_go",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Not signed in.",
+        ),
+        "OpenCode",
+    )
+
+    tile = widget._tiles["opencode_go"]  # noqa: SLF001
+    assert tile.action_btn.text() == "Sign in"
+    assert not tile.action_btn.isHidden()
+
 def test_sign_in_button_emits_sign_in_signal(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
@@ -346,6 +365,107 @@ def test_sign_in_button_emits_sign_in_signal(qtbot):
 
     assert signal.args == ["codex"]
 
+
+
+
+def test_browser_tile_collapses_to_inline_metric_chips(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    reset_at = datetime.now() + timedelta(hours=2, minutes=30)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Session", 85.0, reset_at),
+                UsageMetric("Weekly", 9.0, reset_at + timedelta(days=4)),
+            ],
+        ),
+        "Claude",
+    )
+
+    tile = widget._tiles["claude"]  # noqa: SLF001
+    assert not tile.expand_btn.isHidden()
+    assert [row.label.text() for row in tile._rows] == ["Session", "Weekly"]  # noqa: SLF001
+
+    tile.set_expanded(False)
+
+    assert tile._rows == []  # noqa: SLF001
+    assert not tile._compact_summary.isHidden()  # noqa: SLF001
+    assert [item.code.text() for item in tile._compact_metrics] == ["S", "W"]  # noqa: SLF001
+    assert [item.pct.text() for item in tile._compact_metrics] == ["85%", "9%"]  # noqa: SLF001
+    assert tile._compact_metrics[0].bar.value() == 85  # noqa: SLF001
+
+
+def test_collapsed_browser_tile_hides_ratio_label(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("codex"), "Codex")
+    tile = widget._tiles["codex"]  # noqa: SLF001
+
+    widget.set_ratio("codex", _estimate(True, 6.7), [], _estimate(True, 6.7))
+    assert not tile.ratio_label.isHidden()
+
+    tile.set_expanded(False)
+    widget.set_ratio("codex", _estimate(True, 6.7), [], _estimate(True, 6.7))
+
+    assert tile.ratio_label.isHidden()
+
+
+def test_ratio_label_returns_after_browser_tile_reexpanded(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    tile = widget._tiles["claude"]  # noqa: SLF001
+
+    widget.set_ratio("claude", _estimate(True, 9.2), [9.2], _estimate(True, 9.2))
+    assert "9.2/wk" in tile.ratio_label.text()
+
+    tile.set_expanded(False)
+    assert tile.ratio_label.isHidden()
+
+    tile.set_expanded(True)
+    assert not tile.ratio_label.isHidden()
+    assert "9.2/wk" in tile.ratio_label.text()
+
+
+def test_configured_collapsed_browser_tile_starts_compact(qtbot):
+    config = Config()
+    config.collapsed_tiles = ["claude"]
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+
+    tile = widget._tiles["claude"]  # noqa: SLF001
+    assert tile._rows == []  # noqa: SLF001
+    assert not tile._compact_summary.isHidden()  # noqa: SLF001
+
+
+def test_opencode_go_collapsed_tile_shows_rolling_and_monthly_inline_metrics(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    reset_at = datetime.now() + timedelta(hours=4)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="opencode_go",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Rolling", 13.0, reset_at),
+                UsageMetric("Weekly", 14.0, reset_at + timedelta(days=3)),
+                UsageMetric("Monthly", 7.0, reset_at + timedelta(days=30)),
+            ],
+        ),
+        "OpenCode",
+    )
+
+    tile = widget._tiles["opencode_go"]  # noqa: SLF001
+    tile.set_expanded(False)
+
+    assert [item.code.text() for item in tile._compact_metrics] == ["R", "M"]  # noqa: SLF001
+    assert [item.pct.text() for item in tile._compact_metrics] == ["13%", "7%"]  # noqa: SLF001
 
 def test_refresh_state_shows_next_refresh_countdown(qtbot):
     widget = UsageWidget(Config())

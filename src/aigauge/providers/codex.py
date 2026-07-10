@@ -10,7 +10,6 @@ from PyQt6.QtCore import QObject
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from ._common import (
     has_usage_page_signal,
-    idle_session_weekly_metrics,
     is_security_verification_page,
     normalize_percent,
 )
@@ -371,6 +370,46 @@ def _build_snapshot(
             )
         )
 
+    labels = {metric.label.lower(): metric for metric in metrics}
+    if metrics and set(labels) != {"session", "weekly"}:
+        log_page_diagnosis(
+            log,
+            provider=account_id,
+            classification="partial_usage_rows",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+            level=logging.WARNING,
+        )
+        return UsageSnapshot(
+            provider=account_id,
+            status=SnapshotStatus.ERROR,
+            error="Codex usage page only rendered part of the usage cards; retrying.",
+            raw=payload,
+        )
+
+    session_metric = labels.get("session")
+    weekly_metric = labels.get("weekly")
+    if (
+        session_metric is not None
+        and weekly_metric is not None
+        and (session_metric.percent_used or 0) > 0
+        and weekly_metric.percent_used == 0
+        and weekly_metric.reset_label == "idle"
+    ):
+        log_page_diagnosis(
+            log,
+            provider=account_id,
+            classification="mixed_session_weekly_idle",
+            payload=payload,
+            expected_rows=_EXPECTED_ROWS,
+            level=logging.WARNING,
+        )
+        return UsageSnapshot(
+            provider=account_id,
+            status=SnapshotStatus.ERROR,
+            error="Codex usage page rendered an active session with an idle weekly card; retrying.",
+            raw=payload,
+        )
     if not metrics or all(m.percent_used is None for m in metrics):
         if _looks_like_empty_signed_in_usage(payload):
             log_page_diagnosis(
@@ -379,11 +418,12 @@ def _build_snapshot(
                 classification="empty_signed_in_usage",
                 payload=payload,
                 expected_rows=_EXPECTED_ROWS,
+                level=logging.WARNING,
             )
             return UsageSnapshot(
                 provider=account_id,
-                status=SnapshotStatus.OK,
-                metrics=idle_session_weekly_metrics(),
+                status=SnapshotStatus.ERROR,
+                error="Codex analytics loaded without usage cards; retrying.",
                 raw=payload,
             )
         log_page_diagnosis(
@@ -422,13 +462,14 @@ class CodexProvider(Provider):
         def _build(payload: dict[str, Any]) -> UsageSnapshot:
             return _build_snapshot(payload, account_id=self._account_id)
 
+        cache_buster = int(datetime.now().timestamp())
         self._runner = ScrapeRunner(
             account_id=self._account_id,
-            url=CODEX_USAGE_URL,
+            url=f"{CODEX_ANALYTICS_URL}?aigauge_ts={cache_buster}#personal-usage",
             extractor_js=EXTRACTOR_JS,
             build=_build,
             log=log,
-            wait_ms=5000,
+            wait_ms=7000,
             transport_max_attempts=1,
             build_max_attempts=2,
             parent=self._parent,

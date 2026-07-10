@@ -210,6 +210,14 @@ def test_enabled_providers_includes_enabled_browser_accounts():
     )
 
 
+
+
+def test_enabled_providers_includes_opencode_go_when_enabled():
+    config = Config()
+    config.providers.opencode_go = True
+
+    assert "opencode_go" in _enabled_providers(config)
+
 def test_widget_activation_raises_open_settings_dialog():
     app = App.__new__(App)
     dialog = _Dialog()
@@ -219,6 +227,31 @@ def test_widget_activation_raises_open_settings_dialog():
 
     assert dialog.calls == ["show", "raise", "activate"]
 
+
+
+
+def test_tile_expanded_changed_persists_browser_tile_collapsed_state():
+    app = App.__new__(App)
+    app._config = Config()  # noqa: SLF001
+
+    app._on_tile_expanded_changed("claude", False)  # noqa: SLF001
+
+    assert app._config.collapsed_tiles == ["claude"]
+    assert app._config.expanded_tiles == []
+
+    app._on_tile_expanded_changed("claude", True)  # noqa: SLF001
+
+    assert app._config.collapsed_tiles == []
+
+
+def test_tile_expanded_changed_keeps_openrouter_model_expansion_state():
+    app = App.__new__(App)
+    app._config = Config()  # noqa: SLF001
+
+    app._on_tile_expanded_changed("openrouter", True)  # noqa: SLF001
+
+    assert app._config.expanded_tiles == ["openrouter"]
+    assert app._config.collapsed_tiles == []
 
 def test_raw_summary_includes_sanitized_payload_details():
     summary = _raw_summary(

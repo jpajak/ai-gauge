@@ -57,6 +57,56 @@ def test_codex_open_usage_button_launches_browser(qtbot, monkeypatch):
     assert opened == [settings_dialog.CODEX_USAGE_URL]
 
 
+
+
+def test_opencode_go_sign_in_button_emits_sign_in_signal(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    with qtbot.waitSignal(dialog.sign_in_clicked) as signal:
+        _button(dialog, "opencode_go_signin_btn").click()
+
+    assert signal.args == ["opencode_go"]
+
+
+def test_opencode_go_paste_cookie_button_emits_signal(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    with qtbot.waitSignal(dialog.paste_cookie_clicked) as signal:
+        _button(dialog, "opencode_go_paste_cookie_btn").click()
+
+    assert signal.args == ["opencode_go"]
+
+
+def test_opencode_go_open_usage_button_launches_configured_url(qtbot, monkeypatch):
+    opened = []
+    monkeypatch.setattr(
+        settings_dialog, "_open_in_browser", lambda url: opened.append(url)
+    )
+
+    config = Config()
+    config.opencode_go.usage_url = "https://opencode.ai/workspace/test/go"
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    _button(dialog, "opencode_go_open_usage_btn").click()
+
+    assert opened == ["https://opencode.ai/workspace/test/go"]
+
+
+def test_opencode_go_settings_apply(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    dialog.opencode_go_cb.setChecked(True)
+    dialog.opencode_go_url.setText("https://opencode.ai/workspace/custom/go")
+    dialog.apply_to(config)
+
+    assert config.providers.opencode_go is True
+    assert config.opencode_go.usage_url == "https://opencode.ai/workspace/custom/go"
+
 def test_add_codex_account_creates_named_secondary_row(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
     config = Config()

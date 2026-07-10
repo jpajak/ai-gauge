@@ -1,5 +1,22 @@
 # Changelog
 
+## 0.6.3 - 2026-07-10
+
+### Added
+
+- Added **OpenCode** usage tracking with Rolling, Weekly, and Monthly meters, a configurable workspace Go usage URL, Settings controls, and provider tile support in both expanded and compact views.
+- Added OpenCode cookie-paste setup for accounts that cannot complete Google sign-in inside the embedded browser.
+
+### Changed
+
+- Claude, Codex, and OpenCode provider rows can collapse to compact inline metric chips, while the session-to-weekly burn-rate label remains available again when the row is re-expanded.
+- OpenCode Rolling usage now uses the same 5-hour pacing window as the provider, so the elapsed-time tick marker appears on the Rolling bar.
+
+### Fixed
+
+- OpenCode cookie injection now targets the `opencode.ai` profile correctly, accepts full `Cookie:` headers copied from DevTools, and avoids forcing HttpOnly on OpenCode cookies so the signed-in page can hydrate normally.
+- OpenCode refreshes requested while another provider is already in-flight are queued instead of leaving the tile stuck at `loading...`.
+- The OpenCode sign-in dialog now explains the Google embedded-browser block and points users to the paste-cookie fallback.
 ## 0.6.2 - 2026-06-25
 
 ### Added

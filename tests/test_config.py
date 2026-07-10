@@ -20,8 +20,11 @@ def test_defaults():
     assert [a.id for a in c.browser_accounts] == ["claude", "codex"]
     assert [a.kind for a in c.browser_accounts] == ["claude", "codex"]
     assert c.providers.copilot is True
+    assert c.providers.opencode_go is False
     assert c.start_at_login is False
     assert c.copilot.monthly_quota == 1500
+    assert c.opencode_go.usage_url.startswith("https://opencode.ai/workspace/")
+    assert c.collapsed_tiles == []
     assert c.window.always_on_top is True
     assert c.window.collapsed is False
     assert c.window.fade_when_inactive is False
@@ -59,6 +62,9 @@ def test_round_trip(tmp_path, monkeypatch):
     c.copilot.monthly_quota = 1500
     c.window.x = 100
     c.window.y = 200
+    c.providers.opencode_go = True
+    c.opencode_go.usage_url = "https://opencode.ai/workspace/test/go"
+    c.collapsed_tiles = ["claude"]
     c.save()
 
     loaded = Config.load()
@@ -73,7 +79,9 @@ def test_round_trip(tmp_path, monkeypatch):
     assert loaded.copilot.monthly_quota == 1500
     assert loaded.window.x == 100
     assert loaded.window.y == 200
-
+    assert loaded.providers.opencode_go is True
+    assert loaded.opencode_go.usage_url == "https://opencode.ai/workspace/test/go"
+    assert loaded.collapsed_tiles == ["claude"]
 
 def test_load_missing_returns_defaults():
     c = Config.load()
@@ -118,7 +126,8 @@ def test_load_migrates_legacy_copilot_pro_request_quota_to_credits():
     c = Config.load()
 
     assert c.copilot.monthly_quota == 1500
-
+    assert c.opencode_go.usage_url.startswith("https://opencode.ai/workspace/")
+    assert c.collapsed_tiles == []
 
 def test_load_migrates_legacy_provider_toggles_to_browser_accounts():
     config_path().parent.mkdir(parents=True, exist_ok=True)

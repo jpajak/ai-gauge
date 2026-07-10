@@ -62,7 +62,7 @@ ROW_BAR_HEIGHT = 8
 PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
-PROVIDER_ORDER = ("claude", "codex", "copilot", "openrouter")
+PROVIDER_ORDER = ("claude", "codex", "opencode_go", "copilot", "openrouter")
 COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_HEIGHT
 
 
@@ -701,6 +701,70 @@ class _MetricRow(QWidget):
         self.reset.setToolTip("")
 
 
+
+
+def _compact_metric_code(label: str) -> str:
+    key = label.strip().lower()
+    return {
+        "session": "S",
+        "weekly": "W",
+        "rolling": "R",
+        "monthly": "M",
+    }.get(key, (label.strip()[:1] or "?").upper())
+
+
+class _CompactMetric(QWidget):
+    """Tiny inline metric for a collapsed provider tile."""
+
+    def __init__(self, parent: QWidget | None = None):
+        super().__init__(parent)
+        self.code = QLabel("")
+        self.code.setStyleSheet("color:#d1d5db; font-size:10px; font-weight:700;")
+        self.code.setFixedWidth(10)
+        self.code.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        self.bar = QProgressBar()
+        self.bar.setRange(0, 100)
+        self.bar.setTextVisible(False)
+        self.bar.setFixedSize(30, 6)
+
+        self.pct = QLabel("--")
+        self.pct.setStyleSheet("color:#f3f4f6; font-size:10px; font-weight:600;")
+        self.pct.setFixedWidth(28)
+        self.pct.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        self.reset = QLabel("")
+        self.reset.setStyleSheet("color:#9ca3af; font-size:10px;")
+        self.reset.setFixedWidth(38)
+        self.reset.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
+
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(3)
+        layout.addWidget(self.code)
+        layout.addWidget(self.bar)
+        layout.addWidget(self.pct)
+        layout.addWidget(self.reset)
+
+    def set_metric(self, metric, *, show_reset: bool = True) -> None:
+        percent = metric.percent_used
+        reset = metric.reset_label if metric.reset_label is not None else _format_relative(metric.resets_at)
+        self.code.setText(_compact_metric_code(metric.label))
+        self.pct.setText(_format_summary_percent(percent))
+        self.reset.setText(reset if show_reset else "")
+        self.reset.setVisible(show_reset and bool(reset))
+        self.bar.setValue(0 if percent is None else int(round(percent)))
+        color = _color_for_percent(percent)
+        self.bar.setStyleSheet(
+            f"QProgressBar {{ background:#374151; border:none; border-radius:3px; }}"
+            f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
+        )
+        tooltip = f"{metric.label}: {_format_summary_percent(percent)}"
+        if reset:
+            tooltip += f" · resets {reset}"
+        if metric.note:
+            tooltip += f"\n{metric.note}"
+        self.setToolTip(tooltip)
 class _ProviderTile(QFrame):
     """A provider section: header line + N metric rows."""
 
@@ -772,14 +836,27 @@ class _ProviderTile(QFrame):
         header_row.setContentsMargins(0, 0, 0, 0)
         header_row.addWidget(self.expand_btn)
         header_row.addWidget(self.header)
+
+        self._compact_metrics: list[_CompactMetric] = []
+        self._compact_summary = QWidget(self)
+        self._compact_summary.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._compact_summary.setVisible(False)
+        self._compact_layout = QHBoxLayout(self._compact_summary)
+        self._compact_layout.setContentsMargins(4, 0, 0, 0)
+        self._compact_layout.setSpacing(6)
+        self._compact_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
         header_row.addStretch(1)
+        header_row.addWidget(self._compact_summary)
         header_row.addWidget(self.action_btn)
         header_row.addWidget(self.ratio_label)
         header_row.addWidget(self.status)
 
         self._rows: list[_MetricRow] = []
-        self._expanded = False
+        self._expanded = self._supports_compact_collapse()
         self._latest_snapshot: UsageSnapshot | None = None
+        self._ratio_estimate: RatioEstimate | None = None
+        self._ratio_recent: list[float] = []
+        self._ratio_live: RatioEstimate | None = None
 
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 4, 6, 4)
@@ -798,6 +875,42 @@ class _ProviderTile(QFrame):
 
         # Show skeleton state immediately so first launch isn't a blank tile.
         self.set_snapshot(None)
+
+    def _supports_compact_collapse(self) -> bool:
+        return _provider_family(self.provider) in ("claude", "codex", "opencode_go")
+
+    def _compact_metrics_from(self, snapshot: UsageSnapshot) -> list:
+        metrics = [
+            metric
+            for metric in snapshot.metrics
+            if metric.tag is None and metric.percent_used is not None
+        ]
+        if self.provider == 'opencode_go':
+            return [
+                metric
+                for metric in metrics
+                if metric.label.strip().lower() in ('rolling', 'monthly')
+            ]
+        return metrics
+
+    def _set_compact_metrics(self, metrics: list, *, show_reset: bool = True) -> None:
+        while len(self._compact_metrics) < len(metrics):
+            item = _CompactMetric(self._compact_summary)
+            self._compact_metrics.append(item)
+            self._compact_layout.addWidget(item)
+        while len(self._compact_metrics) > len(metrics):
+            item = self._compact_metrics.pop()
+            self._compact_layout.removeWidget(item)
+            item.hide()
+            item.setParent(None)
+            item.deleteLater()
+        for item, metric in zip(self._compact_metrics, metrics):
+            item.set_metric(metric, show_reset=show_reset)
+            item.show()
+        self._compact_summary.setVisible(bool(metrics))
+
+    def _hide_compact_metrics(self) -> None:
+        self._compact_summary.setVisible(False)
 
     def set_refreshing(self, refreshing: bool) -> None:
         if self._refreshing == refreshing:
@@ -821,6 +934,7 @@ class _ProviderTile(QFrame):
             self.action_btn.setVisible(False)
             self.expand_btn.setVisible(False)
             self.ratio_label.setVisible(False)
+            self._hide_compact_metrics()
             self._set_skeleton(["Session"])
             return
 
@@ -832,10 +946,11 @@ class _ProviderTile(QFrame):
             self.status.setToolTip(snapshot.error or "")
             self.status.setCursor(Qt.CursorShape.ArrowCursor)
             self.action_btn.setVisible(
-                _provider_family(self.provider) in ("claude", "codex")
+                _provider_family(self.provider) in ("claude", "codex", "opencode_go")
             )
             self.expand_btn.setVisible(False)
             self.ratio_label.setVisible(False)
+            self._hide_compact_metrics()
             self._set_rows([])
             return
 
@@ -859,8 +974,18 @@ class _ProviderTile(QFrame):
             self.action_btn.setVisible(False)
             self.ratio_label.setVisible(False)
             has_breakdown = any(m.tag for m in snapshot.metrics)
-            self.expand_btn.setVisible(has_breakdown)
+            compact_metrics = (
+                self._compact_metrics_from(snapshot)
+                if self._supports_compact_collapse()
+                else []
+            )
+            self.expand_btn.setVisible(has_breakdown or bool(compact_metrics))
             self._update_expand_btn_glyph()
+            if compact_metrics and not self._expanded:
+                self._set_rows([])
+                self._set_compact_metrics(compact_metrics)
+                return
+            self._hide_compact_metrics()
             visible = [
                 m for m in snapshot.metrics if not m.tag or self._expanded
             ]
@@ -889,8 +1014,19 @@ class _ProviderTile(QFrame):
         self.status.setCursor(Qt.CursorShape.ArrowCursor)
         self.action_btn.setVisible(False)
         has_breakdown = any(m.tag for m in snapshot.metrics)
-        self.expand_btn.setVisible(has_breakdown)
+        compact_metrics = (
+            self._compact_metrics_from(snapshot)
+            if self._supports_compact_collapse()
+            else []
+        )
+        self.expand_btn.setVisible(has_breakdown or bool(compact_metrics))
         self._update_expand_btn_glyph()
+        if compact_metrics and not self._expanded:
+            self.ratio_label.setVisible(False)
+            self._set_rows([])
+            self._set_compact_metrics(compact_metrics)
+            return
+        self._hide_compact_metrics()
         visible = [
             m for m in snapshot.metrics if not m.tag or self._expanded
         ]
@@ -922,9 +1058,19 @@ class _ProviderTile(QFrame):
         it is dimmed and marked with a degree sign, with the live progress in the
         tooltip.
         """
+        self._ratio_estimate = estimate
+        self._ratio_recent = list(recent or [])
+        self._ratio_live = live
+        self._render_ratio_label()
+
+    def _render_ratio_label(self) -> None:
+        estimate = self._ratio_estimate
         text = _format_ratio_inline(estimate)
-        if text is None or self._latest_snapshot is None or (
-            self._latest_snapshot.status != SnapshotStatus.OK
+        if (
+            text is None
+            or self._latest_snapshot is None
+            or self._latest_snapshot.status != SnapshotStatus.OK
+            or (self._supports_compact_collapse() and not self._expanded)
         ):
             self.ratio_label.setVisible(False)
             self.ratio_label.setText("")
@@ -942,11 +1088,10 @@ class _ProviderTile(QFrame):
             f"{text}</a>"
         )
         self.ratio_label.setToolTip(
-            _format_ratio_tooltip(estimate, recent or [], live)
+            _format_ratio_tooltip(estimate, self._ratio_recent, self._ratio_live)
         )
         self.ratio_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.ratio_label.setVisible(True)
-
     def set_expanded(self, expanded: bool, *, emit: bool = True) -> None:
         if self._expanded == expanded:
             return
@@ -955,6 +1100,7 @@ class _ProviderTile(QFrame):
         # Re-render rows from the latest snapshot to add/remove breakdown rows.
         if self._latest_snapshot is not None:
             self.set_snapshot(self._latest_snapshot)
+        self._render_ratio_label()
         if emit:
             self.expanded_changed.emit(self.provider, expanded)
 
@@ -963,9 +1109,14 @@ class _ProviderTile(QFrame):
 
     def _update_expand_btn_glyph(self) -> None:
         self.expand_btn.setText("▾" if self._expanded else "▸")
-        self.expand_btn.setToolTip(
-            "Hide top models" if self._expanded else "Show top models"
-        )
+        if self._supports_compact_collapse():
+            self.expand_btn.setToolTip(
+                "Collapse to summary" if self._expanded else "Show details"
+            )
+        else:
+            self.expand_btn.setToolTip(
+                "Hide top models" if self._expanded else "Show top models"
+            )
 
     def _set_rows(
         self,
@@ -1237,7 +1388,9 @@ class UsageWidget(QWidget):
             tile.expanded_changed.connect(
                 lambda _provider, _expanded: self._refit_height()
             )
-            if provider in (self._config.expanded_tiles or []):
+            if provider in (getattr(self._config, "collapsed_tiles", []) or []):
+                tile.set_expanded(False, emit=False)
+            elif provider in (self._config.expanded_tiles or []):
                 tile.set_expanded(True, emit=False)
             self._tiles[provider] = tile
             self._insert_tile_in_provider_order(provider, tile)
@@ -1361,6 +1514,7 @@ class UsageWidget(QWidget):
         target_width = WINDOW_WIDTH
         if target_height != self.height() or target_width != self.width():
             self.resize(target_width, target_height)
+
 
     def set_refreshing(self, refreshing: bool) -> None:
         self.refresh_btn.setEnabled(not refreshing)

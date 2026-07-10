@@ -48,7 +48,7 @@ def test_codex_logged_out_payload_is_auth_required():
     assert "Not signed in" in (snapshot.error or "")
 
 
-def test_codex_idle_usage_ignores_login_task_titles():
+def test_codex_empty_shell_with_login_task_titles_is_transient_error():
     snapshot = _build_snapshot(
         {
             "logged_out": True,
@@ -154,7 +154,7 @@ def test_codex_body_text_fallback_ignores_cloudflare_task_titles():
     assert [metric.percent_used for metric in snapshot.metrics] == [12.0, 25.0]
 
 
-def test_codex_signed_in_empty_usage_payload_is_idle_zero():
+def test_codex_signed_in_empty_usage_payload_is_transient_error():
     snapshot = _build_snapshot(
         {
             "logged_out": False,
@@ -166,16 +166,52 @@ def test_codex_signed_in_empty_usage_payload_is_idle_zero():
         }
     )
 
-    assert snapshot.status == SnapshotStatus.OK
-    assert [
-        (metric.label, metric.percent_used, metric.reset_label)
-        for metric in snapshot.metrics
-    ] == [
-        ("Session", 0.0, "idle"),
-        ("Weekly", 0.0, "idle"),
-    ]
-    assert all(metric.window is None for metric in snapshot.metrics)
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "without usage cards" in (snapshot.error or "")
 
+
+def test_codex_partial_usage_rows_are_transient_error():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": {
+                "percent": 2,
+                "kind": "remaining",
+                "reset_text": "Jul 10, 2026 12:14 AM",
+            },
+            "weekly": None,
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": "5 hour usage limit 2% remaining Weekly usage limit",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "part of the usage cards" in (snapshot.error or "")
+
+
+def test_codex_active_session_with_idle_weekly_is_transient_error():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": {
+                "percent": 99,
+                "kind": "remaining",
+                "reset_text": "4 hr 59 min",
+            },
+            "weekly": {
+                "percent": 100,
+                "kind": "remaining",
+                "reset_text": None,
+            },
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": "5 hour usage limit 99% remaining Weekly usage limit 100% remaining",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "active session with an idle weekly card" in (snapshot.error or "")
 
 def test_codex_usage_signal_prevents_false_idle_fallback():
     snapshot = _build_snapshot(

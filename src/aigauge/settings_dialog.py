@@ -53,6 +53,7 @@ from .error_dialog import reveal_path
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
+from .providers.opencode_go import OPENCODE_GO_USAGE_URL, usage_url as opencode_go_usage_url
 from .startup import set_start_at_login
 
 log = logging.getLogger("aigauge.settings_dialog")
@@ -476,6 +477,11 @@ class SettingsDialog(QDialog):
         self.codex_cb.setChecked(config.providers.codex)
         providers_layout.addWidget(self.codex_cb)
 
+        self.opencode_go_cb = QCheckBox("OpenCode")
+        self.opencode_go_cb.setToolTip("Show the OpenCode usage tile in the panel.")
+        self.opencode_go_cb.setChecked(config.providers.opencode_go)
+        providers_layout.addWidget(self.opencode_go_cb)
+
         self.copilot_cb = QCheckBox("GitHub Copilot")
         self.copilot_cb.setToolTip("Show the GitHub Copilot usage tile in the panel.")
         self.copilot_cb.setChecked(config.providers.copilot)
@@ -700,6 +706,59 @@ class SettingsDialog(QDialog):
         )
         openrouter_form.addRow("", budget_hint)
 
+        # ----- OpenCode details -----
+        opencode_go = QGroupBox("OpenCode")
+        opencode_go_form = QFormLayout(opencode_go)
+        opencode_go_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
+        opencode_go_form.setHorizontalSpacing(12)
+        opencode_go_form.setVerticalSpacing(8)
+        opencode_go_form.setFieldGrowthPolicy(
+            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
+        )
+
+        self.opencode_go_url = QLineEdit()
+        self.opencode_go_url.setText(opencode_go_usage_url(config))
+        self.opencode_go_url.setPlaceholderText(OPENCODE_GO_USAGE_URL)
+        opencode_go_form.addRow("Usage URL:", self.opencode_go_url)
+
+        opencode_go_signin_btn = QPushButton("Sign in")
+        opencode_go_signin_btn.setObjectName("opencode_go_signin_btn")
+        opencode_go_signin_btn.setToolTip(
+            "Open an embedded browser to sign in to OpenCode."
+        )
+        opencode_go_signin_btn.clicked.connect(
+            lambda _checked=False: self.sign_in_clicked.emit("opencode_go")
+        )
+        opencode_go_form.addRow("", opencode_go_signin_btn)
+
+        opencode_go_cookie_btn = QPushButton("Paste cookie")
+        opencode_go_cookie_btn.setObjectName("opencode_go_paste_cookie_btn")
+        opencode_go_cookie_btn.setToolTip(
+            "Paste a Cookie header from your signed-in OpenCode browser session."
+        )
+        opencode_go_cookie_btn.clicked.connect(
+            lambda _checked=False: self.paste_cookie_clicked.emit("opencode_go")
+        )
+        opencode_go_form.addRow("", opencode_go_cookie_btn)
+
+        opencode_go_usage_btn = QPushButton("Open usage in browser")
+        opencode_go_usage_btn.setObjectName("opencode_go_open_usage_btn")
+        opencode_go_usage_btn.setToolTip("Open the OpenCode usage page in your default browser.")
+        opencode_go_usage_btn.clicked.connect(
+            lambda _checked=False: _open_in_browser(
+                self.opencode_go_url.text().strip() or OPENCODE_GO_USAGE_URL
+            )
+        )
+        opencode_go_form.addRow("", opencode_go_usage_btn)
+
+        opencode_go_help = _hint_label(
+            "Paste the workspace <b>Go</b> usage page URL. The tile reads Rolling, "
+            "Weekly, and Monthly usage from that page. If Google blocks the "
+            "embedded sign-in browser, sign in with your normal browser and use "
+            "<b>Paste cookie</b>."
+        )
+        opencode_go_form.addRow("", opencode_go_help)
+
         general_tab = QWidget()
         general_tab_layout = QVBoxLayout(general_tab)
         general_tab_layout.setContentsMargins(10, 10, 10, 10)
@@ -736,10 +795,18 @@ class SettingsDialog(QDialog):
         openrouter_tab_layout.addWidget(openrouter)
         openrouter_tab_layout.addStretch(1)
 
+        opencode_go_tab = QWidget()
+        opencode_go_tab_layout = QVBoxLayout(opencode_go_tab)
+        opencode_go_tab_layout.setContentsMargins(10, 10, 10, 10)
+        opencode_go_tab_layout.setSpacing(10)
+        opencode_go_tab_layout.addWidget(opencode_go)
+        opencode_go_tab_layout.addStretch(1)
+
         tabs = QTabWidget()
         tabs.addTab(general_tab, "General")
         tabs.addTab(claude_tab, "Claude")
         tabs.addTab(codex_tab, "Codex")
+        tabs.addTab(opencode_go_tab, "OpenCode")
         tabs.addTab(copilot_tab, "GitHub Copilot")
         tabs.addTab(openrouter_tab, "OpenRouter")
         tabs.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
@@ -1008,6 +1075,7 @@ class SettingsDialog(QDialog):
         config.providers.codex = self.codex_cb.isChecked()
         config.providers.copilot = self.copilot_cb.isChecked()
         config.providers.openrouter = self.openrouter_cb.isChecked()
+        config.providers.opencode_go = self.opencode_go_cb.isChecked()
         for account_id in self._removed_browser_account_ids:
             set_provider_cookie(account_id, None)
         username = self.gh_username.text().strip()
@@ -1020,7 +1088,9 @@ class SettingsDialog(QDialog):
         )
         budget = self.or_daily_budget.value()
         config.openrouter.daily_budget = budget if budget > 0 else None
-
+        config.opencode_go.usage_url = (
+            self.opencode_go_url.text().strip() or OPENCODE_GO_USAGE_URL
+        )
         # Persist all settings first: wiring up OS autostart can fail (e.g. a
         # rejected Task Scheduler entry), and that must neither lose the user's
         # other changes nor crash the app via an exception escaping this slot.

@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import logging
 
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, QTimer
 from PyQt6.QtWidgets import (
     QDialog,
     QDialogButtonBox,
@@ -45,7 +45,19 @@ INSTRUCTIONS = {
    This is more reliable than copying individual split session-token rows.
 """,
     ),
+    "opencode_go": (
+        "OpenCode session cookie",
+        """\
+1. Open your OpenCode <b>Go</b> usage page in <b>Chrome / Edge / Firefox</b>
+   (whichever browser is already signed in).
+2. Press <b>F12</b> → <b>Network</b>, then reload the page.
+3. Click an <code>opencode.ai</code> request for the workspace or usage page.
+4. In <b>Headers</b> → <b>Request Headers</b>, copy the full
+   <code>Cookie:</code> header and paste it below.
+""",
+    ),
 }
+
 
 
 _DARK_STYLESHEET = """
@@ -76,12 +88,14 @@ class CookieDialog(QDialog):
         *,
         account_id: str | None = None,
         display_name: str | None = None,
+        verify_url: str | None = None,
     ):
         super().__init__(None)
         if provider not in INSTRUCTIONS:
             raise ValueError(f"unknown provider: {provider}")
         self._provider = provider
         self._account_id = account_id or provider
+        self._verify_url = verify_url
         self._verifier = None
         title, instructions_html = INSTRUCTIONS[provider]
         # Not stays-on-top: the user has to switch to their normal browser to
@@ -151,11 +165,20 @@ class CookieDialog(QDialog):
                 "storage. Check terminal output for DPAPI/key storage errors.",
             )
             return
-        inject_session_cookie(
+        injected = inject_session_cookie(
             self._provider,
             value,
             account_id=self._account_id,
         )
+        if not injected:
+            QMessageBox.warning(
+                self,
+                "Cookie was not injected",
+                "The cookie was saved, but AI Gauge does not know how to inject "
+                "cookies for this provider yet. Check the provider cookie domain "
+                "mapping in config.py.",
+            )
+            return
         names = ", ".join(name for name, _ in pairs[:6])
         if len(pairs) > 6:
             names += f", and {len(pairs) - 6} more"
@@ -170,11 +193,15 @@ class CookieDialog(QDialog):
             f"<span style='color:#9ca3af;'>Saved. Verifying that the cookie loads "
             f"a signed-in {self._provider} page…</span>"
         )
+        QTimer.singleShot(500, self._start_verify)
+
+    def _start_verify(self) -> None:
         self._verifier = verify_session(
             self._provider,
             self._on_verify_done,
             account_id=self._account_id,
             parent=self,
+            verify_url=self._verify_url,
         )
 
     def _on_verify_done(self, ok: bool, error: str) -> None:

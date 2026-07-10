@@ -71,6 +71,18 @@ def test_parse_codex_raw_value_uses_current_and_legacy_names():
     ]
 
 
+
+def test_parse_opencode_go_full_cookie_header_keeps_all_cookies():
+    pasted = "Cookie: opencode.sid=session; other=value"
+
+    assert _parse_cookie_pairs("opencode_go", pasted) == [
+        ("opencode.sid", "session"),
+        ("other", "value"),
+    ]
+
+
+def test_parse_opencode_go_rejects_bare_raw_value():
+    assert _parse_cookie_pairs("opencode_go", "raw-session-value") == []
 def test_parse_claude_raw_value():
     assert _parse_cookie_pairs("claude", "session-value") == [
         ("sessionKey", "session-value")
@@ -231,3 +243,24 @@ def test_cookie_hydration_injects_when_profile_cookies_file_is_missing(
 
     assert cookies.hydrate_all_from_keyring(config) == ["codex-fresh"]
     assert injected == [("codex", "codex-fresh")]
+def test_cookie_hydration_includes_enabled_opencode_go(monkeypatch):
+    config = Config()
+    config.providers.opencode_go = True
+
+    monkeypatch.setattr(
+        cookies,
+        "get_provider_cookie",
+        lambda account_id: "Cookie: opencode.sid=fresh" if account_id == "opencode_go" else None,
+    )
+    injected = []
+    monkeypatch.setattr(
+        cookies,
+        "inject_session_cookie",
+        lambda provider, value, *, account_id=None: injected.append(
+            (provider, value, account_id)
+        )
+        or True,
+    )
+
+    assert cookies.hydrate_all_from_keyring(config) == ["opencode_go"]
+    assert injected == [("opencode_go", "Cookie: opencode.sid=fresh", None)]

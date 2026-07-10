@@ -26,6 +26,7 @@ WINDOW_COLLAPSED_HEIGHT = 58
 COOKIE_NAMES = {
     "claude": "sessionKey",
     "codex": "next-auth.session-token",
+    "opencode_go": "opencode-session",
 }
 COOKIE_NAME_ALIASES = {
     "claude": ("sessionKey",),
@@ -37,10 +38,14 @@ COOKIE_NAME_ALIASES = {
         "__Secure-next-auth.session-token.0",
         "__Secure-next-auth.session-token.1",
     ),
+    # OpenCode auth cookie names are not stable/documented. The paste flow
+    # keeps the full Cookie header rather than relying on aliases.
+    "opencode_go": ("opencode-session",),
 }
 COOKIE_DOMAINS = {
     "claude": ".claude.ai",
     "codex": ".chatgpt.com",
+    "opencode_go": ".opencode.ai",
 }
 
 
@@ -83,6 +88,7 @@ class ProviderToggles(BaseModel):
     codex: bool = True
     copilot: bool = True
     openrouter: bool = False
+    opencode_go: bool = False
 
 
 class BrowserAccount(BaseModel):
@@ -102,6 +108,12 @@ class OpenRouterConfig(BaseModel):
     daily_budget: float | None = Field(default=None, ge=0)
 
 
+class OpenCodeGoConfig(BaseModel):
+    usage_url: str = (
+        "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go"
+    )
+
+
 class Config(BaseModel):
     active_refresh_interval_minutes: int = Field(default=5, ge=1, le=180)
     refresh_interval_minutes: int = Field(default=60, ge=1, le=180)
@@ -115,7 +127,9 @@ class Config(BaseModel):
     )
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
+    opencode_go: OpenCodeGoConfig = Field(default_factory=OpenCodeGoConfig)
     expanded_tiles: list[str] = Field(default_factory=list)
+    collapsed_tiles: list[str] = Field(default_factory=list)
     window: WindowState = Field(default_factory=WindowState)
 
     @classmethod
@@ -266,6 +280,8 @@ def account_kind(config: Config, account_id: str) -> str | None:
         return "claude"
     if account_id.startswith("codex-"):
         return "codex"
+    if account_id == "opencode_go":
+        return "opencode_go"
     return None
 
 
@@ -278,6 +294,7 @@ def display_name_for_account(config: Config, account_id: str) -> str:
         "codex": "Codex",
         "copilot": "Copilot",
         "openrouter": "OpenRouter",
+        "opencode_go": "OpenCode",
     }.get(account_id, account_id)
 
 

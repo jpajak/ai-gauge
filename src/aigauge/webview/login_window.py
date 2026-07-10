@@ -30,9 +30,12 @@ AUTH_HOST_ALLOWLIST: tuple[str, ...] = (
     "openai.com",
     "oaistatic.com",
     "oaiusercontent.com",
+    # OpenCode
+    "opencode.ai",
     # Identity providers used by the above for SSO popups.
     "auth0.com",
     "google.com",
+    "github.com",
     "youtube.com",
     "appleid.apple.com",
     "apple.com",
@@ -182,6 +185,7 @@ class LoginWindow(QDialog):
         parent=None,
         *,
         account_id: str | None = None,
+        verify_url: str | None = None,
     ):
         # Don't pass parent — avoids style cascade from main widget.
         super().__init__(None)
@@ -190,6 +194,7 @@ class LoginWindow(QDialog):
         # email confirmation pages) the user opens in their real browser.
         self._provider = provider
         self._account_id = account_id or provider
+        self._verify_url_override = verify_url
         self.setWindowTitle(title)
         self.resize(960, 760)
 
@@ -209,16 +214,25 @@ class LoginWindow(QDialog):
         self._page.newWindowRequested.connect(self._handle_popup)
         self._popup_pages: list[_PopupPage] = []  # keep refs
 
-        instructions = QLabel(
-            "<b>Do not click \u201cContinue with Google\u201d</b> \u2014 Google blocks "
-            "embedded browsers, and Google passkeys usually fail here too. If "
-            "you normally sign in with Google, try typing that same email "
-            "address into the <b>Enter your email</b> box and use the "
-            "<b>magic link</b> sent to your inbox. If OpenAI sends you back to "
-            "Google or asks for a passkey, close this window and use "
-            "<b>Paste cookie</b> in Settings. "
-            "Click <b>I'm signed in</b> when you reach your account."
-        )
+        if provider == "opencode_go":
+            instructions_html = (
+                "If Google says this browser or app may not be secure, close "
+                "this window and use <b>Paste cookie</b> in Settings after "
+                "signing in to OpenCode with your normal browser. Click "
+                "<b>I'm signed in</b> only if the usage page loads here."
+            )
+        else:
+            instructions_html = (
+                "<b>Do not click \u201cContinue with Google\u201d</b> \u2014 Google blocks "
+                "embedded browsers, and Google passkeys usually fail here too. If "
+                "you normally sign in with Google, try typing that same email "
+                "address into the <b>Enter your email</b> box and use the "
+                "<b>magic link</b> sent to your inbox. If OpenAI sends you back to "
+                "Google or asks for a passkey, close this window and use "
+                "<b>Paste cookie</b> in Settings. "
+                "Click <b>I'm signed in</b> when you reach your account."
+            )
+        instructions = QLabel(instructions_html)
         instructions.setWordWrap(True)
         instructions.setStyleSheet(
             "color:#374151; background:#fef3c7; padding:8px; border-radius:4px;"
@@ -293,7 +307,7 @@ class LoginWindow(QDialog):
             self.accept()
             return
         url, check_js = VERIFY_TARGETS[self._provider]
-        self._verify_url = url
+        self._verify_url = self._verify_url_override or url
         self._verify_check_js = check_js
         self._status.setText("Verifying session…")
         self._status.setStyleSheet("color:#6b7280;")
@@ -317,7 +331,7 @@ class LoginWindow(QDialog):
         self._verify_timeout.timeout.connect(self._on_verify_timeout)
         self._verify_timeout.start(20000)
 
-        self._view.load(QUrl(url))
+        self._view.load(QUrl(self._verify_url))
         # loadFinished does NOT fire for a same-document (fragment-only)
         # navigation. After a fresh sign-in the view is already sitting on
         # https://claude.ai/new, so loading .../new#settings/usage only changes

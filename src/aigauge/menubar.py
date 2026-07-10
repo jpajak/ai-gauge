@@ -26,6 +26,7 @@ SIDE_PADDING = (PIXMAP_WIDTH - DOT_DIAMETER) // 2
 PROVIDER_LABELS = {
     "claude": "Cl",
     "codex": "Cx",
+    "opencode_go": "Go",
     "copilot": "Cp",
     "openrouter": "OR",
 }

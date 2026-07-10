@@ -40,6 +40,7 @@ from .providers.claude import ClaudeProvider
 from .providers.codex import CodexProvider
 from .providers.copilot import CopilotProvider
 from .providers.openrouter import OpenRouterProvider
+from .providers.opencode_go import OpenCodeGoProvider, usage_url as opencode_go_usage_url
 from .ratio import RatioStore, sessions_per_week
 from .ratio_dialog import RatioHistoryDialog
 from .settings_dialog import SettingsDialog
@@ -95,6 +96,8 @@ def _enabled_providers(config: Config) -> tuple[str, ...]:
         out.append("copilot")
     if config.providers.openrouter:
         out.append("openrouter")
+    if getattr(config.providers, "opencode_go", False):
+        out.append("opencode_go")
     return tuple(out)
 
 
@@ -233,6 +236,7 @@ class App(QObject):
         self._unchanged_cycles = 0
         self._active_until = datetime.now() + timedelta(minutes=_ACTIVE_MODE_MINUTES)
         self._current_refresh_manual = False
+        self._pending_manual_refresh = False
         self._settings_dialog: SettingsDialog | None = None
         self._settings_old_copilot_quota: int | None = None
         self._install_lifecycle_logging()
@@ -427,6 +431,10 @@ class App(QObject):
             self._providers["openrouter"] = OpenRouterProvider(self._config)
             desired_tiles.add("openrouter")
             self._widget.ensure_tile("openrouter", "OpenRouter")
+        if self._config.providers.opencode_go:
+            self._providers["opencode_go"] = OpenCodeGoProvider(self._config, parent=self)
+            desired_tiles.add("opencode_go")
+            self._widget.ensure_tile("opencode_go", "OpenCode")
         for tile_id in list(self._widget._tiles):  # noqa: SLF001
             if tile_id not in desired_tiles:
                 self._widget.remove_tile(tile_id)
@@ -717,11 +725,20 @@ class App(QObject):
 
     def open_login(self, provider: str) -> None:
         kind = account_kind(self._config, provider)
-        if kind not in LOGIN_URLS:
+        if kind == "opencode_go":
+            url = opencode_go_usage_url(self._config)
+        elif kind in LOGIN_URLS:
+            url, _title = LOGIN_URLS[kind]
+        else:
             return
-        url, _title = LOGIN_URLS[kind]
         display_name = display_name_for_account(self._config, provider)
-        dlg = LoginWindow(kind, url, f"Sign in to {display_name}", account_id=provider)
+        dlg = LoginWindow(
+            kind,
+            url,
+            f"Sign in to {display_name}",
+            account_id=provider,
+            verify_url=url if kind == "opencode_go" else None,
+        )
         self._widget.suspend_always_on_top()
         try:
             accepted = bool(dlg.exec())
@@ -739,6 +756,11 @@ class App(QObject):
                 kind,
                 account_id=provider,
                 display_name=display_name_for_account(self._config, provider),
+                verify_url=(
+                    opencode_go_usage_url(self._config)
+                    if kind == "opencode_go"
+                    else None
+                ),
             )
         except ValueError:
             return
@@ -911,18 +933,37 @@ class App(QObject):
             self._raise_settings_dialog()
 
     def _on_tile_expanded_changed(self, provider: str, expanded: bool) -> None:
-        current = list(self._config.expanded_tiles or [])
-        if expanded and provider not in current:
-            current.append(provider)
-        elif not expanded and provider in current:
-            current.remove(provider)
+        compact_collapsible = (
+            provider == "opencode_go"
+            or provider == "claude"
+            or provider == "codex"
+            or provider.startswith("claude-")
+            or provider.startswith("codex-")
+        )
+        if compact_collapsible:
+            current = list(getattr(self._config, "collapsed_tiles", []) or [])
+            if not expanded and provider not in current:
+                current.append(provider)
+            elif expanded and provider in current:
+                current.remove(provider)
+            else:
+                return
+            self._config.collapsed_tiles = current
+            log_name = "collapsed_tiles"
         else:
-            return
-        self._config.expanded_tiles = current
+            current = list(self._config.expanded_tiles or [])
+            if expanded and provider not in current:
+                current.append(provider)
+            elif not expanded and provider in current:
+                current.remove(provider)
+            else:
+                return
+            self._config.expanded_tiles = current
+            log_name = "expanded_tiles"
         try:
             self._config.save()
         except Exception:  # noqa: BLE001
-            log.exception("failed to persist expanded_tiles")
+            log.exception("failed to persist %s", log_name)
 
     def _rerender_copilot(self, quota: int) -> None:
         cached = self._snapshots.get("copilot")

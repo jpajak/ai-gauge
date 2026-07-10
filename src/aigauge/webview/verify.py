@@ -31,6 +31,14 @@ VERIFY_TARGETS = {
           return false;
         })()""",
     ),
+    "opencode_go": (
+        "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go",
+        r"""(() => {
+          const visibleText = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
+          const text = visibleText(document.body);
+          return /Rolling Usage/i.test(text) && /Weekly Usage/i.test(text) && /Monthly Usage/i.test(text) && /\d+(?:\.\d+)?\s*%/.test(text);
+        })()""",
+    ),
 }
 
 
@@ -53,6 +61,7 @@ class SessionVerifier(QObject):
         account_id: str | None = None,
         timeout_ms: int = 20000,
         parent: QObject | None = None,
+        verify_url: str | None = None,
     ):
         super().__init__(parent)
         self._finished = False
@@ -62,6 +71,8 @@ class SessionVerifier(QObject):
             QTimer.singleShot(0, lambda: self._finish(False, f"no verify target for {provider}"))
             return
         url, check_js = target
+        if verify_url:
+            url = verify_url
         self._check_js = check_js
         self._check_attempts = 0
 
@@ -132,8 +143,14 @@ def verify_session(
     *,
     account_id: str | None = None,
     parent: QObject | None = None,
+    verify_url: str | None = None,
 ) -> SessionVerifier:
     """Convenience wrapper. Returns the verifier so the caller can keep a ref."""
-    verifier = SessionVerifier(provider, account_id=account_id, parent=parent)
+    verifier = SessionVerifier(
+        provider,
+        account_id=account_id,
+        parent=parent,
+        verify_url=verify_url,
+    )
     verifier.done.connect(on_done)
     return verifier

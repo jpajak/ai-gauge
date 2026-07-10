@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QUrl
 
 from aigauge.webview.login_window import (
+    VERIFY_TARGETS,
     _host_allowed,
     _is_google_host,
     _safe_url_for_log,
@@ -21,3 +22,11 @@ def test_logged_blocked_url_drops_query_and_fragment():
     )
 
     assert _safe_url_for_log(url) == "https://accounts.google.com/o/oauth2/v2/auth"
+
+def test_opencode_go_has_verify_target():
+    url, check_js = VERIFY_TARGETS["opencode_go"]
+
+    assert url.startswith("https://opencode.ai/workspace/")
+    assert "Rolling Usage" in check_js
+    assert "Weekly Usage" in check_js
+    assert "Monthly Usage" in check_js

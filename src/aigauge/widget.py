@@ -1066,10 +1066,15 @@ class _ProviderTile(QFrame):
     def _render_ratio_label(self) -> None:
         estimate = self._ratio_estimate
         text = _format_ratio_inline(estimate)
+        snapshot = self._latest_snapshot
+        has_session = snapshot is not None and any(
+            metric.label.lower() == "session" for metric in snapshot.metrics
+        )
         if (
             text is None
-            or self._latest_snapshot is None
-            or self._latest_snapshot.status != SnapshotStatus.OK
+            or snapshot is None
+            or snapshot.status != SnapshotStatus.OK
+            or not has_session
             or (self._supports_compact_collapse() and not self._expanded)
         ):
             self.ratio_label.setVisible(False)
@@ -1092,6 +1097,7 @@ class _ProviderTile(QFrame):
         )
         self.ratio_label.setCursor(Qt.CursorShape.PointingHandCursor)
         self.ratio_label.setVisible(True)
+
     def set_expanded(self, expanded: bool, *, emit: bool = True) -> None:
         if self._expanded == expanded:
             return

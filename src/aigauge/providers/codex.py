@@ -23,8 +23,10 @@ CODEX_USAGE_URL = f"{CODEX_ANALYTICS_URL}#personal-usage"
 _EXPECTED_ROWS = ("session", "weekly")
 log = logging.getLogger("aigauge.providers.codex")
 
-# Walks the rendered analytics page, finds the two "Balance" cards by their
-# headings, and reads the percentage + reset text out of each. Returns raw text
+# Walks the rendered analytics page, finds the available "Balance" cards by
+# their headings, and reads the percentage + reset text out of each. The weekly
+# card is always required; the five-hour card is optional because Codex may
+# temporarily expose only the shared weekly agentic limit. Returns raw text
 # fragments so Python can do the unit-aware normalization.
 EXTRACTOR_JS = r"""
 (() => {
@@ -46,7 +48,7 @@ EXTRACTOR_JS = r"""
   }
 
   function maybeSelectPersonalUsageTab(bodyText) {
-    if (/5 hour usage limit/i.test(bodyText) && /Weekly usage limit/i.test(bodyText)) {
+    if (/Weekly usage limit/i.test(bodyText) && /\d+(?:\.\d+)?\s*%/.test(bodyText)) {
       return null;
     }
 
@@ -371,7 +373,12 @@ def _build_snapshot(
         )
 
     labels = {metric.label.lower(): metric for metric in metrics}
-    if metrics and set(labels) != {"session", "weekly"}:
+    # Weekly is the durable Codex subscription limit. The five-hour session
+    # card has disappeared from the analytics page before, so accept a weekly-
+    # only response. If Codex exposes the session card again, it is parsed and
+    # displayed normally. A session-only response is still incomplete because
+    # the weekly limit is expected to remain available.
+    if metrics and "weekly" not in labels:
         log_page_diagnosis(
             log,
             provider=account_id,

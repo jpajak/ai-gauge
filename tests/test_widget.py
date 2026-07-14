@@ -208,6 +208,32 @@ def test_ratio_label_hidden_when_not_ok(qtbot):
     assert label.isHidden()
 
 
+def test_codex_ratio_label_hides_without_session_and_returns_with_it(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    fetched = datetime(2026, 7, 14, 12, 0)
+    weekly_only = UsageSnapshot(
+        provider="codex",
+        status=SnapshotStatus.OK,
+        metrics=[
+            UsageMetric("Weekly", 10.0, fetched + timedelta(days=5)),
+        ],
+        fetched_at=fetched,
+    )
+
+    widget.update_snapshot(weekly_only, "Codex")
+    widget.set_ratio("codex", _estimate(True, 6.7), recent=[6.7])
+
+    label = widget._tiles["codex"].ratio_label  # noqa: SLF001
+    assert label.isHidden()
+
+    widget.update_snapshot(_ok_snapshot("codex"), "Codex")
+    widget.set_ratio("codex", _estimate(True, 6.7), recent=[6.7])
+
+    assert not label.isHidden()
+    assert "6.7/wk" in label.text()
+
+
 def test_ratio_history_signal_emitted_on_link_click(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)

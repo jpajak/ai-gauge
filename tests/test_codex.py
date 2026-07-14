@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from aigauge.models import SnapshotStatus
 from aigauge.providers.codex import (
     CODEX_USAGE_URL,
+    EXTRACTOR_JS,
     _build_snapshot,
     _parse_reset_text,
 )
@@ -167,7 +168,7 @@ def test_codex_signed_in_empty_usage_payload_is_transient_error():
     assert "without usage cards" in (snapshot.error or "")
 
 
-def test_codex_partial_usage_rows_are_transient_error():
+def test_codex_session_without_weekly_is_transient_error():
     snapshot = _build_snapshot(
         {
             "logged_out": False,
@@ -185,6 +186,41 @@ def test_codex_partial_usage_rows_are_transient_error():
 
     assert snapshot.status == SnapshotStatus.ERROR
     assert "part of the usage cards" in (snapshot.error or "")
+
+
+def test_codex_weekly_only_payload_is_valid_while_session_limit_is_absent():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly": {
+                "percent": 93,
+                "kind": "remaining",
+                "reset_text": "Jul 19, 2026 4:29 PM",
+            },
+            "title": "Codex Analytics",
+            "url": CODEX_USAGE_URL,
+            "body_text": (
+                "Personal usage Balance Weekly usage limit 93% remaining "
+                "Resets Jul 19, 2026 4:29 PM"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Weekly"]
+    assert snapshot.metrics[0].percent_used == 7.0
+    assert snapshot.metrics[0].window == timedelta(days=7)
+
+
+def test_codex_extractor_stops_waiting_when_weekly_card_is_ready():
+    personal_usage_check = EXTRACTOR_JS.split(
+        "function maybeSelectPersonalUsageTab",
+        maxsplit=1,
+    )[1].split("const labels", maxsplit=1)[0]
+
+    assert "/Weekly usage limit/i.test(bodyText)" in personal_usage_check
+    assert "/5 hour usage limit/i.test(bodyText)" not in personal_usage_check
 
 
 def test_codex_active_session_with_idle_weekly_is_transient_error():

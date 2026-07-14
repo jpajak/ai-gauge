@@ -30,3 +30,11 @@ def test_opencode_go_has_verify_target():
     assert "Rolling Usage" in check_js
     assert "Weekly Usage" in check_js
     assert "Monthly Usage" in check_js
+
+
+def test_codex_verification_accepts_weekly_only_usage_page():
+    _, check_js = VERIFY_TARGETS["codex"]
+
+    success_check = check_js.split("return true", maxsplit=1)[0]
+    assert "/Weekly usage limit/i.test(text)" in success_check
+    assert "/5 hour usage limit/i.test(text)" not in success_check

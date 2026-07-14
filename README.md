@@ -5,16 +5,16 @@
 ![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-3776ab)
 ![License: MIT](https://img.shields.io/badge/license-MIT-green)
 
-If you pay for multiple AI subscriptions and frequently check your usage, AI Gauge might help. It shows session and weekly usage, reset times, account balances, and spend in a compact always-visible view, so you can get the most out of what you're paying for.
+If you pay for multiple AI subscriptions and frequently check your usage, AI Gauge might help. It shows available rolling, session, weekly, and monthly usage, reset times, account balances, and spend in a compact always-visible view, so you can get the most out of what you're paying for.
 
-Compact monitor for **Claude.ai**, **ChatGPT Codex**, **GitHub Copilot**, and **OpenRouter** usage. Manual + auto refresh, with a platform-native UI on each OS:
+Compact monitor for **Claude.ai**, **ChatGPT Codex**, **OpenCode**, **GitHub Copilot**, and **OpenRouter** usage. Manual + auto refresh, with a platform-native UI on each OS:
 
 - **Windows / Linux** — always-on-top draggable frameless widget plus a system-tray icon.
 - **macOS** — Stats-style menu-bar item (`● 42% ● 78% ● 15%`); the panel opens as a popover when you click it.
 
 > **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Windows Task Scheduler / LaunchAgent / `~/.config/autostart`).
 
-Current version: **0.6.3**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.6.4**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
 utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
@@ -26,7 +26,7 @@ notice.
 **Windows / Linux** — always-on-top floating widget, in full panel and collapsed pill modes:
 
 <p align="center">
-  <img src="docs/screenshots/win-panel-full.png" alt="AI Gauge full panel showing Claude, Codex, and Copilot tiles" width="320" />
+  <img src="docs/screenshots/win-panel-full.png" alt="AI Gauge full panel showing Claude, Codex, OpenCode, and OpenRouter tiles" width="320" />
   &nbsp;&nbsp;
   <img src="docs/screenshots/win-panel-compact.png" alt="AI Gauge collapsed pill mode" width="320" />
 </p>
@@ -78,7 +78,7 @@ python3 -m venv .venv
 ./.venv/bin/python -m aigauge
 ```
 
-On first launch the widget appears with enabled provider tiles. Claude and Codex use a **Sign in** flow; GitHub Copilot and OpenRouter are configured from Settings with API credentials. Open Settings to disable providers you don't use or to add more Claude/Codex accounts.
+On first launch the widget appears with enabled provider tiles. Claude, Codex, and OpenCode use a **Sign in** or **Paste cookie** flow; GitHub Copilot and OpenRouter are configured from Settings with API credentials. Open Settings to disable providers you don't use or to add more Claude/Codex accounts.
 
 ## First-time setup per provider
 
@@ -86,6 +86,7 @@ On first launch the widget appears with enabled provider tiles. Claude and Codex
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Claude.ai**      | **Sign in (recommended):** opens an embedded browser. <b>Don't click "Continue with Google"</b> — Google refuses to authenticate inside embedded browsers. If your account is Google-linked, just type that same email into the **Enter your email** box and use the **magic link** sent to your inbox. **Paste cookie:** fallback if magic-link is unavailable; see below. Add extra Claude subscriptions from **Settings → Claude**. |
 | **ChatGPT Codex**  | Same as Claude — use email + magic link in the embedded browser, or paste cookie as a fallback. If your OpenAI account routes through Google or a passkey, use **Paste cookie**; embedded browsers often cannot complete those flows. Add extra Codex subscriptions from **Settings → Codex**.                                                                                                                                                 |
+| **OpenCode**       | In **Settings → OpenCode**, paste the workspace **Go** usage-page URL, then use **Sign in**. If Google blocks the embedded browser, sign in through your normal browser and use **Paste cookie** instead. The tile reads Rolling, Weekly, and Monthly usage from that workspace page.                                                                                                                          |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal plans, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly AI credit allowance (Pro=1,500, Pro+=7,000, Max=20,000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
 | **OpenRouter**     | Create an inference API key at <https://openrouter.ai/keys> and paste it into Settings. To show account balance and model activity, also create a management key at <https://openrouter.ai/settings/provisioning-keys>. Management keys cannot be used for inference; AI Gauge stores it separately and only uses it for OpenRouter management endpoints. Daily spend budget is optional.                                                    |
 
@@ -109,9 +110,9 @@ are made from the local app to the configured providers. See
 
 ### Paste cookie (fallback)
 
-If the embedded-browser sign-in doesn't work for you (e.g. your account requires Google sign-in, passkey authentication, or you can't use the magic-link path), copy your existing session cookie from your normal browser into the app. Cookies last weeks before they need re-pasting.
+If the embedded-browser sign-in doesn't work for you (e.g. your account requires Google sign-in, passkey authentication, or you can't use the magic-link path), copy your existing Claude, Codex, or OpenCode session cookie from your normal browser into the app. Cookies last weeks before they need re-pasting.
 
-1. Sign into <https://claude.ai> (or <https://chatgpt.com>) in **Chrome / Edge / Firefox** as you normally do.
+1. Sign into the provider in **Chrome / Edge / Firefox** as you normally do.
 2. For ChatGPT, press **F12** → **Network**, reload the page, click a
    `chatgpt.com` request, and copy the full **Request Headers → Cookie:** value.
    This includes split session cookies plus companion auth cookies such as
@@ -119,7 +120,9 @@ If the embedded-browser sign-in doesn't work for you (e.g. your account requires
 3. For Claude, press **F12** → **Network**, reload `https://claude.ai/new#settings/usage`,
    click a `claude.ai` request, and copy the full **Request Headers → Cookie:**
    value. It must include `sessionKey`.
-4. In the app: Settings → Claude or Settings → Codex → click **Paste cookie** next to the account, paste, Save.
+4. For OpenCode, reload your workspace **Go** usage page, click an
+   `opencode.ai` request, and copy the full **Request Headers → Cookie:** value.
+5. In the app, open the matching provider tab in Settings, click **Paste cookie**, paste the header, and Save.
 
 ## Daily use
 
@@ -127,7 +130,7 @@ If the embedded-browser sign-in doesn't work for you (e.g. your account requires
 - **macOS:** the menu-bar item shows tinted status dots for enabled provider/account tiles. Click it to open the panel as a popover; click outside to dismiss. Right-click for the same Refresh / Settings / Quit menu.
 - **Linux without a system tray** (stock GNOME): the floating widget stays visible and serves the same Show / Refresh / Settings / Quit menu via right-click on the widget.
 - **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view. Enabled provider/account chips wrap onto additional rows when needed, with named secondary Claude/Codex accounts using just the account name to save space.
-- **Hide unused providers:** uncheck Claude / Codex / Copilot / OpenRouter in Settings to remove their group from the widget — useful if you only use one or two of them.
+- **Hide unused providers:** uncheck Claude / Codex / OpenCode / Copilot / OpenRouter in Settings to remove their group from the widget — useful if you only use one or two of them.
 - Auto-refresh is adaptive: manual refresh or changed usage enters the active
   cadence, then unchanged results back off toward the configured max interval.
   Defaults are 5 min active and 60 min idle max.
@@ -164,7 +167,7 @@ See [RELEASING.md](RELEASING.md) for maintainer release steps.
 ./.venv/bin/python -m pytest            # macOS / Linux
 ```
 
-Tests cover: config round-trip, Copilot and OpenRouter REST helpers (with mocked HTTP), widget behavior, and snapshot models. Provider scrapers (Claude/Codex) require a live browser session and are validated manually.
+Tests cover: config round-trip, provider payload parsing, Copilot and OpenRouter REST helpers (with mocked HTTP), widget behavior, and snapshot models. End-to-end browser scraping for Claude, Codex, and OpenCode requires a live signed-in session and is validated manually.
 
 ## Contributing
 
@@ -175,7 +178,7 @@ the issue templates to use.
 ## Notes / limitations
 
 - **Why an embedded browser instead of reading Chrome cookies?** Chrome 127+ added App-Bound Encryption (mid-2024) that blocks every external Python library from decrypting Chrome/Edge cookies. Owning the browser session ourselves is the only reliable workaround.
-- **Claude / Codex layouts may change.** If a provider tile shows "error" after a UI update upstream, the page-extractor JS in `src/aigauge/providers/{claude,codex}.py` needs adjusting — the rest of the app keeps working.
+- **Claude / Codex / OpenCode layouts may change.** If a browser-backed provider tile shows "error" after an upstream UI update, its page-extractor JS under `src/aigauge/providers/` may need adjusting — the rest of the app keeps working.
 - The Copilot REST endpoint returns the _current calendar month_ of billing usage. The widget tracks gross AI credits consumed against the included allowance; net quantity/amount is only the billable overage. Reset is computed as the 1st of the next month. GitHub does not currently expose a reliable personal-plan allowance field, so Settings uses a plan dropdown with a Custom fallback. Annual/request-based accounts are handled with a legacy premium-request fallback.
 - **Copilot usage lags upstream.** The Copilot REST endpoint updates noticeably slower than Claude or Codex — credit counts can take hours to reflect recent activity. The widget shows the most recent value GitHub returns; treat the Copilot tile as a trailing indicator, not real-time.
 - **Copilot AI credits.** GitHub moved Copilot from per-request quotas to token-based AI credits. Code completions and next edit suggestions remain included for paid plans, while Chat, CLI, cloud agent, Spaces, Spark, and third-party coding agents consume AI credits. The app shows the credit usage GitHub returns; if your account is org-billed, enter the billing organization so AI Gauge reads the organization billing pool.

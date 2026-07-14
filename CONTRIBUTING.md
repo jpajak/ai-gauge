@@ -3,9 +3,9 @@
 Thanks for your interest. AI Gauge is a small cross-platform desktop utility,
 so most contributions fall into one of three buckets:
 
-- **Provider layout fixes** — when Claude or Codex change their usage page and
-  a tile starts showing `error · layout changed`. These are the most common
-  and most welcome PRs.
+- **Provider layout fixes** — when Claude, Codex, or OpenCode change their
+  usage page and a tile starts showing `error · layout changed`. These are
+  the most common and most welcome PRs.
 - **Bug reports and small bug fixes** — anything around tray, widget,
   cookie storage, settings, or refresh logic.
 - **New providers or new features** — please open an issue first so we can
@@ -61,7 +61,7 @@ The version-sync check that gates CI:
 Use the issue templates under [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/):
 
 - **Bug report** — generic crashes, UI issues, settings glitches.
-- **Provider layout broken** — Claude or Codex tile started failing.
+- **Provider layout broken** — Claude, Codex, or OpenCode tile started failing.
 - **Feature request** — new ideas worth discussing before code.
 
 For anything that exposes session cookies or tokens, please follow

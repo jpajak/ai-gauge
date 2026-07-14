@@ -187,6 +187,32 @@ def test_codex_partial_usage_rows_are_transient_error():
     assert "part of the usage cards" in (snapshot.error or "")
 
 
+def test_codex_weekly_only_shared_limit_layout_is_supported():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly": {
+                "percent": 5,
+                "kind": "remaining",
+                "reset_text": "Jul 20, 2026 7:57 PM",
+            },
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": (
+                "Balance Codex usage draws from your shared agentic usage limit "
+                "Weekly usage limit 5% remaining Resets Jul 20, 2026 7:57 PM "
+                "Credits remaining 0 Usage breakdown Personal usage"
+            ),
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Weekly"]
+    assert snapshot.metrics[0].percent_used == 95.0
+    assert snapshot.metrics[0].resets_at == datetime(2026, 7, 20, 19, 57)
+
+
 def test_codex_active_session_with_idle_weekly_is_transient_error():
     snapshot = _build_snapshot(
         {

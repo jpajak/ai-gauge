@@ -21,10 +21,10 @@ VERIFY_TARGETS = {
         r"""(() => {
           const visibleText = el => ((el && (el.innerText || el.textContent)) || '').replace(/\s+/g, ' ').trim();
           const text = visibleText(document.body);
-          if (/5 hour usage limit/i.test(text) && /Weekly usage limit/i.test(text) && /\d+(?:\.\d+)?\s*%/.test(text)) {
+          if (/Weekly usage limit/i.test(text) && /\d+(?:\.\d+)?\s*%/.test(text)) {
             return true;
           }
-          const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"],div,span,p'));
+          const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"]'));
           const label = labels.find(el => visibleText(el).toLowerCase() === 'personal usage');
           const target = label && (label.closest('button,a,[role="tab"],[role="button"]') || label);
           if (target) target.click();

@@ -4,7 +4,7 @@
 
 ### Fixed
 
-- Codex usage tracking now accepts analytics pages that temporarily expose only the Weekly usage limit, avoiding an `error · stale` state while the five-hour Session card is unavailable. Session tracking remains supported and will reappear automatically whenever Codex restores that card; sign-in verification also accepts the weekly-only layout.
+- Codex usage tracking no longer mistakes the current non-interactive **Personal usage** heading for a selectable tab, and now accepts analytics pages that expose only the shared Weekly usage limit. This avoids exhausted extractor retries and an `error · stale` state while the five-hour Session card is unavailable. Session tracking remains supported and will reappear automatically whenever Codex restores that card; sign-in verification also accepts the weekly-only layout. ([#2](https://github.com/jpajak/ai-gauge/pull/2), thanks [@gitupofftheflooranddosomework](https://github.com/gitupofftheflooranddosomework).)
 - Codex hides its session-to-weekly burn-rate headline while the Session metric is unavailable, avoiding a stale sessions-per-week estimate beside a weekly-only snapshot. Stored calibration history is preserved and the headline returns with the Session metric.
 
 ## 0.6.3 - 2026-07-10

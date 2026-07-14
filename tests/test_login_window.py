@@ -38,3 +38,7 @@ def test_codex_verification_accepts_weekly_only_usage_page():
     success_check = check_js.split("return true", maxsplit=1)[0]
     assert "/Weekly usage limit/i.test(text)" in success_check
     assert "/5 hour usage limit/i.test(text)" not in success_check
+    assert (
+        """querySelectorAll('button,a,[role="tab"],[role="button"]')""" in check_js
+    )
+    assert ",div,span,p" not in check_js

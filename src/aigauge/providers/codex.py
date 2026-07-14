@@ -52,7 +52,10 @@ EXTRACTOR_JS = r"""
       return null;
     }
 
-    const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"],div,span,p'));
+    // Only interactive elements are tabs. The current analytics page uses
+    // "Personal usage" as a heading inside a plain div; clicking that wrapper
+    // forever would exhaust the extractor's retry budget.
+    const labels = Array.from(document.querySelectorAll('button,a,[role="tab"],[role="button"]'));
     const label = labels.find(el => visibleText(el).toLowerCase() === 'personal usage');
     if (!label) return null;
 
@@ -294,6 +297,21 @@ def _looks_like_empty_signed_in_usage(payload: dict[str, Any]) -> bool:
     return any(marker in body_text for marker in ("codex", "chatgpt", "tasks", "cloud"))
 
 
+def _is_weekly_only_usage_layout(body_text: str) -> bool:
+    """Return whether Codex rendered the newer shared weekly-limit layout."""
+    text = re.sub(r"\s+", " ", body_text or "").lower()
+    if "weekly usage limit" not in text:
+        return False
+    return any(
+        marker in text
+        for marker in (
+            "shared agentic usage limit",
+            "credits remaining",
+            "usage breakdown",
+        )
+    )
+
+
 def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
     url = str(payload.get("url") or "").lower()
     if "/auth/login" in url or "/login" in url or "/logout" in url:
@@ -373,12 +391,13 @@ def _build_snapshot(
         )
 
     labels = {metric.label.lower(): metric for metric in metrics}
-    # Weekly is the durable Codex subscription limit. The five-hour session
-    # card has disappeared from the analytics page before, so accept a weekly-
-    # only response. If Codex exposes the session card again, it is parsed and
-    # displayed normally. A session-only response is still incomplete because
-    # the weekly limit is expected to remain available.
-    if metrics and "weekly" not in labels:
+    # Accept a lone Weekly card only when the surrounding page identifies the
+    # new shared-agentic layout. This preserves transient-error retries for a
+    # genuinely partial render of the older Session + Weekly layout.
+    weekly_only_layout = (
+        set(labels) == {"weekly"} and _is_weekly_only_usage_layout(body_text)
+    )
+    if metrics and set(labels) != {"session", "weekly"} and not weekly_only_layout:
         log_page_diagnosis(
             log,
             provider=account_id,

@@ -188,39 +188,66 @@ def test_codex_session_without_weekly_is_transient_error():
     assert "part of the usage cards" in (snapshot.error or "")
 
 
-def test_codex_weekly_only_payload_is_valid_while_session_limit_is_absent():
+def test_codex_weekly_only_shared_limit_layout_is_supported():
     snapshot = _build_snapshot(
         {
             "logged_out": False,
             "session": None,
             "weekly": {
-                "percent": 93,
+                "percent": 5,
                 "kind": "remaining",
-                "reset_text": "Jul 19, 2026 4:29 PM",
+                "reset_text": "Jul 20, 2026 7:57 PM",
             },
-            "title": "Codex Analytics",
+            "title": "Codex",
             "url": CODEX_USAGE_URL,
             "body_text": (
-                "Personal usage Balance Weekly usage limit 93% remaining "
-                "Resets Jul 19, 2026 4:29 PM"
+                "Balance Codex usage draws from your shared agentic usage limit "
+                "Weekly usage limit 5% remaining Resets Jul 20, 2026 7:57 PM "
+                "Credits remaining 0 Usage breakdown Personal usage"
             ),
         }
     )
 
     assert snapshot.status == SnapshotStatus.OK
     assert [metric.label for metric in snapshot.metrics] == ["Weekly"]
-    assert snapshot.metrics[0].percent_used == 7.0
+    assert snapshot.metrics[0].percent_used == 95.0
+    assert snapshot.metrics[0].resets_at == datetime(2026, 7, 20, 19, 57)
     assert snapshot.metrics[0].window == timedelta(days=7)
 
 
+def test_codex_weekly_only_without_shared_layout_context_is_transient_error():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "session": None,
+            "weekly": {
+                "percent": 5,
+                "kind": "remaining",
+                "reset_text": "Jul 20, 2026 7:57 PM",
+            },
+            "title": "Codex",
+            "url": CODEX_USAGE_URL,
+            "body_text": "Weekly usage limit 5% remaining",
+        }
+    )
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "part of the usage cards" in (snapshot.error or "")
+
+
 def test_codex_extractor_stops_waiting_when_weekly_card_is_ready():
-    personal_usage_check = EXTRACTOR_JS.split(
+    personal_usage_logic = EXTRACTOR_JS.split(
         "function maybeSelectPersonalUsageTab",
         maxsplit=1,
-    )[1].split("const labels", maxsplit=1)[0]
+    )[1].split("function findCardByLabel", maxsplit=1)[0]
 
-    assert "/Weekly usage limit/i.test(bodyText)" in personal_usage_check
-    assert "/5 hour usage limit/i.test(bodyText)" not in personal_usage_check
+    assert "/Weekly usage limit/i.test(bodyText)" in personal_usage_logic
+    assert "/5 hour usage limit/i.test(bodyText)" not in personal_usage_logic
+    assert (
+        """querySelectorAll('button,a,[role="tab"],[role="button"]')"""
+        in personal_usage_logic
+    )
+    assert ",div,span,p" not in personal_usage_logic
 
 
 def test_codex_active_session_with_idle_weekly_is_transient_error():

@@ -110,6 +110,61 @@ def test_parse_codex_rejects_unrelated_cookie_header():
     assert _parse_cookie_pairs("codex", "Cookie: unrelated=value; other=thing") == []
 
 
+def test_import_browser_cookies_preserves_attributes_and_saves_fallback(monkeypatch):
+    imported = []
+    saved = []
+
+    class FakeStore:
+        def setCookie(self, cookie, origin):  # noqa: N802 - Qt-shaped test double
+            imported.append((cookie, origin))
+
+    class FakeProfile:
+        def cookieStore(self):  # noqa: N802 - Qt-shaped test double
+            return FakeStore()
+
+    monkeypatch.setattr(cookies, "get_profile", lambda account_id: FakeProfile())
+    monkeypatch.setattr(
+        cookies,
+        "set_provider_cookie",
+        lambda account_id, value: saved.append((account_id, value)),
+    )
+
+    assert cookies.import_browser_cookies(
+        "codex",
+        "codex-work",
+        [
+            {
+                "name": "__Secure-next-auth.session-token",
+                "value": "session-secret",
+                "domain": ".chatgpt.com",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+                "expires": 2_000_000_000,
+            },
+            {
+                "name": "google-cookie",
+                "value": "must-not-import",
+                "domain": ".google.com",
+            },
+        ],
+    )
+
+    assert len(imported) == 1
+    cookie, origin = imported[0]
+    assert bytes(cookie.name()).decode() == "__Secure-next-auth.session-token"
+    assert bytes(cookie.value()).decode() == "session-secret"
+    assert cookie.isSecure()
+    assert cookie.isHttpOnly()
+    assert origin.host() == "chatgpt.com"
+    assert saved == [
+        (
+            "codex-work",
+            "__Secure-next-auth.session-token=session-secret",
+        )
+    ]
+
+
 def test_cookie_hydration_logs_names_without_values(monkeypatch, caplog):
     def fake_get_provider_cookie(provider):
         if provider == "claude":

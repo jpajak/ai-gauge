@@ -13,6 +13,7 @@ from ..config import (
     Config,
     browser_accounts,
     get_provider_cookie,
+    set_provider_cookie,
     webview_profile_dir,
 )
 from .profile import get_profile
@@ -183,6 +184,65 @@ def inject_session_cookie(
     for name, cookie_value in pairs:
         _set_cookie(kind, profile_id, name, cookie_value)
     return bool(pairs)
+
+
+def import_browser_cookies(
+    provider: str,
+    account_id: str,
+    cookies: list[dict],
+) -> bool:
+    """Import cookies captured from a real browser into a WebEngine profile."""
+    domain = COOKIE_DOMAINS.get(provider)
+    if not domain:
+        return False
+    wanted = domain.lstrip(".").lower()
+    matching = [
+        item
+        for item in cookies
+        if isinstance(item, dict)
+        and (
+            str(item.get("domain", "")).lstrip(".").lower() == wanted
+            or str(item.get("domain", ""))
+            .lstrip(".")
+            .lower()
+            .endswith("." + wanted)
+        )
+        and item.get("name")
+        and item.get("value") is not None
+    ]
+    if not matching:
+        return False
+
+    store = get_profile(account_id).cookieStore()
+    for item in matching:
+        name = str(item["name"])
+        value = str(item["value"])
+        cookie_domain = str(item.get("domain") or domain)
+        cookie = QNetworkCookie(
+            QByteArray(name.encode("utf-8")),
+            QByteArray(value.encode("utf-8")),
+        )
+        if not name.startswith("__Host-"):
+            cookie.setDomain(cookie_domain)
+        cookie.setPath(str(item.get("path") or "/"))
+        cookie.setSecure(bool(item.get("secure", True)))
+        cookie.setHttpOnly(bool(item.get("httpOnly", True)))
+        expires = item.get("expires")
+        if isinstance(expires, (int, float)) and expires > 0:
+            cookie.setExpirationDate(QDateTime.fromSecsSinceEpoch(int(expires)))
+        origin = QUrl(f"https://{cookie_domain.lstrip('.')}/")
+        store.setCookie(cookie, origin)
+
+    # Keep the same encrypted fallback used by the paste-cookie flow. Values
+    # are never logged; only cookie names appear in diagnostics.
+    header = "; ".join(f"{item['name']}={item['value']}" for item in matching)
+    set_provider_cookie(account_id, header)
+    log.info(
+        "browser cookies imported provider=%s cookie_names=%s",
+        account_id,
+        sorted({str(item["name"]) for item in matching}),
+    )
+    return True
 
 
 def _profile_has_persistent_cookies(account_id: str) -> bool:

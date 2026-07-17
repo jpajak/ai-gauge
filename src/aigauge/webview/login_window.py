@@ -7,6 +7,8 @@ from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineSettings
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QDialog, QHBoxLayout, QLabel, QPushButton, QVBoxLayout
 
+from .cookies import import_browser_cookies
+from .external_login import ExternalLoginWorker
 from .page import QuietWebEnginePage
 from .profile import get_profile
 from .verify import (
@@ -170,11 +172,12 @@ class _PopupPage(_AllowlistedPage):
 
 
 class LoginWindow(QDialog):
-    """Modal embedded-Chromium window for signing in to Claude or ChatGPT.
+    """Sign in with a real browser, then verify in AI Gauge's profile.
 
-    The user signs in normally. When they click "I'm signed in", we navigate to
-    the provider's actual usage URL and verify via JS that the page loaded for a
-    signed-in user. If verification fails, we tell the user and stay open.
+    Google rejects embedded OAuth user-agents, so the primary flow launches an
+    installed Chrome-family browser in an isolated temporary profile and copies
+    the resulting provider cookies over a loopback-only DevTools connection.
+    The embedded view remains available as a fallback.
     """
 
     def __init__(
@@ -208,56 +211,118 @@ class LoginWindow(QDialog):
         )
         self._view = QWebEngineView(self)
         self._view.setPage(self._page)
-        self._view.load(QUrl(login_url))
+        self._view.setVisible(False)
+        self._login_url = login_url
 
         # Allow popup OAuth windows (some sign-in flows use them).
         self._page.newWindowRequested.connect(self._handle_popup)
         self._popup_pages: list[_PopupPage] = []  # keep refs
 
-        if provider == "opencode_go":
-            instructions_html = (
-                "If Google says this browser or app may not be secure, close "
-                "this window and use <b>Paste cookie</b> in Settings after "
-                "signing in to OpenCode with your normal browser. Click "
-                "<b>I'm signed in</b> only if the usage page loads here."
-            )
-        else:
-            instructions_html = (
-                "<b>Do not click \u201cContinue with Google\u201d</b> \u2014 Google blocks "
-                "embedded browsers, and Google passkeys usually fail here too. If "
-                "you normally sign in with Google, try typing that same email "
-                "address into the <b>Enter your email</b> box and use the "
-                "<b>magic link</b> sent to your inbox. If OpenAI sends you back to "
-                "Google or asks for a passkey, close this window and use "
-                "<b>Paste cookie</b> in Settings. "
-                "Click <b>I'm signed in</b> when you reach your account."
-            )
-        instructions = QLabel(instructions_html)
-        instructions.setWordWrap(True)
-        instructions.setStyleSheet(
+        self._instructions = QLabel(
+            "AI Gauge is opening a real Chrome, Edge, Brave, or Chromium window. "
+            "Sign in there normally, including with <b>Google</b> or a "
+            "<b>passkey</b>. This window will finish automatically; there is "
+            "nothing to copy or paste."
+        )
+        self._instructions.setWordWrap(True)
+        self._instructions.setStyleSheet(
             "color:#374151; background:#fef3c7; padding:8px; border-radius:4px;"
         )
 
         self._status = QLabel("")
         self._status.setStyleSheet("color:#dc2626;")
 
-        verify_btn = QPushButton("I'm signed in")
-        verify_btn.setDefault(True)
-        verify_btn.clicked.connect(self._verify)
+        self._embedded_btn = QPushButton("Use embedded browser instead")
+        self._embedded_btn.clicked.connect(self._use_embedded_browser)
+        self._verify_btn = QPushButton("I'm signed in")
+        self._verify_btn.setDefault(True)
+        self._verify_btn.setVisible(False)
+        self._verify_btn.clicked.connect(self._verify)
         cancel_btn = QPushButton("Cancel")
         cancel_btn.clicked.connect(self.reject)
 
         button_row = QHBoxLayout()
         button_row.addWidget(self._status, 1)
-        button_row.addWidget(verify_btn)
+        button_row.addWidget(self._embedded_btn)
+        button_row.addWidget(self._verify_btn)
         button_row.addWidget(cancel_btn)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(8, 8, 8, 8)
         layout.setSpacing(6)
-        layout.addWidget(instructions)
+        layout.addWidget(self._instructions)
         layout.addWidget(self._view, 1)
         layout.addLayout(button_row)
+
+        self.resize(680, 220)
+        self._external_worker: ExternalLoginWorker | None = None
+        QTimer.singleShot(0, self._start_external_login)
+
+    def _start_external_login(self) -> None:
+        if self._external_worker is not None:
+            return
+        self._status.setText("Opening your browser…")
+        self._status.setStyleSheet("color:#6b7280;")
+        worker = ExternalLoginWorker(
+            self._provider,
+            self._login_url,
+            self._account_id,
+            self,
+        )
+        worker.status_changed.connect(self._on_external_status)
+        worker.session_ready.connect(self._on_external_session_ready)
+        worker.failed.connect(self._on_external_failed)
+        self._external_worker = worker
+        worker.start()
+
+    def _on_external_status(self, message: str) -> None:
+        self._status.setText(message)
+        self._status.setStyleSheet("color:#2563eb;")
+
+    def _on_external_session_ready(self, cookies: list[dict]) -> None:
+        try:
+            imported = import_browser_cookies(
+                self._provider,
+                self._account_id,
+                cookies,
+            )
+        except Exception as exc:  # noqa: BLE001 - surface save failures
+            log.exception("external sign-in cookie import failed")
+            self._on_external_failed(f"Could not save the signed-in session: {exc}")
+            return
+        if not imported:
+            self._on_external_failed("The browser signed in, but no session was found.")
+            return
+        self._status.setText("Signed in. Verifying the session…")
+        self._status.setStyleSheet("color:#16a34a;")
+        QTimer.singleShot(1200, self._verify)
+
+    def _on_external_failed(self, message: str) -> None:
+        self._status.setText(message)
+        self._status.setStyleSheet("color:#dc2626;")
+        self._use_embedded_browser()
+
+    def _use_embedded_browser(self) -> None:
+        self._stop_external_login()
+        self._instructions.setText(
+            "Using AI Gauge's embedded browser. Email and magic-link sign-in "
+            "usually work here, but Google may reject this window by policy. "
+            "Use the real-browser flow for Google or passkeys."
+        )
+        self._view.setVisible(True)
+        self.resize(960, 760)
+        self._embedded_btn.setVisible(False)
+        self._verify_btn.setVisible(True)
+        self._view.load(QUrl(self._login_url))
+
+    def _stop_external_login(self) -> None:
+        worker = self._external_worker
+        if worker is None:
+            return
+        worker.stop()
+        if worker.isRunning():
+            worker.wait(4000)
+        self._external_worker = None
 
     def _handle_popup(self, request) -> None:
         """Spawn a new window for popup-based OAuth flows."""
@@ -281,16 +346,18 @@ class LoginWindow(QDialog):
 
     def _on_google_started(self) -> None:
         self._status.setText(
-            "Continuing with Google. If Google refuses this embedded browser "
-            "or a passkey fails, use Paste cookie in Settings."
+            "Google may refuse embedded sign-in. Cancel and click Sign in "
+            "again to use the real-browser flow."
         )
         self._status.setStyleSheet("color:#6b7280;")
 
     def closeEvent(self, event) -> None:
+        self._stop_external_login()
         self._close_popups()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:
+        self._stop_external_login()
         self._close_popups()
         super().done(result)
 

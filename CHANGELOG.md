@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+
+- Claude, Codex, and OpenCode sign-in now opens a real installed Chrome-family browser and automatically imports the authenticated provider session over a temporary loopback-only DevTools connection. Google and passkey sign-in no longer require copying cookies; the embedded browser and paste-cookie paths remain as fallbacks.
+
 ## 0.6.4 - 2026-07-14
 
 ### Fixed

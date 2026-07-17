@@ -310,7 +310,9 @@ class _BrowserAccountRow(QWidget):
         sign_in = QPushButton("Sign in")
         sign_in.setObjectName(f"{account.id}_signin_btn")
         sign_in.setFixedWidth(68)
-        sign_in.setToolTip("Open an embedded browser to sign in to this account.")
+        sign_in.setToolTip(
+            "Sign in with your installed browser; Google and passkeys are supported."
+        )
         sign_in.clicked.connect(lambda: self.sign_in_clicked.emit(self.account_id))
 
         paste = QPushButton("Paste cookie")
@@ -499,9 +501,9 @@ class SettingsDialog(QDialog):
         claude_accounts_layout.addWidget(
             _hint_label(
                 "Name each Claude subscription here. All accounts appear when "
-                "Claude is enabled on the General tab. If you sign in with "
-                "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
-                "because embedded browsers often cannot complete that flow."
+                "Claude is enabled on the General tab. <b>Sign in</b> opens a "
+                "real installed browser and supports Google and passkeys; the "
+                "session is connected automatically."
             )
         )
         claude_usage_btn = QPushButton("Open usage in browser")
@@ -525,9 +527,9 @@ class SettingsDialog(QDialog):
         codex_accounts_layout.addWidget(
             _hint_label(
                 "Name each Codex subscription here. All accounts appear when "
-                "Codex is enabled on the General tab. If you sign in with "
-                "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
-                "because embedded browsers often cannot complete that flow."
+                "Codex is enabled on the General tab. <b>Sign in</b> opens a "
+                "real installed browser and supports Google and passkeys; the "
+                "session is connected automatically."
             )
         )
         codex_usage_btn = QPushButton("Open usage in browser")
@@ -724,7 +726,7 @@ class SettingsDialog(QDialog):
         opencode_go_signin_btn = QPushButton("Sign in")
         opencode_go_signin_btn.setObjectName("opencode_go_signin_btn")
         opencode_go_signin_btn.setToolTip(
-            "Open an embedded browser to sign in to OpenCode."
+            "Sign in with your installed browser; Google and passkeys are supported."
         )
         opencode_go_signin_btn.clicked.connect(
             lambda _checked=False: self.sign_in_clicked.emit("opencode_go")
@@ -753,9 +755,8 @@ class SettingsDialog(QDialog):
 
         opencode_go_help = _hint_label(
             "Paste the workspace <b>Go</b> usage page URL. The tile reads Rolling, "
-            "Weekly, and Monthly usage from that page. If Google blocks the "
-            "embedded sign-in browser, sign in with your normal browser and use "
-            "<b>Paste cookie</b>."
+            "Weekly, and Monthly usage from that page. <b>Sign in</b> opens a "
+            "real installed browser and connects the session automatically."
         )
         opencode_go_form.addRow("", opencode_go_help)
 

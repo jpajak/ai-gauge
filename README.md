@@ -14,7 +14,7 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, **OpenCode**, **GitHub Cop
 
 > **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Windows Task Scheduler / LaunchAgent / `~/.config/autostart`).
 
-Current version: **0.6.4**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.6.5**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
 utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
@@ -95,6 +95,11 @@ On first launch the widget appears with enabled provider tiles. Claude, Codex, a
 Claude and Codex can track more than one subscription at a time. Open **Settings → Claude** or **Settings → Codex**, click **Add another**, give the account a short name, then use **Sign in** or **Paste cookie** for that specific row. The default account displays as `Claude` or `Codex`; named accounts display as `Claude (Work)`, `Codex (Account 2)`, etc.
 
 The **General** tab controls provider groups. If Claude is checked, all configured Claude accounts appear; if Codex is checked, all configured Codex accounts appear. Secondary accounts can be removed from their provider tab. Each Claude/Codex account uses separate cookie storage, browser profile data, widget tile state, and history records.
+
+Use **Clear sign-in** beside an account to remove its session from AI Gauge.
+This clears both the OS-protected saved cookie and the account's live embedded
+browser cookies. It does not revoke sessions in other browsers or devices; use
+the provider's security settings when you need to sign out everywhere.
 
 ### How browser sign-in works
 

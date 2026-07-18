@@ -73,10 +73,10 @@ def test_parse_codex_raw_value_uses_current_and_legacy_names():
 
 
 def test_parse_opencode_go_full_cookie_header_keeps_all_cookies():
-    pasted = "Cookie: opencode.sid=session; other=value"
+    pasted = "Cookie: auth=session; other=value"
 
     assert _parse_cookie_pairs("opencode_go", pasted) == [
-        ("opencode.sid", "session"),
+        ("auth", "session"),
         ("other", "value"),
     ]
 
@@ -113,8 +113,12 @@ def test_parse_codex_rejects_unrelated_cookie_header():
 def test_import_browser_cookies_preserves_attributes_and_saves_fallback(monkeypatch):
     imported = []
     saved = []
+    cleared = []
 
     class FakeStore:
+        def deleteAllCookies(self):  # noqa: N802 - Qt-shaped test double
+            cleared.append(True)
+
         def setCookie(self, cookie, origin):  # noqa: N802 - Qt-shaped test double
             imported.append((cookie, origin))
 
@@ -151,6 +155,7 @@ def test_import_browser_cookies_preserves_attributes_and_saves_fallback(monkeypa
     )
 
     assert len(imported) == 1
+    assert cleared == [True]
     cookie, origin = imported[0]
     assert bytes(cookie.name()).decode() == "__Secure-next-auth.session-token"
     assert bytes(cookie.value()).decode() == "session-secret"
@@ -163,6 +168,113 @@ def test_import_browser_cookies_preserves_attributes_and_saves_fallback(monkeypa
             "__Secure-next-auth.session-token=session-secret",
         )
     ]
+
+
+def test_import_browser_cookies_preserves_host_only_domains(monkeypatch):
+    imported = []
+    calls = []
+
+    class FakeStore:
+        def deleteAllCookies(self):  # noqa: N802 - Qt-shaped test double
+            calls.append("clear")
+
+        def setCookie(self, cookie, origin):  # noqa: N802 - Qt-shaped test double
+            calls.append("set")
+            imported.append((cookie, origin))
+
+    class FakeProfile:
+        def cookieStore(self):  # noqa: N802 - Qt-shaped test double
+            return FakeStore()
+
+    monkeypatch.setattr(cookies, "get_profile", lambda account_id: FakeProfile())
+    monkeypatch.setattr(cookies, "set_provider_cookie", lambda account_id, value: None)
+
+    assert cookies.import_browser_cookies(
+        "opencode_go",
+        "opencode_go",
+        [
+            {
+                "name": "auth",
+                "value": "session",
+                "domain": "opencode.ai",
+                "path": "/",
+                "secure": False,
+                "httpOnly": True,
+            },
+            {
+                "name": "provider",
+                "value": "oauth-provider",
+                "domain": "auth.opencode.ai",
+                "path": "/",
+                "secure": True,
+                "httpOnly": True,
+            },
+        ],
+    )
+
+    assert calls == ["clear", "set", "set"]
+    assert [cookie.domain() for cookie, _origin in imported] == ["", ""]
+    assert [origin.host() for _cookie, origin in imported] == [
+        "opencode.ai",
+        "auth.opencode.ai",
+    ]
+
+
+def test_clear_browser_session_removes_secret_cookies_and_cache(monkeypatch):
+    calls = []
+
+    class Store:
+        def deleteAllCookies(self):  # noqa: N802 - Qt-shaped test double
+            calls.append("cookies")
+
+    class Profile:
+        def cookieStore(self):  # noqa: N802 - Qt-shaped test double
+            return Store()
+
+        def clearHttpCache(self):  # noqa: N802 - Qt-shaped test double
+            calls.append("cache")
+
+    monkeypatch.setattr(
+        cookies,
+        "set_provider_cookie",
+        lambda account_id, value: calls.append((account_id, value)),
+    )
+    monkeypatch.setattr(cookies, "get_profile", lambda account_id: Profile())
+
+    cookies.clear_browser_session("codex-work")
+
+    assert calls == [("codex-work", None), "cookies", "cache"]
+
+
+def test_clear_browser_session_attempts_profile_cleanup_if_secret_fails(monkeypatch):
+    calls = []
+
+    class Store:
+        def deleteAllCookies(self):  # noqa: N802 - Qt-shaped test double
+            calls.append("cookies")
+
+    class Profile:
+        def cookieStore(self):  # noqa: N802 - Qt-shaped test double
+            return Store()
+
+        def clearHttpCache(self):  # noqa: N802 - Qt-shaped test double
+            calls.append("cache")
+
+    monkeypatch.setattr(
+        cookies,
+        "set_provider_cookie",
+        lambda account_id, value: (_ for _ in ()).throw(RuntimeError("locked")),
+    )
+    monkeypatch.setattr(cookies, "get_profile", lambda account_id: Profile())
+
+    try:
+        cookies.clear_browser_session("claude")
+    except RuntimeError as exc:
+        assert "encrypted cookie: locked" in str(exc)
+    else:
+        raise AssertionError("partial cleanup failure was not reported")
+
+    assert calls == ["cookies", "cache"]
 
 
 def test_cookie_hydration_logs_names_without_values(monkeypatch, caplog):
@@ -305,7 +417,7 @@ def test_cookie_hydration_includes_enabled_opencode_go(monkeypatch):
     monkeypatch.setattr(
         cookies,
         "get_provider_cookie",
-        lambda account_id: "Cookie: opencode.sid=fresh" if account_id == "opencode_go" else None,
+        lambda account_id: "Cookie: auth=fresh" if account_id == "opencode_go" else None,
     )
     injected = []
     monkeypatch.setattr(
@@ -318,4 +430,4 @@ def test_cookie_hydration_includes_enabled_opencode_go(monkeypatch):
     )
 
     assert cookies.hydrate_all_from_keyring(config) == ["opencode_go"]
-    assert injected == [("opencode_go", "Cookie: opencode.sid=fresh", None)]
+    assert injected == [("opencode_go", "Cookie: auth=fresh", None)]

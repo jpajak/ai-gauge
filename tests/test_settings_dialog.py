@@ -31,6 +31,16 @@ def test_paste_cookie_button_emits_paste_cookie_signal(qtbot):
     assert signal.args == ["codex"]
 
 
+def test_clear_sign_in_button_emits_account_signal(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    with qtbot.waitSignal(dialog.clear_sign_in_clicked) as signal:
+        _button(dialog, "claude_clear_signin_btn").click()
+
+    assert signal.args == ["claude"]
+
+
 def test_claude_open_usage_button_launches_browser(qtbot, monkeypatch):
     opened = []
     monkeypatch.setattr(
@@ -79,6 +89,16 @@ def test_opencode_go_paste_cookie_button_emits_signal(qtbot):
     assert signal.args == ["opencode_go"]
 
 
+def test_opencode_go_clear_sign_in_button_emits_signal(qtbot):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    with qtbot.waitSignal(dialog.clear_sign_in_clicked) as signal:
+        _button(dialog, "opencode_go_clear_signin_btn").click()
+
+    assert signal.args == ["opencode_go"]
+
+
 def test_opencode_go_open_usage_button_launches_configured_url(qtbot, monkeypatch):
     opened = []
     monkeypatch.setattr(
@@ -122,13 +142,13 @@ def test_add_codex_account_creates_named_secondary_row(qtbot, monkeypatch):
     assert codex_accounts[1].enabled is True
 
 
-def test_remove_secondary_account_clears_cookie(qtbot, monkeypatch):
+def test_remove_secondary_account_clears_session(qtbot, monkeypatch):
     removed = []
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
     monkeypatch.setattr(
         settings_dialog,
-        "set_provider_cookie",
-        lambda key, value: removed.append((key, value)),
+        "clear_browser_session",
+        lambda account_id: removed.append(account_id),
     )
     config = Config()
     dialog = SettingsDialog(config)
@@ -139,7 +159,7 @@ def test_remove_secondary_account_clears_cookie(qtbot, monkeypatch):
     dialog._remove_browser_account(account_id)  # noqa: SLF001
     dialog.apply_to(config)
 
-    assert removed == [(account_id, None)]
+    assert removed == [account_id]
 
 def test_fade_when_inactive_setting_applies(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)

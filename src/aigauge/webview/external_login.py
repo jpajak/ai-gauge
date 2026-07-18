@@ -8,6 +8,7 @@ import socket
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 from pathlib import Path
 from urllib.parse import urlparse
@@ -19,6 +20,15 @@ from PyQt6.QtCore import QThread, pyqtSignal
 from ..config import COOKIE_DOMAINS, COOKIE_NAME_ALIASES, app_data_dir
 
 log = logging.getLogger("aigauge.webview.external_login")
+
+_LOOPBACK_NO_PROXY = ["127.0.0.1", "localhost"]
+_OPENCODE_WORKSPACE_MARKERS = ("usage", "api keys", "members", "billing", "settings")
+_OPENCODE_PAGE_STATE_JS = r"""
+(() => ({
+  url: location.href,
+  body_text: ((document.body && document.body.innerText) || '').slice(0, 10000),
+}))()
+"""
 
 
 def _browser_candidates() -> list[Path]:
@@ -87,9 +97,41 @@ def _has_auth_cookie(provider: str, cookies: list[dict]) -> bool:
     aliases = set(COOKIE_NAME_ALIASES.get(provider, ()))
     if provider == "codex":
         return bool(names & aliases) or "__Secure-oai-is" in names
-    if provider == "opencode_go":
-        return bool(cookies)
     return bool(names & aliases)
+
+
+def _opencode_workspace_shell_visible(url: str, body_text: str) -> bool:
+    """Whether an OpenCode page has reached its authenticated workspace shell."""
+    parsed = urlparse(url)
+    path_parts = [part for part in parsed.path.split("/") if part]
+    if (
+        parsed.scheme != "https"
+        or parsed.hostname != "opencode.ai"
+        or len(path_parts) < 2
+        or path_parts[0] != "workspace"
+    ):
+        return False
+    normalized = " ".join(body_text.lower().split())
+    return all(marker in normalized for marker in _OPENCODE_WORKSPACE_MARKERS)
+
+
+def _is_loopback_websocket_url(value: object, port: int) -> bool:
+    parsed = urlparse(str(value or ""))
+    return (
+        parsed.scheme in ("ws", "wss")
+        and parsed.hostname in ("127.0.0.1", "localhost")
+        and parsed.port == port
+    )
+
+
+def _create_websocket_connection(url: str, *, timeout: float):
+    """Connect to loopback CDP without consulting environment proxies."""
+    return websocket.create_connection(
+        url,
+        timeout=timeout,
+        suppress_origin=True,
+        http_no_proxy=_LOOPBACK_NO_PROXY,
+    )
 
 
 class ExternalLoginWorker(QThread):
@@ -108,6 +150,7 @@ class ExternalLoginWorker(QThread):
         self._debug_port: int | None = None
         self._websocket_url: str | None = None
         self._profile_dir: Path | None = None
+        self._stop_event = threading.Event()
 
     def run(self) -> None:
         browser = find_supported_browser()
@@ -119,11 +162,16 @@ class ExternalLoginWorker(QThread):
             return
 
         profile_root = app_data_dir() / "browser-signin"
-        profile_root.mkdir(parents=True, exist_ok=True)
-        self._profile_dir = Path(
-            tempfile.mkdtemp(prefix=f"{self._account_id}-", dir=profile_root)
-        )
-        self._debug_port = _reserve_local_port()
+        try:
+            profile_root.mkdir(parents=True, exist_ok=True)
+            self._profile_dir = Path(
+                tempfile.mkdtemp(prefix=f"{self._account_id}-", dir=profile_root)
+            )
+            self._debug_port = _reserve_local_port()
+        except OSError as exc:
+            self.failed.emit(f"Could not prepare the temporary browser: {exc}")
+            self._cleanup_profile()
+            return
         command = [
             str(browser),
             f"--user-data-dir={self._profile_dir}",
@@ -177,7 +225,7 @@ class ExternalLoginWorker(QThread):
             if self._process is not None and self._process.poll() is not None:
                 self.failed.emit("The browser closed before sign-in completed.")
                 return
-            time.sleep(0.25)
+            self._stop_event.wait(0.25)
         else:
             if not self.isInterruptionRequested():
                 self.failed.emit("The browser did not start in time.")
@@ -191,10 +239,10 @@ class ExternalLoginWorker(QThread):
                 cookies = self._read_cookies()
             except Exception as exc:  # noqa: BLE001 - transient CDP failures retry
                 log.debug("external sign-in cookie poll failed: %s", exc)
-                time.sleep(0.75)
+                self._stop_event.wait(0.75)
                 continue
             relevant = _provider_cookies(self._provider, cookies)
-            if _has_auth_cookie(self._provider, relevant):
+            if self._session_is_ready(relevant):
                 log.info(
                     "external sign-in captured provider=%s cookie_names=%s",
                     self._account_id,
@@ -202,7 +250,84 @@ class ExternalLoginWorker(QThread):
                 )
                 self.session_ready.emit(relevant)
                 return
-            time.sleep(0.75)
+            self._stop_event.wait(0.75)
+
+    def _session_is_ready(self, cookies: list[dict]) -> bool:
+        if not _has_auth_cookie(self._provider, cookies):
+            return False
+        if self._provider == "opencode_go":
+            return self._opencode_workspace_ready()
+        return True
+
+    def _opencode_workspace_ready(self) -> bool:
+        """Confirm OpenCode rendered its signed-in shell, not just an OAuth cookie."""
+        if self._debug_port is None:
+            return False
+        try:
+            session = requests.Session()
+            session.trust_env = False
+            response = session.get(
+                f"http://127.0.0.1:{self._debug_port}/json/list",
+                timeout=0.5,
+            )
+            response.raise_for_status()
+            targets = response.json()
+        except (requests.RequestException, ValueError):
+            return False
+        if not isinstance(targets, list):
+            return False
+
+        for target in targets:
+            if not isinstance(target, dict) or target.get("type") != "page":
+                continue
+            target_url = str(target.get("url") or "")
+            parsed = urlparse(target_url)
+            if (
+                parsed.hostname != "opencode.ai"
+                or not parsed.path.startswith("/workspace/")
+            ):
+                continue
+            websocket_url = target.get("webSocketDebuggerUrl")
+            if not _is_loopback_websocket_url(websocket_url, self._debug_port):
+                continue
+            try:
+                connection = _create_websocket_connection(
+                    str(websocket_url),
+                    timeout=1.5,
+                )
+                try:
+                    connection.send(
+                        json.dumps(
+                            {
+                                "id": 3,
+                                "method": "Runtime.evaluate",
+                                "params": {
+                                    "expression": _OPENCODE_PAGE_STATE_JS,
+                                    "returnByValue": True,
+                                },
+                            }
+                        )
+                    )
+                    while True:
+                        payload = json.loads(connection.recv())
+                        if payload.get("id") == 3:
+                            break
+                finally:
+                    connection.close()
+            except Exception as exc:  # noqa: BLE001 - transient CDP state
+                log.debug("OpenCode workspace readiness check failed: %s", exc)
+                continue
+            value = (
+                payload.get("result", {})
+                .get("result", {})
+                .get("value", {})
+            )
+            if isinstance(value, dict) and _opencode_workspace_shell_visible(
+                str(value.get("url") or ""),
+                str(value.get("body_text") or ""),
+            ):
+                return True
+        return False
 
     def _discover_websocket(self) -> bool:
         assert self._debug_port is not None
@@ -215,12 +340,7 @@ class ExternalLoginWorker(QThread):
             )
             response.raise_for_status()
             value = response.json().get("webSocketDebuggerUrl")
-            parsed = urlparse(str(value or ""))
-            if (
-                parsed.scheme not in ("ws", "wss")
-                or parsed.hostname not in ("127.0.0.1", "localhost")
-                or parsed.port != self._debug_port
-            ):
+            if not _is_loopback_websocket_url(value, self._debug_port):
                 return False
             self._websocket_url = str(value)
             return True
@@ -230,10 +350,9 @@ class ExternalLoginWorker(QThread):
     def _read_cookies(self) -> list[dict]:
         if not self._websocket_url:
             return []
-        connection = websocket.create_connection(
+        connection = _create_websocket_connection(
             self._websocket_url,
             timeout=1.5,
-            suppress_origin=True,
         )
         try:
             connection.send(json.dumps({"id": 1, "method": "Storage.getCookies"}))
@@ -247,20 +366,34 @@ class ExternalLoginWorker(QThread):
     def _close_browser(self) -> None:
         if self._websocket_url:
             try:
-                connection = websocket.create_connection(
+                connection = _create_websocket_connection(
                     self._websocket_url,
                     timeout=1,
-                    suppress_origin=True,
                 )
                 connection.send(json.dumps({"id": 2, "method": "Browser.close"}))
                 connection.close()
             except Exception:  # noqa: BLE001 - best-effort cleanup
                 pass
         if self._process is not None:
+            process = self._process
             try:
-                self._process.wait(timeout=3)
+                process.wait(timeout=3)
             except subprocess.TimeoutExpired:
-                self._process.terminate()
+                try:
+                    process.terminate()
+                except OSError:
+                    log.warning("external sign-in browser termination failed")
+                else:
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        try:
+                            process.kill()
+                            process.wait(timeout=2)
+                        except (OSError, subprocess.TimeoutExpired):
+                            log.warning("external sign-in browser kill failed")
+            except OSError:
+                log.warning("external sign-in browser wait failed")
             self._process = None
 
     def _cleanup_profile(self) -> None:
@@ -270,9 +403,19 @@ class ExternalLoginWorker(QThread):
             return
         try:
             profile.resolve().relative_to((app_data_dir() / "browser-signin").resolve())
-            shutil.rmtree(profile, ignore_errors=True)
+            for attempt in range(3):
+                shutil.rmtree(profile, ignore_errors=True)
+                if not profile.exists():
+                    break
+                if attempt < 2:
+                    time.sleep(0.1)
+            if profile.exists():
+                log.warning(
+                    "temporary sign-in profile could not be removed path=%s", profile
+                )
         except (OSError, ValueError):
             log.warning("refusing to clean unexpected sign-in profile path=%s", profile)
 
     def stop(self) -> None:
         self.requestInterruption()
+        self._stop_event.set()

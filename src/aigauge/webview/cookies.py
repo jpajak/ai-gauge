@@ -81,8 +81,6 @@ def _has_auth_cookie(provider: str, pairs: list[tuple[str, str]]) -> bool:
     aliases = set(COOKIE_NAME_ALIASES.get(provider, ()))
     if provider == "codex":
         return bool(names & aliases) or "__Secure-oai-is" in names
-    if provider == "opencode_go":
-        return bool(pairs)
     return bool(names & aliases)
 
 
@@ -214,6 +212,12 @@ def import_browser_cookies(
         return False
 
     store = get_profile(account_id).cookieStore()
+    # A signed-out visit may already have created a host-only cookie with the
+    # same name as the authenticated cookie. If the imported cookie is then
+    # converted into a domain cookie, Chromium keeps both and may send the
+    # stale value first. This profile belongs to one account, so queue removal
+    # of its old cookie set before importing the new session.
+    store.deleteAllCookies()
     for item in matching:
         name = str(item["name"])
         value = str(item["value"])
@@ -222,7 +226,11 @@ def import_browser_cookies(
             QByteArray(name.encode("utf-8")),
             QByteArray(value.encode("utf-8")),
         )
-        if not name.startswith("__Host-"):
+        # CDP represents host-only cookies without a leading dot. Omitting
+        # setDomain preserves that property in Qt; explicitly setting the
+        # domain would turn it into a separate `.example.com` cookie instead
+        # of replacing an existing host-only cookie.
+        if cookie_domain.startswith(".") and not name.startswith("__Host-"):
             cookie.setDomain(cookie_domain)
         cookie.setPath(str(item.get("path") or "/"))
         cookie.setSecure(bool(item.get("secure", True)))
@@ -243,6 +251,31 @@ def import_browser_cookies(
         sorted({str(item["name"]) for item in matching}),
     )
     return True
+
+
+def clear_browser_session(account_id: str) -> None:
+    """Remove an account's saved secret and live WebEngine cookies.
+
+    Both stores are attempted even if one fails. This prevents an error in the
+    OS secret backend from leaving the current in-process browser signed in, or
+    a WebEngine error from leaving a cookie that will be restored on restart.
+    """
+    errors: list[str] = []
+    try:
+        set_provider_cookie(account_id, None)
+    except Exception as exc:  # noqa: BLE001 - report partial cleanup to the UI
+        errors.append(f"encrypted cookie: {exc}")
+
+    try:
+        profile = get_profile(account_id)
+        profile.cookieStore().deleteAllCookies()
+        profile.clearHttpCache()
+    except Exception as exc:  # noqa: BLE001 - report partial cleanup to the UI
+        errors.append(f"browser profile: {exc}")
+
+    if errors:
+        raise RuntimeError("; ".join(errors))
+    log.info("browser session cleared provider=%s", account_id)
 
 
 def _profile_has_persistent_cookies(account_id: str) -> bool:

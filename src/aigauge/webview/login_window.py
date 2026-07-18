@@ -255,11 +255,12 @@ class LoginWindow(QDialog):
         layout.addLayout(button_row)
 
         self.resize(680, 220)
+        self._closing = False
         self._external_worker: ExternalLoginWorker | None = None
         QTimer.singleShot(0, self._start_external_login)
 
     def _start_external_login(self) -> None:
-        if self._external_worker is not None:
+        if self._closing or self._external_worker is not None:
             return
         self._status.setText("Opening your browser…")
         self._status.setStyleSheet("color:#6b7280;")
@@ -276,10 +277,14 @@ class LoginWindow(QDialog):
         worker.start()
 
     def _on_external_status(self, message: str) -> None:
+        if self._closing:
+            return
         self._status.setText(message)
         self._status.setStyleSheet("color:#2563eb;")
 
     def _on_external_session_ready(self, cookies: list[dict]) -> None:
+        if self._closing:
+            return
         try:
             imported = import_browser_cookies(
                 self._provider,
@@ -298,11 +303,15 @@ class LoginWindow(QDialog):
         QTimer.singleShot(1200, self._verify)
 
     def _on_external_failed(self, message: str) -> None:
+        if self._closing:
+            return
         self._status.setText(message)
         self._status.setStyleSheet("color:#dc2626;")
         self._use_embedded_browser()
 
     def _use_embedded_browser(self) -> None:
+        if self._closing:
+            return
         self._stop_external_login()
         self._instructions.setText(
             "Using AI Gauge's embedded browser. Email and magic-link sign-in "
@@ -321,7 +330,10 @@ class LoginWindow(QDialog):
             return
         worker.stop()
         if worker.isRunning():
-            worker.wait(4000)
+            # Every blocking operation in ExternalLoginWorker has a finite
+            # timeout. Wait for its finally block so the QThread cannot outlive
+            # this dialog and its temporary browser profile is cleaned up.
+            worker.wait()
         self._external_worker = None
 
     def _handle_popup(self, request) -> None:
@@ -352,11 +364,13 @@ class LoginWindow(QDialog):
         self._status.setStyleSheet("color:#6b7280;")
 
     def closeEvent(self, event) -> None:
+        self._closing = True
         self._stop_external_login()
         self._close_popups()
         super().closeEvent(event)
 
     def done(self, result: int) -> None:
+        self._closing = True
         self._stop_external_login()
         self._close_popups()
         super().done(result)

@@ -26,7 +26,7 @@ WINDOW_COLLAPSED_HEIGHT = 58
 COOKIE_NAMES = {
     "claude": "sessionKey",
     "codex": "next-auth.session-token",
-    "opencode_go": "opencode-session",
+    "opencode_go": "auth",
 }
 COOKIE_NAME_ALIASES = {
     "claude": ("sessionKey",),
@@ -38,9 +38,11 @@ COOKIE_NAME_ALIASES = {
         "__Secure-next-auth.session-token.0",
         "__Secure-next-auth.session-token.1",
     ),
-    # OpenCode auth cookie names are not stable/documented. The paste flow
-    # keeps the full Cookie header rather than relying on aliases.
-    "opencode_go": ("opencode-session",),
+    # OpenCode currently uses the host-only `auth` cookie on opencode.ai.
+    # Retain earlier observed names for compatibility with saved paste-cookie
+    # sessions. The paste flow still keeps the complete Cookie header because
+    # a session may need related cookies.
+    "opencode_go": ("auth", "opencode-session", "opencode.sid"),
 }
 COOKIE_DOMAINS = {
     "claude": ".claude.ai",

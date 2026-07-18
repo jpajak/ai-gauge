@@ -1,5 +1,25 @@
 # Changelog
 
+## Unreleased
+
+## 0.6.5 - 2026-07-18
+
+### Added
+
+- Added **Clear sign-in** controls for Claude, Codex, and OpenCode accounts. Clearing an account removes its saved cookie and live embedded-browser session from AI Gauge without affecting sessions in other browsers or devices.
+
+### Changed
+
+- Claude, Codex, and OpenCode sign-in now opens a real installed Chrome-family browser and automatically imports the authenticated provider session over a temporary loopback-only DevTools connection. Google and passkey sign-in no longer require copying cookies; the embedded browser and paste-cookie paths remain as fallbacks. ([#3](https://github.com/jpajak/ai-gauge/pull/3), thanks [@gitupofftheflooranddosomework](https://github.com/gitupofftheflooranddosomework).)
+
+### Fixed
+
+- External browser sign-in now bypasses proxy settings for its loopback DevTools connection, shuts down its worker and browser process reliably, cleans up temporary profiles, and handles profile setup failures without leaving background work behind.
+- OpenCode external sign-in now waits for both the current `auth` session cookie and the rendered authenticated workspace shell. Unrelated cookies and the pre-login OAuth cookie can no longer cause a hang or close the browser before sign-in is complete.
+- OpenCode sign-in verification now checks for the authenticated workspace shell instead of requiring visible usage meters, so valid accounts without usage rows are no longer reported as signed out.
+- Real-browser session import now replaces stale profile cookies and preserves host-only cookie scope. This prevents an older signed-out OpenCode `auth` cookie from taking precedence over the newly imported signed-in session.
+- Clearing or removing an account now clears both its persisted and live browser sessions, and an older in-flight refresh can no longer restore stale signed-in state after the account was cleared.
+
 ## 0.6.4 - 2026-07-14
 
 ### Fixed

@@ -1,6 +1,7 @@
 from PyQt6.QtCore import QUrl
 
 from aigauge.webview.login_window import (
+    LoginWindow,
     VERIFY_TARGETS,
     _host_allowed,
     _is_google_host,
@@ -27,9 +28,12 @@ def test_opencode_go_has_verify_target():
     url, check_js = VERIFY_TARGETS["opencode_go"]
 
     assert url.startswith("https://opencode.ai/workspace/")
-    assert "Rolling Usage" in check_js
-    assert "Weekly Usage" in check_js
-    assert "Monthly Usage" in check_js
+    assert "location.hostname === 'opencode.ai'" in check_js
+    assert "workspacePath" in check_js
+    assert "'usage', 'api keys', 'members', 'billing', 'settings'" in check_js
+    assert "Rolling Usage" not in check_js
+    assert "Weekly Usage" not in check_js
+    assert "Monthly Usage" not in check_js
 
 
 def test_codex_verification_accepts_weekly_only_usage_page():
@@ -42,3 +46,41 @@ def test_codex_verification_accepts_weekly_only_usage_page():
         """querySelectorAll('button,a,[role="tab"],[role="button"]')""" in check_js
     )
     assert ",div,span,p" not in check_js
+
+
+def test_stopping_external_login_waits_for_worker_cleanup():
+    calls = []
+
+    class Worker:
+        def stop(self):
+            calls.append("stop")
+
+        def isRunning(self):  # noqa: N802 - Qt-shaped test double
+            calls.append("is_running")
+            return True
+
+        def wait(self):
+            calls.append("wait")
+            return True
+
+    class Dialog:
+        _external_worker = Worker()
+
+    dialog = Dialog()
+
+    LoginWindow._stop_external_login(dialog)
+
+    assert calls == ["stop", "is_running", "wait"]
+    assert dialog._external_worker is None
+
+
+def test_closed_dialog_does_not_start_external_login():
+    class Dialog:
+        _closing = True
+        _external_worker = None
+
+    dialog = Dialog()
+
+    LoginWindow._start_external_login(dialog)
+
+    assert dialog._external_worker is None

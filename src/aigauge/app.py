@@ -44,7 +44,7 @@ from .providers.opencode_go import OpenCodeGoProvider, usage_url as opencode_go_
 from .ratio import RatioStore, sessions_per_week
 from .ratio_dialog import RatioHistoryDialog
 from .settings_dialog import SettingsDialog
-from .webview.cookies import hydrate_all_from_keyring
+from .webview.cookies import clear_browser_session, hydrate_all_from_keyring
 from .webview.login_window import LoginWindow
 from .widget import UsageWidget
 
@@ -225,6 +225,7 @@ class App(QObject):
         self._instance_lock: QLockFile | None = None
         self._config = Config.load()
         self._snapshots: dict[str, UsageSnapshot] = {}
+        self._cleared_sessions: set[str] = set()
         self._history = HistoryStore()
         self._ratio = RatioStore()
         self._signals = ProviderSignals()
@@ -592,6 +593,18 @@ class App(QObject):
             )
 
     def _on_snapshot(self, snapshot: UsageSnapshot) -> None:
+        if (
+            snapshot.provider in self._cleared_sessions
+            and snapshot.status != SnapshotStatus.AUTH_REQUIRED
+        ):
+            # A refresh that began before the user cleared the session may
+            # still finish with authenticated data. Keep the account signed
+            # out until the user explicitly signs in again.
+            snapshot = UsageSnapshot(
+                provider=snapshot.provider,
+                status=SnapshotStatus.AUTH_REQUIRED,
+                error="Sign-in cleared from AI Gauge.",
+            )
         snapshot = _preserve_error_metrics(
             snapshot,
             self._snapshots.get(snapshot.provider),
@@ -745,6 +758,7 @@ class App(QObject):
         finally:
             self._widget.restore_always_on_top()
         if accepted:
+            self._cleared_sessions.discard(provider)
             self.refresh_provider(provider)
 
     def open_cookie_paste(self, provider: str) -> None:
@@ -770,9 +784,50 @@ class App(QObject):
         finally:
             self._widget.restore_always_on_top()
         if accepted:
+            self._cleared_sessions.discard(provider)
             # QWebEngineCookieStore commits asynchronously; give the freshly
             # injected cookie a short beat before loading the scrape page.
             QTimer.singleShot(1000, lambda: self.refresh_provider(provider))
+
+    def clear_sign_in(self, provider: str) -> None:
+        kind = account_kind(self._config, provider)
+        if kind is None:
+            return
+        display_name = display_name_for_account(self._config, provider)
+        parent = self._settings_dialog or self._widget
+        answer = QMessageBox.question(
+            parent,
+            "Clear sign-in",
+            f"Remove {display_name}'s saved sign-in from AI Gauge?\n\n"
+            "This signs the account out of AI Gauge only. It does not revoke "
+            "sessions in other browsers or devices.",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+
+        try:
+            clear_browser_session(provider)
+        except RuntimeError as exc:
+            log.exception("failed to fully clear browser session provider=%s", provider)
+            QMessageBox.warning(
+                parent,
+                "Sign-in was not fully cleared",
+                f"AI Gauge could not remove every copy of the saved session:\n\n{exc}",
+            )
+            return
+
+        self._cleared_sessions.add(provider)
+        snapshot = UsageSnapshot(
+            provider=provider,
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Sign-in cleared from AI Gauge.",
+        )
+        self._snapshots[provider] = snapshot
+        if provider in self._providers:
+            self._widget.update_snapshot(snapshot, display_name)
+        self._update_tray()
 
     def open_error_details(self, provider: str) -> None:
         snapshot = self._snapshots.get(provider)
@@ -856,6 +911,7 @@ class App(QObject):
         dlg.setWindowModality(Qt.WindowModality.NonModal)
         dlg.sign_in_clicked.connect(self.open_login)
         dlg.paste_cookie_clicked.connect(self.open_cookie_paste)
+        dlg.clear_sign_in_clicked.connect(self.clear_sign_in)
         dlg.finished.connect(
             lambda result, dialog=dlg, old_quota=old_copilot_quota, old_budget=old_openrouter_budget: (
                 self._on_settings_finished(dialog, result, old_quota, old_budget)
@@ -907,6 +963,17 @@ class App(QObject):
                 self._rerender_openrouter(new_openrouter_budget)
             self._restart_timer()
             self.refresh_now(manual=True)
+            if getattr(dlg, "browser_session_clear_errors", None):
+                account_ids = [
+                    account_id
+                    for account_id, _error in dlg.browser_session_clear_errors
+                ]
+                QMessageBox.warning(
+                    self._widget,
+                    "Some sign-ins were not fully cleared",
+                    "AI Gauge removed the account settings, but could not clear "
+                    "every saved session for: " + ", ".join(account_ids) + ".",
+                )
             if getattr(dlg, "start_at_login_error", False):
                 QMessageBox.warning(
                     self._widget,

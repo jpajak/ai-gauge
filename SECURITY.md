@@ -76,9 +76,25 @@ by default** (cookies go through `keyring` instead). Setting
 `AIGAUGE_ALLOW_PLAINTEXT_SECRETS=1` opts into a plaintext fallback for
 test fixtures only; production code paths should never reach this branch.
 
-## Embedded Browser
+## Browser Sign-In
 
-The sign-in window uses an in-process `QWebEngineView` with a per-account
+The default sign-in flow launches an installed Chrome-family browser with a
+new temporary profile because Google intentionally blocks OAuth in embedded
+user-agents. AI Gauge binds Chrome's DevTools endpoint to a random loopback-only
+port, reads only cookies scoped to the selected provider domain, imports them
+into the matching AI Gauge account profile, and closes the temporary browser.
+The temporary browser profile is then deleted. Google cookies and cookies for
+unrelated sites are not imported. The resulting provider session is stored by
+the same OS-protected secret backend described above.
+
+The DevTools port exists only for the lifetime of the sign-in window. As with
+other local debugging ports, another process running as the same OS user could
+attempt to connect while sign-in is active; this is within the same-user threat
+model described above.
+
+## Embedded Browser Fallback
+
+The fallback sign-in window uses an in-process `QWebEngineView` with a per-account
 profile under `<app-data>/profiles/{account-id}/`. Cookies it acquires are
 kept inside that account profile and are not shared with your real Chrome or
 Edge browser. Multiple Claude/Codex accounts are isolated from each other by

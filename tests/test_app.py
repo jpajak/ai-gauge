@@ -1,6 +1,9 @@
 from datetime import datetime, timedelta
 from types import SimpleNamespace
 
+from PyQt6.QtWidgets import QMessageBox
+
+from aigauge import app as app_module
 from aigauge.app import (
     App,
     _acquire_instance_lock,
@@ -226,6 +229,76 @@ def test_widget_activation_raises_open_settings_dialog():
     app._on_widget_activated()  # noqa: SLF001
 
     assert dialog.calls == ["show", "raise", "activate"]
+
+
+def test_clear_sign_in_clears_session_and_updates_tile(monkeypatch):
+    cleared = []
+    rendered = []
+    app = App.__new__(App)
+    app._config = Config()  # noqa: SLF001
+    app._settings_dialog = object()  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        update_snapshot=lambda snapshot, name: rendered.append((snapshot, name))
+    )
+    app._providers = {"claude": object()}  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._cleared_sessions = set()  # noqa: SLF001
+    app._update_tray = lambda: None  # noqa: SLF001
+
+    monkeypatch.setattr(
+        app_module.QMessageBox,
+        "question",
+        lambda *args, **kwargs: QMessageBox.StandardButton.Yes,
+    )
+    monkeypatch.setattr(
+        app_module,
+        "clear_browser_session",
+        lambda account_id: cleared.append(account_id),
+    )
+
+    app.clear_sign_in("claude")
+
+    assert cleared == ["claude"]
+    assert app._cleared_sessions == {"claude"}  # noqa: SLF001
+    snapshot, display_name = rendered[0]
+    assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
+    assert snapshot.error == "Sign-in cleared from AI Gauge."
+    assert display_name == "Claude"
+
+
+def test_authenticated_refresh_cannot_restore_a_cleared_session():
+    rendered = []
+    app = App.__new__(App)
+    app._config = Config()  # noqa: SLF001
+    app._cleared_sessions = {"claude"}  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._cycle_signatures = {}  # noqa: SLF001
+    app._inflight = {"claude"}  # noqa: SLF001
+    app._history = SimpleNamespace(record_snapshot=lambda snapshot: None)  # noqa: SLF001
+    app._ratio = SimpleNamespace(  # noqa: SLF001
+        record_snapshot=lambda snapshot: None,
+        display_estimate=lambda provider: None,
+        current_estimate=lambda provider: None,
+    )
+    app._ratio_recent = lambda provider: []  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        update_snapshot=lambda snapshot, name: rendered.append(snapshot),
+        set_ratio=lambda *args: None,
+        set_refreshing=lambda refreshing: None,
+    )
+    app._refresh_queue = []  # noqa: SLF001
+    app._cycle_changed = lambda: False  # noqa: SLF001
+    app._current_refresh_manual = True  # noqa: SLF001
+    app._last_cycle_signatures = None  # noqa: SLF001
+    app._update_tray = lambda: None  # noqa: SLF001
+    app._schedule_next_refresh = lambda: None  # noqa: SLF001
+
+    app._on_snapshot(  # noqa: SLF001
+        UsageSnapshot(provider="claude", status=SnapshotStatus.OK)
+    )
+
+    assert app._snapshots["claude"].status == SnapshotStatus.AUTH_REQUIRED  # noqa: SLF001
+    assert rendered[0].status == SnapshotStatus.AUTH_REQUIRED
 
 
 

@@ -47,7 +47,6 @@ from .config import (
     set_github_pat,
     set_openrouter_key,
     set_openrouter_mgmt_key,
-    set_provider_cookie,
 )
 from .error_dialog import reveal_path
 from .logging_setup import log_path
@@ -55,6 +54,7 @@ from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
 from .providers.opencode_go import OPENCODE_GO_USAGE_URL, usage_url as opencode_go_usage_url
 from .startup import set_start_at_login
+from .webview.cookies import clear_browser_session
 
 log = logging.getLogger("aigauge.settings_dialog")
 
@@ -287,6 +287,7 @@ def _open_in_browser(url: str) -> None:
 class _BrowserAccountRow(QWidget):
     sign_in_clicked = pyqtSignal(str)
     paste_cookie_clicked = pyqtSignal(str)
+    clear_sign_in_clicked = pyqtSignal(str)
     remove_clicked = pyqtSignal(str)
 
     def __init__(
@@ -310,7 +311,9 @@ class _BrowserAccountRow(QWidget):
         sign_in = QPushButton("Sign in")
         sign_in.setObjectName(f"{account.id}_signin_btn")
         sign_in.setFixedWidth(68)
-        sign_in.setToolTip("Open an embedded browser to sign in to this account.")
+        sign_in.setToolTip(
+            "Sign in with your installed browser; Google and passkeys are supported."
+        )
         sign_in.clicked.connect(lambda: self.sign_in_clicked.emit(self.account_id))
 
         paste = QPushButton("Paste cookie")
@@ -318,6 +321,12 @@ class _BrowserAccountRow(QWidget):
         paste.setFixedWidth(92)
         paste.setToolTip("Paste a session cookie for this account.")
         paste.clicked.connect(lambda: self.paste_cookie_clicked.emit(self.account_id))
+
+        clear = QPushButton("Clear sign-in")
+        clear.setObjectName(f"{account.id}_clear_signin_btn")
+        clear.setFixedWidth(92)
+        clear.setToolTip("Remove this account's saved sign-in from AI Gauge.")
+        clear.clicked.connect(lambda: self.clear_sign_in_clicked.emit(self.account_id))
 
         remove = QPushButton("Remove")
         remove.setFixedWidth(72)
@@ -331,6 +340,7 @@ class _BrowserAccountRow(QWidget):
         layout.addWidget(self.name_edit, 1)
         layout.addWidget(sign_in)
         layout.addWidget(paste)
+        layout.addWidget(clear)
         layout.addWidget(remove)
 
     def to_account(self) -> BrowserAccount:
@@ -346,6 +356,7 @@ class _BrowserAccountRow(QWidget):
 class SettingsDialog(QDialog):
     sign_in_clicked = pyqtSignal(str)  # provider name
     paste_cookie_clicked = pyqtSignal(str)  # provider name
+    clear_sign_in_clicked = pyqtSignal(str)  # account id
 
     def __init__(self, config: Config, parent=None):
         # Don't pass parent — avoids any cascading stylesheet issues.
@@ -362,6 +373,7 @@ class SettingsDialog(QDialog):
         self._config = config
         self._browser_account_rows: list[_BrowserAccountRow] = []
         self._removed_browser_account_ids: list[str] = []
+        self.browser_session_clear_errors: list[tuple[str, str]] = []
         self._browser_accounts = [
             account.model_copy(deep=True) for account in browser_accounts(config)
         ]
@@ -499,9 +511,9 @@ class SettingsDialog(QDialog):
         claude_accounts_layout.addWidget(
             _hint_label(
                 "Name each Claude subscription here. All accounts appear when "
-                "Claude is enabled on the General tab. If you sign in with "
-                "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
-                "because embedded browsers often cannot complete that flow."
+                "Claude is enabled on the General tab. <b>Sign in</b> opens a "
+                "real installed browser and supports Google and passkeys; the "
+                "session is connected automatically."
             )
         )
         claude_usage_btn = QPushButton("Open usage in browser")
@@ -525,9 +537,9 @@ class SettingsDialog(QDialog):
         codex_accounts_layout.addWidget(
             _hint_label(
                 "Name each Codex subscription here. All accounts appear when "
-                "Codex is enabled on the General tab. If you sign in with "
-                "<b>Google</b> or a <b>passkey</b>, use <b>Paste cookie</b> "
-                "because embedded browsers often cannot complete that flow."
+                "Codex is enabled on the General tab. <b>Sign in</b> opens a "
+                "real installed browser and supports Google and passkeys; the "
+                "session is connected automatically."
             )
         )
         codex_usage_btn = QPushButton("Open usage in browser")
@@ -724,7 +736,7 @@ class SettingsDialog(QDialog):
         opencode_go_signin_btn = QPushButton("Sign in")
         opencode_go_signin_btn.setObjectName("opencode_go_signin_btn")
         opencode_go_signin_btn.setToolTip(
-            "Open an embedded browser to sign in to OpenCode."
+            "Sign in with your installed browser; Google and passkeys are supported."
         )
         opencode_go_signin_btn.clicked.connect(
             lambda _checked=False: self.sign_in_clicked.emit("opencode_go")
@@ -741,6 +753,16 @@ class SettingsDialog(QDialog):
         )
         opencode_go_form.addRow("", opencode_go_cookie_btn)
 
+        opencode_go_clear_btn = QPushButton("Clear sign-in")
+        opencode_go_clear_btn.setObjectName("opencode_go_clear_signin_btn")
+        opencode_go_clear_btn.setToolTip(
+            "Remove the saved OpenCode sign-in from AI Gauge."
+        )
+        opencode_go_clear_btn.clicked.connect(
+            lambda _checked=False: self.clear_sign_in_clicked.emit("opencode_go")
+        )
+        opencode_go_form.addRow("", opencode_go_clear_btn)
+
         opencode_go_usage_btn = QPushButton("Open usage in browser")
         opencode_go_usage_btn.setObjectName("opencode_go_open_usage_btn")
         opencode_go_usage_btn.setToolTip("Open the OpenCode usage page in your default browser.")
@@ -753,9 +775,8 @@ class SettingsDialog(QDialog):
 
         opencode_go_help = _hint_label(
             "Paste the workspace <b>Go</b> usage page URL. The tile reads Rolling, "
-            "Weekly, and Monthly usage from that page. If Google blocks the "
-            "embedded sign-in browser, sign in with your normal browser and use "
-            "<b>Paste cookie</b>."
+            "Weekly, and Monthly usage from that page. <b>Sign in</b> opens a "
+            "real installed browser and connects the session automatically."
         )
         opencode_go_form.addRow("", opencode_go_help)
 
@@ -886,6 +907,7 @@ class SettingsDialog(QDialog):
                 )
                 row.sign_in_clicked.connect(self.sign_in_clicked.emit)
                 row.paste_cookie_clicked.connect(self.paste_cookie_clicked.emit)
+                row.clear_sign_in_clicked.connect(self.clear_sign_in_clicked.emit)
                 row.remove_clicked.connect(self._remove_browser_account)
                 self._browser_account_rows.append(row)
                 layout.addWidget(row)
@@ -1077,7 +1099,14 @@ class SettingsDialog(QDialog):
         config.providers.openrouter = self.openrouter_cb.isChecked()
         config.providers.opencode_go = self.opencode_go_cb.isChecked()
         for account_id in self._removed_browser_account_ids:
-            set_provider_cookie(account_id, None)
+            try:
+                clear_browser_session(account_id)
+            except RuntimeError as exc:
+                log.exception(
+                    "failed to clear removed browser account session provider=%s",
+                    account_id,
+                )
+                self.browser_session_clear_errors.append((account_id, str(exc)))
         username = self.gh_username.text().strip()
         config.copilot.username = username or None
         billing_org = self.gh_billing_org.text().strip()

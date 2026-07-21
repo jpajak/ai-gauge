@@ -2,6 +2,28 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-07-20
+
+### Added
+
+- Added distinct title-bar controls in both full and compact views: down/up switches between full and compact layouts, the dash hides the widget to the system tray, and ✕ quits AI Gauge completely.
+- Added expanded-window resizing with a dedicated bottom-right grip. The chosen size persists across launches, compact mode retains its fitted size, and expanding restores the saved dimensions.
+- Added per-account gauge customization for Claude and Codex accounts, plus Copilot, OpenCode, and OpenRouter. Users can tune three percentage cutoffs and choose all four band colors, including the final 90%+ band; live range labels and **Reset defaults** keep the controls understandable. Supplied defaults are green through 30%, yellow through 60%, orange through 90%, and red above 90%.
+- Added the ability to remove the original Claude or Codex account as well as secondary accounts. Empty provider sections retain their add-account action, and removed original accounts stay removed after restart.
+
+### Changed
+
+- The expanded widget can grow without clipping its normal content layout. Its minimum height follows the currently rendered provider rows, while its responsive minimum width permits a tighter presentation.
+- Header refresh cadence is responsive: narrower windows show only the countdown (for example, `4m`), while wider windows show the full `active next 4m` or `idle next ...` status.
+- Percentage and reset-time columns now size to their actual text instead of reserving fixed blank space between values and day labels.
+- Settings spin boxes and decimal controls now use explicit, high-contrast arrow buttons in the dark theme, including the account-specific gauge-color dialog.
+
+### Fixed
+
+- Copilot usage above 100% now renders a full severity-colored bar while preserving the actual overage label. Previously, passing an above-maximum value to Qt could leave the progress chunk unpainted.
+- The resize grip now occupies its own footer instead of overlaying the last provider row, preventing it from obscuring Copilot and other bottom-most gauges.
+- Gauge color descriptions now update immediately as cutoffs change, and custom colors apply consistently to expanded bars and compact summary chips.
+
 ## 0.6.5 - 2026-07-18
 
 ### Added

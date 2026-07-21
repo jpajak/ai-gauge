@@ -16,8 +16,10 @@ KEYRING_GITHUB_PAT = "github-pat"
 KEYRING_OPENROUTER_KEY = "openrouter-key"
 KEYRING_OPENROUTER_MGMT_KEY = "openrouter-mgmt-key"
 WINDOW_WIDTH = 340
+WINDOW_MIN_WIDTH = 280
+WINDOW_MAX_WIDTH = 900
 WINDOW_MIN_HEIGHT = 80
-WINDOW_MAX_HEIGHT = 420
+WINDOW_MAX_HEIGHT = 900
 WINDOW_COLLAPSED_HEIGHT = 58
 
 # Per-provider session cookie names (HttpOnly cookies you can't read via JS).
@@ -72,8 +74,9 @@ def config_path() -> Path:
 class WindowState(BaseModel):
     x: int | None = None
     y: int | None = None
-    width: int = WINDOW_WIDTH
+    width: int = Field(default=WINDOW_WIDTH, ge=WINDOW_MIN_WIDTH, le=WINDOW_MAX_WIDTH)
     height: int = Field(default=220, ge=WINDOW_MIN_HEIGHT, le=WINDOW_MAX_HEIGHT)
+    manually_resized: bool = False
     collapsed: bool = False
     always_on_top: bool = True
     opacity: float = Field(default=0.8, ge=0.3, le=1.0)
@@ -93,27 +96,41 @@ class ProviderToggles(BaseModel):
     opencode_go: bool = False
 
 
+class ColorThresholds(BaseModel):
+    green_max: int = Field(default=30, ge=0, le=100)
+    yellow_max: int = Field(default=60, ge=0, le=100)
+    orange_max: int = Field(default=90, ge=0, le=100)
+    green_color: str = "#22c55e"
+    yellow_color: str = "#facc15"
+    orange_color: str = "#f97316"
+    red_color: str = "#ef4444"
+
+
 class BrowserAccount(BaseModel):
     id: str
     kind: str
     name: str | None = None
     enabled: bool = True
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
 class CopilotConfig(BaseModel):
     username: str | None = None
     billing_org: str | None = None
     monthly_quota: int = Field(default=1500, ge=1)  # AI credits; Pro=1500
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
 class OpenRouterConfig(BaseModel):
     daily_budget: float | None = Field(default=None, ge=0)
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
 class OpenCodeGoConfig(BaseModel):
     usage_url: str = (
         "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go"
     )
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
 class Config(BaseModel):
@@ -178,36 +195,17 @@ class Config(BaseModel):
                 },
             ]
         elif isinstance(data.get("browser_accounts"), list):
-            accounts = [
+            # An explicit list is authoritative. In particular, do not restore
+            # the original Claude/Codex rows after a user removes them.
+            data["browser_accounts"] = [
                 item for item in data["browser_accounts"] if isinstance(item, dict)
             ]
-            ids = {str(item.get("id") or "") for item in accounts}
-            if "claude" not in ids:
-                accounts.insert(
-                    0,
-                    {
-                        "id": "claude",
-                        "kind": "claude",
-                        "name": None,
-                        "enabled": bool(providers.get("claude", True)),
-                    },
-                )
-            if "codex" not in ids:
-                accounts.append(
-                    {
-                        "id": "codex",
-                        "kind": "codex",
-                        "name": None,
-                        "enabled": bool(providers.get("codex", True)),
-                    }
-                )
-            data["browser_accounts"] = accounts
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")
             height = window.get("height")
             if isinstance(width, int):
-                window["width"] = WINDOW_WIDTH
+                window["width"] = max(WINDOW_MIN_WIDTH, min(width, WINDOW_MAX_WIDTH))
             if isinstance(height, int):
                 window["height"] = max(WINDOW_MIN_HEIGHT, min(height, WINDOW_MAX_HEIGHT))
         copilot = data.get("copilot")

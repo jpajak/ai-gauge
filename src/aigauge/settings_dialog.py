@@ -14,6 +14,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -36,6 +37,7 @@ from PyQt6.QtWidgets import (
 
 from .config import (
     BrowserAccount,
+    ColorThresholds,
     Config,
     account_display_name,
     app_data_dir,
@@ -119,7 +121,7 @@ QTabBar::tab:selected {
     background: #1f2937;
     color: #f3f4f6;
 }
-QLineEdit, QSpinBox, QComboBox {
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     background: #111827;
     color: #f3f4f6;
     border: 1px solid #374151;
@@ -128,7 +130,7 @@ QLineEdit, QSpinBox, QComboBox {
     selection-background-color: #2563eb;
     min-height: 22px;
 }
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
     border-color: #3b82f6;
 }
 QComboBox::drop-down {
@@ -150,20 +152,32 @@ QComboBox QAbstractItemView {
     color: #f3f4f6;
     selection-background-color: #2563eb;
 }
-QSpinBox::up-button, QSpinBox::down-button {
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
     width: 18px;
     background: transparent;
     border-left: 1px solid #374151;
 }
-QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    height: 12px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    height: 12px;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
     background: #374151;
 }
-QSpinBox::up-arrow {
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
     image: url("__UP_ARROW__");
     width: 9px;
     height: 9px;
 }
-QSpinBox::down-arrow {
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
     image: url("__DOWN_ARROW__");
     width: 9px;
     height: 9px;
@@ -284,6 +298,181 @@ def _open_in_browser(url: str) -> None:
     QDesktopServices.openUrl(QUrl(url))
 
 
+class _ColorThresholdEditor(QWidget):
+    def __init__(self, colors: ColorThresholds, parent=None):
+        super().__init__(parent)
+        self.green = QSpinBox()
+        self.yellow = QSpinBox()
+        self.orange = QSpinBox()
+        for spin in (self.green, self.yellow, self.orange):
+            spin.setRange(0, 100)
+            spin.setSuffix("%")
+            spin.setFixedWidth(68)
+        self.green.setValue(colors.green_max)
+        self.yellow.setValue(colors.yellow_max)
+        self.orange.setValue(colors.orange_max)
+        self._colors = {
+            "green": colors.green_color,
+            "yellow": colors.yellow_color,
+            "orange": colors.orange_color,
+            "red": colors.red_color,
+        }
+        self._color_buttons: dict[str, QPushButton] = {}
+        self.green.valueChanged.connect(self._sync_ranges)
+        self.yellow.valueChanged.connect(self._sync_ranges)
+        self.orange.valueChanged.connect(self._sync_ranges)
+
+        limits = QHBoxLayout()
+        limits.setContentsMargins(0, 0, 0, 0)
+        limits.setSpacing(6)
+        for label, spin in (
+            ("First cutoff", self.green),
+            ("Second", self.yellow),
+            ("Third", self.orange),
+        ):
+            text = QLabel(label)
+            text.setStyleSheet("color:#9ca3af; font-size:10px;")
+            limits.addWidget(text)
+            limits.addWidget(spin)
+        limits.addStretch(1)
+
+        bands = QHBoxLayout()
+        bands.setContentsMargins(0, 0, 0, 0)
+        bands.setSpacing(6)
+        for key in ("green", "yellow", "orange", "red"):
+            button = QPushButton()
+            button.setFixedHeight(26)
+            button.clicked.connect(
+                lambda _checked=False, name=key: self._choose_color(name)
+            )
+            self._color_buttons[key] = button
+            bands.addWidget(button, 1)
+        reset = QPushButton("Reset defaults")
+        reset.setToolTip("Restore the supplied green, yellow, orange, and red defaults.")
+        reset.clicked.connect(self.reset_defaults)
+        bands.addWidget(reset)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addLayout(limits)
+        layout.addLayout(bands)
+        self._sync_ranges()
+
+    def _sync_ranges(self) -> None:
+        self.green.setMaximum(max(0, self.yellow.value() - 1))
+        self.yellow.setMinimum(min(100, self.green.value() + 1))
+        self.yellow.setMaximum(max(self.yellow.minimum(), self.orange.value() - 1))
+        self.orange.setMinimum(min(100, self.yellow.value() + 1))
+        self._refresh_band_buttons()
+
+    def _refresh_band_buttons(self) -> None:
+        ranges = {
+            "green": f"0–{self.green.value()}%",
+            "yellow": f"{self.green.value() + 1}–{self.yellow.value()}%",
+            "orange": f"{self.yellow.value() + 1}–{self.orange.value()}%",
+            "red": f"{self.orange.value()}%+",
+        }
+        for key, button in self._color_buttons.items():
+            color = QColor(self._colors[key])
+            foreground = "#111827" if color.lightness() > 150 else "#f9fafb"
+            button.setText(f"{key.title()} · {ranges[key]}")
+            button.setStyleSheet(
+                f"QPushButton {{ background:{color.name()}; color:{foreground}; "
+                "border:1px solid #4b5563; border-radius:4px; padding:3px 6px; }}"
+            )
+
+    def _choose_color(self, key: str) -> None:
+        chosen = QColorDialog.getColor(
+            QColor(self._colors[key]),
+            self,
+            f"Choose {key} gauge color",
+        )
+        if chosen.isValid():
+            self._colors[key] = chosen.name()
+            self._refresh_band_buttons()
+
+    def reset_defaults(self) -> None:
+        defaults = ColorThresholds()
+        self.green.setValue(defaults.green_max)
+        self.yellow.setValue(defaults.yellow_max)
+        self.orange.setValue(defaults.orange_max)
+        self._colors = {
+            "green": defaults.green_color,
+            "yellow": defaults.yellow_color,
+            "orange": defaults.orange_color,
+            "red": defaults.red_color,
+        }
+        self._sync_ranges()
+
+    def value(self) -> ColorThresholds:
+        return ColorThresholds(
+            green_max=self.green.value(),
+            yellow_max=self.yellow.value(),
+            orange_max=self.orange.value(),
+            green_color=self._colors["green"],
+            yellow_color=self._colors["yellow"],
+            orange_color=self._colors["orange"],
+            red_color=self._colors["red"],
+        )
+
+
+class _ColorThresholdDialog(QDialog):
+    def __init__(self, colors: ColorThresholds, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Gauge colors")
+        self.setStyleSheet(_build_stylesheet())
+        self.editor = _ColorThresholdEditor(colors, self)
+        hint = _hint_label(
+            "Adjust the three cutoffs, then click any colored range to choose "
+            "its color. The supplied defaults remain available with Reset defaults."
+        )
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.editor)
+        layout.addWidget(hint)
+        layout.addWidget(buttons)
+
+
+class _ColorThresholdLauncher(QWidget):
+    def __init__(self, colors: ColorThresholds, parent=None):
+        super().__init__(parent)
+        self.colors = colors.model_copy(deep=True)
+        self.summary = QLabel()
+        self.summary.setStyleSheet("color:#9ca3af; font-size:10px;")
+        button = QPushButton("Customize…")
+        button.setToolTip("Adjust gauge ranges and all four colors.")
+        button.clicked.connect(self._edit)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(button)
+        layout.addWidget(self.summary)
+        layout.addStretch(1)
+        self._refresh_summary()
+
+    def _refresh_summary(self) -> None:
+        self.summary.setText(
+            f"0–{self.colors.green_max} / "
+            f"{self.colors.green_max + 1}–{self.colors.yellow_max} / "
+            f"{self.colors.yellow_max + 1}–{self.colors.orange_max} / "
+            f"{self.colors.orange_max}%+"
+        )
+
+    def _edit(self) -> None:
+        dialog = _ColorThresholdDialog(self.colors, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.colors = dialog.editor.value()
+            self._refresh_summary()
+
+    def value(self) -> ColorThresholds:
+        return self.colors.model_copy(deep=True)
+
+
 class _BrowserAccountRow(QWidget):
     sign_in_clicked = pyqtSignal(str)
     paste_cookie_clicked = pyqtSignal(str)
@@ -300,6 +489,7 @@ class _BrowserAccountRow(QWidget):
         super().__init__(parent)
         self.account_id = account.id
         self.kind = account.kind
+        self.colors = account.colors.model_copy(deep=True)
 
         self.name_edit = QLineEdit()
         self.name_edit.setText(account.name or "")
@@ -328,6 +518,11 @@ class _BrowserAccountRow(QWidget):
         clear.setToolTip("Remove this account's saved sign-in from AI Gauge.")
         clear.clicked.connect(lambda: self.clear_sign_in_clicked.emit(self.account_id))
 
+        colors = QPushButton("Colors…")
+        colors.setFixedWidth(68)
+        colors.setToolTip("Set gauge color thresholds for this account.")
+        colors.clicked.connect(self._edit_colors)
+
         remove = QPushButton("Remove")
         remove.setFixedWidth(72)
         remove.setVisible(removable)
@@ -341,7 +536,13 @@ class _BrowserAccountRow(QWidget):
         layout.addWidget(sign_in)
         layout.addWidget(paste)
         layout.addWidget(clear)
+        layout.addWidget(colors)
         layout.addWidget(remove)
+
+    def _edit_colors(self) -> None:
+        dialog = _ColorThresholdDialog(self.colors, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.colors = dialog.editor.value()
 
     def to_account(self) -> BrowserAccount:
         name = self.name_edit.text().strip() or None
@@ -350,6 +551,7 @@ class _BrowserAccountRow(QWidget):
             kind=self.kind,
             name=name,
             enabled=True,
+            colors=self.colors.model_copy(deep=True),
         )
 
 
@@ -634,6 +836,9 @@ class SettingsDialog(QDialog):
         )
         copilot_form.addRow("", quota_hint)
 
+        self.copilot_colors = _ColorThresholdLauncher(config.copilot.colors)
+        copilot_form.addRow("Gauge colors:", self.copilot_colors)
+
         # ----- OpenRouter details -----
         openrouter = QGroupBox("OpenRouter")
         openrouter_form = QFormLayout(openrouter)
@@ -718,6 +923,9 @@ class SettingsDialog(QDialog):
         )
         openrouter_form.addRow("", budget_hint)
 
+        self.openrouter_colors = _ColorThresholdLauncher(config.openrouter.colors)
+        openrouter_form.addRow("Gauge colors:", self.openrouter_colors)
+
         # ----- OpenCode details -----
         opencode_go = QGroupBox("OpenCode")
         opencode_go_form = QFormLayout(opencode_go)
@@ -732,6 +940,9 @@ class SettingsDialog(QDialog):
         self.opencode_go_url.setText(opencode_go_usage_url(config))
         self.opencode_go_url.setPlaceholderText(OPENCODE_GO_USAGE_URL)
         opencode_go_form.addRow("Usage URL:", self.opencode_go_url)
+
+        self.opencode_go_colors = _ColorThresholdLauncher(config.opencode_go.colors)
+        opencode_go_form.addRow("Gauge colors:", self.opencode_go_colors)
 
         opencode_go_signin_btn = QPushButton("Sign in")
         opencode_go_signin_btn.setObjectName("opencode_go_signin_btn")
@@ -903,7 +1114,7 @@ class SettingsDialog(QDialog):
             for account in [a for a in self._browser_accounts if a.kind == kind]:
                 row = _BrowserAccountRow(
                     account,
-                    removable=account.id not in ("claude", "codex"),
+                    removable=True,
                 )
                 row.sign_in_clicked.connect(self.sign_in_clicked.emit)
                 row.paste_cookie_clicked.connect(self.paste_cookie_clicked.emit)
@@ -1115,11 +1326,14 @@ class SettingsDialog(QDialog):
         config.copilot.monthly_quota = (
             int(selected_quota) if selected_quota is not None else self.gh_quota.value()
         )
+        config.copilot.colors = self.copilot_colors.value()
         budget = self.or_daily_budget.value()
         config.openrouter.daily_budget = budget if budget > 0 else None
+        config.openrouter.colors = self.openrouter_colors.value()
         config.opencode_go.usage_url = (
             self.opencode_go_url.text().strip() or OPENCODE_GO_USAGE_URL
         )
+        config.opencode_go.colors = self.opencode_go_colors.value()
         # Persist all settings first: wiring up OS autostart can fail (e.g. a
         # rejected Task Scheduler entry), and that must neither lose the user's
         # other changes nor crash the app via an exception escaping this slot.

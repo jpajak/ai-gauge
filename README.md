@@ -14,7 +14,7 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, **OpenCode**, **GitHub Cop
 
 > **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Windows Task Scheduler / LaunchAgent / `~/.config/autostart`).
 
-Current version: **0.6.5**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.7.0**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
 utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
@@ -94,7 +94,7 @@ On first launch the widget appears with enabled provider tiles. Claude, Codex, a
 
 Claude and Codex can track more than one subscription at a time. Open **Settings → Claude** or **Settings → Codex**, click **Add another**, give the account a short name, then use **Sign in** or **Paste cookie** for that specific row. The default account displays as `Claude` or `Codex`; named accounts display as `Claude (Work)`, `Codex (Account 2)`, etc.
 
-The **General** tab controls provider groups. If Claude is checked, all configured Claude accounts appear; if Codex is checked, all configured Codex accounts appear. Secondary accounts can be removed from their provider tab. Each Claude/Codex account uses separate cookie storage, browser profile data, widget tile state, and history records.
+The **General** tab controls provider groups. If Claude is checked, all configured Claude accounts appear; if Codex is checked, all configured Codex accounts appear. Any account can be removed from its provider tab, including the original account; the **Add another** button remains available when no accounts are configured. Each Claude/Codex account uses separate cookie storage, browser profile data, widget tile state, and history records.
 
 Use **Clear sign-in** beside an account to remove its session from AI Gauge.
 This clears both the OS-protected saved cookie and the account's live embedded
@@ -157,11 +157,12 @@ should work with the normal **Sign in** button.
 
 ## Daily use
 
-- **Windows / Linux:** the widget floats above other windows by default. Drag anywhere to move; close (✕) hides to tray. Right-click the tray icon for Refresh / Settings / Quit. Left-click toggles widget visibility. Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
+- **Windows / Linux:** the widget floats above other windows by default. Drag anywhere to move, or drag the bottom-right corner to resize the full view; the chosen size is restored on the next launch. The down/up controls switch between full and compact views, the dash hides the window to the system tray, and the ✕ quits AI Gauge completely. Right-click the tray icon for Refresh / Settings / Quit. Left-click toggles widget visibility. Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
 - **macOS:** the menu-bar item shows tinted status dots for enabled provider/account tiles. Click it to open the panel as a popover; click outside to dismiss. Right-click for the same Refresh / Settings / Quit menu.
 - **Linux without a system tray** (stock GNOME): the floating widget stays visible and serves the same Show / Refresh / Settings / Quit menu via right-click on the widget.
 - **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view. Enabled provider/account chips wrap onto additional rows when needed, with named secondary Claude/Codex accounts using just the account name to save space.
 - **Hide unused providers:** uncheck Claude / Codex / OpenCode / Copilot / OpenRouter in Settings to remove their group from the widget — useful if you only use one or two of them.
+- **Gauge colors:** each Claude/Codex account has a **Colors…** button, while Copilot, OpenCode, and OpenRouter expose the same controls in their Settings sections. Every account can tune its three cutoffs and all four band colors, with live range labels and a **Reset defaults** action. Supplied defaults are green through 30%, yellow through 60%, orange through 90%, and red above 90%.
 - Auto-refresh is adaptive: manual refresh or changed usage enters the active
   cadence, then unchanged results back off toward the configured max interval.
   Defaults are 5 min active and 60 min idle max.

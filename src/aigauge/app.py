@@ -255,6 +255,7 @@ class App(QObject):
         self._widget.ratio_history_requested.connect(self.open_ratio_history)
         self._widget.tile_expanded_changed.connect(self._on_tile_expanded_changed)
         self._widget.activated_requested.connect(self._on_widget_activated)
+        self._widget.quit_requested.connect(QApplication.instance().quit)
         self._widget.closed.connect(self._on_widget_closed)
 
         # Pre-populate provider tiles in stable order so they don't pop in.

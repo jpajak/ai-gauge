@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import QPushButton
 
 from aigauge import settings_dialog
-from aigauge.config import Config
+from aigauge.config import ColorThresholds, Config
 from aigauge.settings_dialog import SettingsDialog
 
 
@@ -142,6 +142,63 @@ def test_add_codex_account_creates_named_secondary_row(qtbot, monkeypatch):
     assert codex_accounts[1].enabled is True
 
 
+def test_color_thresholds_apply_per_account_and_copilot(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    codex_row = next(
+        row for row in dialog._browser_account_rows if row.account_id == "codex"  # noqa: SLF001
+    )
+    codex_row.colors = ColorThresholds(
+        green_max=20, yellow_max=50, orange_max=80
+    )
+    dialog.copilot_colors.colors = ColorThresholds(
+        green_max=25, yellow_max=55, orange_max=85
+    )
+    dialog.apply_to(config)
+
+    codex = next(a for a in config.browser_accounts if a.id == "codex")
+    assert codex.colors == ColorThresholds(
+        green_max=20, yellow_max=50, orange_max=80
+    )
+    assert config.copilot.colors == ColorThresholds(
+        green_max=25, yellow_max=55, orange_max=85
+    )
+
+
+def test_color_threshold_dialog_resolves_visible_arrow_assets(qtbot):
+    dialog = settings_dialog._ColorThresholdDialog(ColorThresholds())  # noqa: SLF001
+    qtbot.addWidget(dialog)
+
+    stylesheet = dialog.styleSheet()
+    assert "__UP_ARROW__" not in stylesheet
+    assert "__DOWN_ARROW__" not in stylesheet
+    assert "QSpinBox::up-arrow" in stylesheet
+    assert "QSpinBox::down-arrow" in stylesheet
+
+
+def test_color_editor_updates_live_ranges_and_all_four_colors(qtbot):
+    editor = settings_dialog._ColorThresholdEditor(ColorThresholds())  # noqa: SLF001
+    qtbot.addWidget(editor)
+
+    editor.green.setValue(25)
+    editor.yellow.setValue(55)
+    editor.orange.setValue(85)
+    editor._colors["red"] = "#123456"  # noqa: SLF001
+    editor._refresh_band_buttons()  # noqa: SLF001
+
+    assert editor._color_buttons["green"].text() == "Green · 0–25%"  # noqa: SLF001
+    assert editor._color_buttons["yellow"].text() == "Yellow · 26–55%"  # noqa: SLF001
+    assert editor._color_buttons["orange"].text() == "Orange · 56–85%"  # noqa: SLF001
+    assert editor._color_buttons["red"].text() == "Red · 85%+"  # noqa: SLF001
+    assert editor.value().red_color == "#123456"
+
+    editor.reset_defaults()
+    assert editor.value() == ColorThresholds()
+
+
 def test_remove_secondary_account_clears_session(qtbot, monkeypatch):
     removed = []
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
@@ -160,6 +217,34 @@ def test_remove_secondary_account_clears_session(qtbot, monkeypatch):
     dialog.apply_to(config)
 
     assert removed == [account_id]
+
+
+def test_remove_original_codex_account_and_add_one_back(qtbot, monkeypatch):
+    removed = []
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog,
+        "clear_browser_session",
+        lambda account_id: removed.append(account_id),
+    )
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    dialog._remove_browser_account("codex")  # noqa: SLF001
+    dialog.apply_to(config)
+
+    assert [a for a in config.browser_accounts if a.kind == "codex"] == []
+    assert removed == ["codex"]
+
+    replacement = SettingsDialog(config)
+    qtbot.addWidget(replacement)
+    replacement._add_browser_account("codex")  # noqa: SLF001
+    replacement.apply_to(config)
+
+    codex_accounts = [a for a in config.browser_accounts if a.kind == "codex"]
+    assert len(codex_accounts) == 1
+    assert codex_accounts[0].name == "Account 1"
 
 def test_fade_when_inactive_setting_applies(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)

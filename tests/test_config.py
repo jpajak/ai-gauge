@@ -1,5 +1,6 @@
 from aigauge.config import (
     BrowserAccount,
+    ColorThresholds,
     Config,
     account_display_name,
     app_data_dir,
@@ -30,6 +31,9 @@ def test_defaults():
     assert c.window.fade_when_inactive is False
     assert c.window.opacity == 0.8
     assert c.window.ui_scale == 1.0
+    assert c.copilot.colors == ColorThresholds(
+        green_max=30, yellow_max=60, orange_max=90
+    )
 
 
 def test_ui_scale_round_trips_and_maps_to_qt_factor():
@@ -144,6 +148,15 @@ def test_load_migrates_legacy_provider_toggles_to_browser_accounts():
     ]
 
 
+def test_load_preserves_explicitly_removed_browser_accounts():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text('{"browser_accounts": []}', encoding="utf-8")
+
+    c = Config.load()
+
+    assert c.browser_accounts == []
+
+
 def test_browser_account_display_names():
     account = BrowserAccount(id="codex-work", kind="codex", name="Work")
 
@@ -182,5 +195,5 @@ def test_load_clamps_saved_window_size():
 
     c = Config.load()
 
-    assert c.window.width == 340
+    assert c.window.width == 900
     assert c.window.height == 80

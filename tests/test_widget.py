@@ -1,10 +1,10 @@
 from datetime import datetime, timedelta
 
 import pytest
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QSize, Qt
 from PyQt6.QtWidgets import QApplication
 
-from aigauge.config import BrowserAccount, Config
+from aigauge.config import BrowserAccount, ColorThresholds, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 from aigauge.ratio import RatioEstimate
 from aigauge.widget import (
@@ -79,6 +79,32 @@ def test_offscreen_saved_position_is_clamped_on_screen(qtbot):
     assert widget.y() >= geo.top()
     assert widget.x() + widget.width() <= geo.right() + 1
     assert widget.y() + widget.height() <= geo.bottom() + 1
+
+
+def test_title_bars_offer_distinct_view_and_hide_controls(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    assert widget.collapse_btn.text() == "▾"
+    assert widget.collapse_btn.toolTip() == "Switch to compact view"
+    assert widget.hide_btn.text() == "—"
+    assert widget.hide_btn.toolTip() == "Hide to system tray"
+    assert widget.close_btn.text() == "✕"
+    assert widget.close_btn.toolTip() == "Quit AI Gauge"
+
+    widget.set_collapsed(True)
+    assert widget._expand_btn.text() == "▴"  # noqa: SLF001
+    assert widget._collapsed_hide_btn.toolTip() == "Hide to system tray"  # noqa: SLF001
+    assert widget._collapsed_close_btn.text() == "✕"  # noqa: SLF001
+    assert widget._collapsed_close_btn.toolTip() == "Quit AI Gauge"  # noqa: SLF001
+
+    with qtbot.waitSignal(widget.quit_requested):
+        widget._collapsed_close_btn.click()  # noqa: SLF001
+
+    widget.show()
+    qtbot.waitUntil(widget.isVisible)
+    widget._collapsed_hide_btn.click()  # noqa: SLF001
+    assert widget.isHidden()
 
 
 def test_reenabled_provider_returns_to_canonical_order(qtbot):
@@ -503,7 +529,7 @@ def test_refresh_state_shows_next_refresh_countdown(qtbot):
         next_at=datetime.now() + timedelta(minutes=3, seconds=5),
     )
 
-    assert widget.cadence_label.text() == "· active next 4m"
+    assert widget.cadence_label.text() == "4m"
     assert "5 min cadence" in widget.cadence_label.toolTip()
 
 
@@ -517,7 +543,7 @@ def test_refresh_state_shows_now_when_next_refresh_is_due(qtbot):
         next_at=datetime.now() - timedelta(seconds=1),
     )
 
-    assert widget.cadence_label.text() == "· idle next now"
+    assert widget.cadence_label.text() == "now"
 
 
 def test_widget_uses_fixed_width_despite_extreme_saved_size(qtbot):
@@ -532,14 +558,93 @@ def test_widget_uses_fixed_width_despite_extreme_saved_size(qtbot):
     assert widget.height() >= 80
 
 
-def test_refit_restores_fixed_width_after_dpi_resize_glitch(qtbot):
+def test_expanded_widget_can_be_resized_and_persists_size(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
-    widget.resize(5000, 120)
+    widget._manually_resized = True  # noqa: SLF001
+    widget.resize(520, 360)
+    widget._save_expanded_size(manual=True)  # noqa: SLF001
 
+    assert widget.width() == 520
+    assert widget.height() == 360
+    assert widget._config.window.width == 520  # noqa: SLF001
+    assert widget._config.window.height == 360  # noqa: SLF001
+    assert widget._config.window.manually_resized is True  # noqa: SLF001
+
+    widget.set_collapsed(True)
+    assert widget.width() == 340
+    widget.set_collapsed(False)
+    assert widget.size() == QSize(520, 360)
+
+
+def test_expanded_widget_cannot_resize_below_fitted_contents(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.ensure_tile("claude", "Claude")
+    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    widget._do_refit_height()  # noqa: SLF001
+    fitted_height = widget.minimumHeight()
+
+    widget.resize(100, 20)
+
+    assert widget.width() >= 280
+    assert widget.height() >= fitted_height
+
+
+def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.ensure_tile("copilot", "Copilot")
+    widget.update_snapshot(_ok_snapshot("copilot"), "Copilot")
+    widget.show()
     widget._do_refit_height()  # noqa: SLF001
 
-    assert widget.width() == 340
+    assert widget._resize_footer.y() >= (  # noqa: SLF001
+        widget._tile_scroll.y() + widget._tile_scroll.height()  # noqa: SLF001
+    )
+
+
+def test_header_cadence_shortens_at_narrow_width(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    next_at = datetime.now() + timedelta(minutes=4)
+    widget.set_refresh_state(True, 5, next_at)
+
+    widget.resize(360, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert "active next" in widget.cadence_label.text()
+
+    widget.resize(320, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.cadence_label.text() == "4m"
+
+
+def test_metric_row_clamps_overage_fill_and_uses_account_threshold_color(qtbot):
+    colors = ColorThresholds(
+        green_max=30,
+        yellow_max=60,
+        orange_max=90,
+        red_color="#123456",
+    )
+    row = _MetricRow(colors=colors)
+    qtbot.addWidget(row)
+
+    row.set_metric("Credits", 110.0, datetime.now() + timedelta(days=4))
+
+    assert row.bar._bar.value() == 100  # noqa: SLF001
+    assert "#123456" in row.bar._bar.styleSheet()  # noqa: SLF001
+    assert row.pct.text() == "110%"
+
+
+def test_metric_row_percent_and_reset_columns_fit_their_text(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+    row.set_metric("Weekly", 8.0, datetime.now() + timedelta(days=4))
+
+    assert row.pct.width() <= row.pct.fontMetrics().horizontalAdvance("8%") + 2
+    assert row.reset.width() <= (
+        row.reset.fontMetrics().horizontalAdvance(row.reset.text()) + 2
+    )
 
 
 def test_collapsed_mode_shows_session_summary(qtbot):

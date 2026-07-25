@@ -410,14 +410,24 @@ def test_cookie_hydration_injects_when_profile_cookies_file_is_missing(
 
     assert cookies.hydrate_all_from_keyring(config) == ["codex-fresh"]
     assert injected == [("codex", "codex-fresh")]
-def test_cookie_hydration_includes_enabled_opencode_go(monkeypatch):
+def test_cookie_hydration_uses_independent_opencode_accounts(monkeypatch):
     config = Config()
     config.providers.opencode_go = True
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="opencode_go-work",
+            kind="opencode_go",
+            name="Work",
+            usage_url="https://opencode.ai/workspace/work/go",
+        )
+    )
 
     monkeypatch.setattr(
         cookies,
         "get_provider_cookie",
-        lambda account_id: "Cookie: auth=fresh" if account_id == "opencode_go" else None,
+        lambda account_id: (
+            f"Cookie: auth={account_id}" if account_id.startswith("opencode_go") else None
+        ),
     )
     injected = []
     monkeypatch.setattr(
@@ -429,5 +439,15 @@ def test_cookie_hydration_includes_enabled_opencode_go(monkeypatch):
         or True,
     )
 
-    assert cookies.hydrate_all_from_keyring(config) == ["opencode_go"]
-    assert injected == [("opencode_go", "Cookie: auth=fresh", None)]
+    assert cookies.hydrate_all_from_keyring(config) == [
+        "opencode_go",
+        "opencode_go-work",
+    ]
+    assert injected == [
+        ("opencode_go", "Cookie: auth=opencode_go", None),
+        (
+            "opencode_go",
+            "Cookie: auth=opencode_go-work",
+            "opencode_go-work",
+        ),
+    ]

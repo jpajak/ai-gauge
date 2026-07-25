@@ -81,6 +81,8 @@ def _provider_family(provider: str) -> str:
         return "claude"
     if provider == "codex" or provider.startswith("codex-"):
         return "codex"
+    if provider == "opencode_go" or provider.startswith("opencode_go-"):
+        return "opencode_go"
     return provider
 
 
@@ -901,7 +903,7 @@ class _ProviderTile(QFrame):
             for metric in snapshot.metrics
             if metric.tag is None and metric.percent_used is not None
         ]
-        if self.provider == 'opencode_go':
+        if _provider_family(self.provider) == "opencode_go":
             return [
                 metric
                 for metric in metrics
@@ -1457,7 +1459,7 @@ class UsageWidget(QWidget):
         account_ids = [
             account.id
             for account in getattr(self._config, "browser_accounts", [])
-            if account.kind in ("claude", "codex")
+            if account.kind in ("claude", "codex", "opencode_go")
         ]
         if provider in account_ids:
             account = next(

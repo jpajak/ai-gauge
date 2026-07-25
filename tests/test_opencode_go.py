@@ -1,7 +1,8 @@
 from datetime import datetime, timedelta
 
+from aigauge.config import BrowserAccount, Config
 from aigauge.models import SnapshotStatus
-from aigauge.providers.opencode_go import _build_snapshot, _parse_reset_text
+from aigauge.providers.opencode_go import _build_snapshot, _parse_reset_text, usage_url
 
 
 def test_parse_reset_text_handles_days_hours_minutes():
@@ -96,3 +97,36 @@ def test_opencode_go_unparsed_payload_reports_layout_error():
 
     assert snapshot.status == SnapshotStatus.ERROR
     assert "layout may have changed" in (snapshot.error or "")
+
+def test_opencode_snapshot_uses_account_identity():
+    snapshot = _build_snapshot(
+        {
+            "logged_out": False,
+            "usage": [{"label": "Rolling Usage", "percent": 13}],
+            "title": "OpenCode",
+            "body_text": "Rolling Usage 13%",
+        },
+        account_id="opencode_go-work",
+    )
+
+    assert snapshot.provider == "opencode_go-work"
+
+
+def test_usage_url_is_account_specific():
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="opencode_go-work",
+            kind="opencode_go",
+            name="Work",
+            usage_url="https://opencode.ai/workspace/work/go",
+        )
+    )
+
+    assert usage_url(config, "opencode_go-work") == (
+        "https://opencode.ai/workspace/work/go"
+    )
+    assert usage_url(config, "opencode_go") != usage_url(
+        config,
+        "opencode_go-work",
+    )

@@ -47,6 +47,16 @@ SETUP_COLOR = "#38bdf8"
 ERROR_COLOR = OK_COLORS["high"]
 
 
+def _provider_label(provider: str) -> str:
+    if provider == "opencode_go" or provider.startswith("opencode_go-"):
+        return PROVIDER_LABELS["opencode_go"]
+    if provider == "claude" or provider.startswith("claude-"):
+        return PROVIDER_LABELS["claude"]
+    if provider == "codex" or provider.startswith("codex-"):
+        return PROVIDER_LABELS["codex"]
+    return PROVIDER_LABELS.get(provider, provider[:2].title())
+
+
 def _provider_color(
     config: Config | None,
     provider: str,
@@ -81,7 +91,7 @@ def status_items(
     """Return ``(provider_label, value, color)`` items for native menu bars."""
     return [
         (
-            PROVIDER_LABELS.get(provider, provider[:2].title()),
+            _provider_label(provider),
             _provider_value(snapshots.get(provider)),
             _provider_color(config, provider, snapshots.get(provider)),
         )

@@ -21,7 +21,9 @@ from PyQt6.QtWidgets import (
 
 from . import __version__
 from .config import (
+    BrowserAccount,
     Config,
+    account_display_name,
     account_kind,
     app_data_dir,
     browser_accounts,
@@ -88,12 +90,12 @@ def _enabled_providers(config: Config) -> tuple[str, ...]:
             out.append("claude")
         if getattr(config.providers, "codex", False):
             out.append("codex")
+        if getattr(config.providers, "opencode_go", False):
+            out.append("opencode_go")
     if config.providers.copilot:
         out.append("copilot")
     if config.providers.openrouter:
         out.append("openrouter")
-    if getattr(config.providers, "opencode_go", False):
-        out.append("opencode_go")
     return tuple(out)
 
 
@@ -421,7 +423,16 @@ class App(QObject):
                     parent=self,
                     account_id=account.id,
                 )
-            self._widget.ensure_tile(account.id, display_name_for_account(self._config, account.id))
+            elif account.kind == "opencode_go":
+                self._providers[account.id] = OpenCodeGoProvider(
+                    self._config,
+                    parent=self,
+                    account_id=account.id,
+                )
+            self._widget.ensure_tile(
+                account.id,
+                display_name_for_account(self._config, account.id),
+            )
         if self._config.providers.copilot:
             self._providers["copilot"] = CopilotProvider(self._config)
             desired_tiles.add("copilot")
@@ -430,10 +441,6 @@ class App(QObject):
             self._providers["openrouter"] = OpenRouterProvider(self._config)
             desired_tiles.add("openrouter")
             self._widget.ensure_tile("openrouter", "OpenRouter")
-        if self._config.providers.opencode_go:
-            self._providers["opencode_go"] = OpenCodeGoProvider(self._config, parent=self)
-            desired_tiles.add("opencode_go")
-            self._widget.ensure_tile("opencode_go", "OpenCode")
         for tile_id in list(self._widget._tiles):  # noqa: SLF001
             if tile_id not in desired_tiles:
                 self._widget.remove_tile(tile_id)
@@ -730,15 +737,29 @@ class App(QObject):
 
     # ----- Login / cookie paste -----
 
+    def _draft_browser_account(self, provider: str) -> BrowserAccount | None:
+        dialog = self._settings_dialog
+        get_draft = getattr(dialog, "draft_browser_account", None)
+        return get_draft(provider) if callable(get_draft) else None
+
     def open_login(self, provider: str) -> None:
-        kind = account_kind(self._config, provider)
+        draft = self._draft_browser_account(provider)
+        kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind == "opencode_go":
-            url = opencode_go_usage_url(self._config)
+            url = (
+                draft.usage_url
+                if draft is not None and draft.usage_url
+                else opencode_go_usage_url(self._config, provider)
+            )
         elif kind in LOGIN_URLS:
             url, _title = LOGIN_URLS[kind]
         else:
             return
-        display_name = display_name_for_account(self._config, provider)
+        display_name = (
+            account_display_name(draft)
+            if draft is not None
+            else display_name_for_account(self._config, provider)
+        )
         dlg = LoginWindow(
             kind,
             url,
@@ -756,19 +777,28 @@ class App(QObject):
             self.refresh_provider(provider)
 
     def open_cookie_paste(self, provider: str) -> None:
-        kind = account_kind(self._config, provider)
+        draft = self._draft_browser_account(provider)
+        kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind is None:
             return
+        display_name = (
+            account_display_name(draft)
+            if draft is not None
+            else display_name_for_account(self._config, provider)
+        )
+        verify_url = None
+        if kind == "opencode_go":
+            verify_url = (
+                draft.usage_url
+                if draft is not None and draft.usage_url
+                else opencode_go_usage_url(self._config, provider)
+            )
         try:
             dlg = CookieDialog(
                 kind,
                 account_id=provider,
-                display_name=display_name_for_account(self._config, provider),
-                verify_url=(
-                    opencode_go_usage_url(self._config)
-                    if kind == "opencode_go"
-                    else None
-                ),
+                display_name=display_name,
+                verify_url=verify_url,
             )
         except ValueError:
             return
@@ -784,10 +814,15 @@ class App(QObject):
             QTimer.singleShot(1000, lambda: self.refresh_provider(provider))
 
     def clear_sign_in(self, provider: str) -> None:
-        kind = account_kind(self._config, provider)
+        draft = self._draft_browser_account(provider)
+        kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind is None:
             return
-        display_name = display_name_for_account(self._config, provider)
+        display_name = (
+            account_display_name(draft)
+            if draft is not None
+            else display_name_for_account(self._config, provider)
+        )
         parent = self._settings_dialog or self._widget
         answer = QMessageBox.question(
             parent,
@@ -996,6 +1031,7 @@ class App(QObject):
     def _on_tile_expanded_changed(self, provider: str, expanded: bool) -> None:
         compact_collapsible = (
             provider == "opencode_go"
+            or provider.startswith("opencode_go-")
             or provider == "claude"
             or provider == "codex"
             or provider.startswith("claude-")

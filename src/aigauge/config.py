@@ -51,6 +51,9 @@ COOKIE_DOMAINS = {
     "codex": ".chatgpt.com",
     "opencode_go": ".opencode.ai",
 }
+OPENCODE_GO_USAGE_URL = (
+    "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go"
+)
 
 
 def app_data_dir() -> Path:
@@ -114,6 +117,7 @@ class BrowserAccount(BaseModel):
     name: str | None = None
     enabled: bool = True
     colors: ColorThresholds = Field(default_factory=ColorThresholds)
+    usage_url: str | None = None
 
 
 class CopilotConfig(BaseModel):
@@ -129,9 +133,8 @@ class OpenRouterConfig(BaseModel):
 
 
 class OpenCodeGoConfig(BaseModel):
-    usage_url: str = (
-        "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go"
-    )
+    # Retained for migrating pre-0.7.0 singleton OpenCode configurations.
+    usage_url: str = OPENCODE_GO_USAGE_URL
     colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
@@ -144,8 +147,14 @@ class Config(BaseModel):
         default_factory=lambda: [
             BrowserAccount(id="claude", kind="claude"),
             BrowserAccount(id="codex", kind="codex"),
+            BrowserAccount(
+                id="opencode_go",
+                kind="opencode_go",
+                usage_url=OPENCODE_GO_USAGE_URL,
+            ),
         ]
     )
+    browser_accounts_version: int = 2
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
     opencode_go: OpenCodeGoConfig = Field(default_factory=OpenCodeGoConfig)
@@ -198,10 +207,42 @@ class Config(BaseModel):
             ]
         elif isinstance(data.get("browser_accounts"), list):
             # An explicit list is authoritative. In particular, do not restore
-            # the original Claude/Codex rows after a user removes them.
+            # account rows after a user removes them post-migration.
             data["browser_accounts"] = [
                 item for item in data["browser_accounts"] if isinstance(item, dict)
             ]
+        accounts_version = data.get("browser_accounts_version", 1)
+        if not isinstance(accounts_version, int):
+            accounts_version = 1
+        if accounts_version < 2:
+            accounts = data.get("browser_accounts")
+            if isinstance(accounts, list) and not any(
+                item.get("kind") == "opencode_go"
+                for item in accounts
+                if isinstance(item, dict)
+            ):
+                legacy_opencode = data.get("opencode_go")
+                usage_url = (
+                    legacy_opencode.get("usage_url")
+                    if isinstance(legacy_opencode, dict)
+                    else None
+                )
+                colors = (
+                    legacy_opencode.get("colors")
+                    if isinstance(legacy_opencode, dict)
+                    else None
+                )
+                account: dict[str, Any] = {
+                    "id": "opencode_go",
+                    "kind": "opencode_go",
+                    "name": None,
+                    "enabled": True,
+                    "usage_url": usage_url or OPENCODE_GO_USAGE_URL,
+                }
+                if isinstance(colors, dict):
+                    account["colors"] = colors
+                accounts.append(account)
+            data["browser_accounts_version"] = 2
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")
@@ -238,7 +279,11 @@ def qt_scale_factor_env(config: Config) -> str | None:
 
 
 def provider_base_name(kind: str) -> str:
-    return {"claude": "Claude", "codex": "Codex"}.get(kind, kind.title())
+    return {
+        "claude": "Claude",
+        "codex": "Codex",
+        "opencode_go": "OpenCode",
+    }.get(kind, kind.title())
 
 
 def account_display_name(account: BrowserAccount) -> str:
@@ -256,7 +301,7 @@ def browser_accounts(
     accounts = [
         account
         for account in getattr(config, "browser_accounts", [])
-        if account.kind in ("claude", "codex")
+        if account.kind in ("claude", "codex", "opencode_go")
     ]
     if kind is not None:
         accounts = [account for account in accounts if account.kind == kind]
@@ -282,7 +327,7 @@ def account_kind(config: Config, account_id: str) -> str | None:
         return "claude"
     if account_id.startswith("codex-"):
         return "codex"
-    if account_id == "opencode_go":
+    if account_id == "opencode_go" or account_id.startswith("opencode_go-"):
         return "opencode_go"
     return None
 

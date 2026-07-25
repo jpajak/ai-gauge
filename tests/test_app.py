@@ -222,11 +222,115 @@ def test_enabled_providers_respects_explicitly_empty_browser_accounts():
     assert _enabled_providers(config) == ()
 
 
-def test_enabled_providers_includes_opencode_go_when_enabled():
+def test_enabled_providers_includes_multiple_opencode_accounts_when_enabled():
     config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="opencode_go-work",
+            kind="opencode_go",
+            name="Work",
+            usage_url="https://opencode.ai/workspace/work/go",
+        )
+    )
     config.providers.opencode_go = True
 
-    assert "opencode_go" in _enabled_providers(config)
+    assert _enabled_providers(config) == (
+        "claude",
+        "codex",
+        "opencode_go",
+        "opencode_go-work",
+        "copilot",
+    )
+
+
+def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(
+                id="opencode_go",
+                kind="opencode_go",
+                usage_url="https://opencode.ai/workspace/personal/go",
+            ),
+            BrowserAccount(
+                id="opencode_go-work",
+                kind="opencode_go",
+                name="Work",
+                usage_url="https://opencode.ai/workspace/work/go",
+            ),
+        ]
+    )
+    config.providers.claude = False
+    config.providers.codex = False
+    config.providers.copilot = False
+    config.providers.openrouter = False
+    config.providers.opencode_go = True
+    created = []
+    ensured = []
+
+    def fake_opencode_provider(config, parent=None, account_id="opencode_go"):
+        created.append((config, parent, account_id))
+        return SimpleNamespace(account_id=account_id)
+
+    monkeypatch.setattr(app_module, "OpenCodeGoProvider", fake_opencode_provider)
+    app = App.__new__(App)
+    app._config = config  # noqa: SLF001
+    app._providers = {}  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        _tiles={},
+        ensure_tile=lambda account_id, name: ensured.append((account_id, name)),
+        remove_tile=lambda account_id: None,
+    )
+
+    app._build_providers()  # noqa: SLF001
+
+    assert list(app._providers) == ["opencode_go", "opencode_go-work"]  # noqa: SLF001
+    assert [call[2] for call in created] == ["opencode_go", "opencode_go-work"]
+    assert ensured == [
+        ("opencode_go", "OpenCode"),
+        ("opencode_go-work", "OpenCode (Work)"),
+    ]
+
+
+def test_open_login_uses_unsaved_opencode_account_url(monkeypatch):
+    draft = BrowserAccount(
+        id="opencode_go-work",
+        kind="opencode_go",
+        name="Work",
+        usage_url="https://opencode.ai/workspace/work/go",
+    )
+    captured = []
+
+    class FakeLoginWindow:
+        def __init__(self, *args, **kwargs):
+            captured.append((args, kwargs))
+
+        def exec(self):
+            return False
+
+    monkeypatch.setattr(app_module, "LoginWindow", FakeLoginWindow)
+    app = App.__new__(App)
+    app._config = Config()  # noqa: SLF001
+    app._settings_dialog = SimpleNamespace(  # noqa: SLF001
+        draft_browser_account=lambda account_id: (
+            draft if account_id == draft.id else None
+        )
+    )
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        suspend_always_on_top=lambda: None,
+        restore_always_on_top=lambda: None,
+    )
+
+    app.open_login("opencode_go-work")
+
+    args, kwargs = captured[0]
+    assert args == (
+        "opencode_go",
+        "https://opencode.ai/workspace/work/go",
+        "Sign in to OpenCode (Work)",
+    )
+    assert kwargs["account_id"] == "opencode_go-work"
+    assert kwargs["verify_url"] == "https://opencode.ai/workspace/work/go"
 
 def test_widget_activation_raises_open_settings_dialog():
     app = App.__new__(App)

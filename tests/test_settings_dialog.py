@@ -106,7 +106,8 @@ def test_opencode_go_open_usage_button_launches_configured_url(qtbot, monkeypatc
     )
 
     config = Config()
-    config.opencode_go.usage_url = "https://opencode.ai/workspace/test/go"
+    account = next(a for a in config.browser_accounts if a.id == "opencode_go")
+    account.usage_url = "https://opencode.ai/workspace/test/go"
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
     _button(dialog, "opencode_go_open_usage_btn").click()
@@ -114,18 +115,42 @@ def test_opencode_go_open_usage_button_launches_configured_url(qtbot, monkeypatc
     assert opened == ["https://opencode.ai/workspace/test/go"]
 
 
-def test_opencode_go_settings_apply(qtbot, monkeypatch):
+def test_opencode_go_settings_apply_multiple_accounts(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
     config = Config()
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
 
     dialog.opencode_go_cb.setChecked(True)
-    dialog.opencode_go_url.setText("https://opencode.ai/workspace/custom/go")
+    first_row = next(
+        row
+        for row in dialog._browser_account_rows  # noqa: SLF001
+        if row.account_id == "opencode_go"
+    )
+    first_row.usage_url_edit.setText("https://opencode.ai/workspace/personal/go")
+    dialog._add_browser_account("opencode_go")  # noqa: SLF001
+    second_row = next(
+        row
+        for row in dialog._browser_account_rows  # noqa: SLF001
+        if row.account_id.startswith("opencode_go-")
+    )
+    second_row.name_edit.setText("Work")
+    second_row.usage_url_edit.setText("https://opencode.ai/workspace/work/go")
+    second_row.colors = ColorThresholds(
+        green_max=20,
+        yellow_max=50,
+        orange_max=80,
+    )
     dialog.apply_to(config)
 
+    accounts = [a for a in config.browser_accounts if a.kind == "opencode_go"]
     assert config.providers.opencode_go is True
-    assert config.opencode_go.usage_url == "https://opencode.ai/workspace/custom/go"
+    assert [(a.name, a.usage_url) for a in accounts] == [
+        (None, "https://opencode.ai/workspace/personal/go"),
+        ("Work", "https://opencode.ai/workspace/work/go"),
+    ]
+    assert accounts[1].colors.green_max == 20
+    assert config.opencode_go.usage_url == accounts[0].usage_url
 
 def test_add_codex_account_creates_named_secondary_row(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)

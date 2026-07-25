@@ -54,7 +54,7 @@ from .error_dialog import reveal_path
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
-from .providers.opencode_go import OPENCODE_GO_USAGE_URL, usage_url as opencode_go_usage_url
+from .providers.opencode_go import OPENCODE_GO_USAGE_URL
 from .startup import set_start_at_login
 from .webview.cookies import clear_browser_session
 
@@ -496,7 +496,9 @@ class _BrowserAccountRow(QWidget):
         self.name_edit = QLineEdit()
         self.name_edit.setText(account.name or "")
         self.name_edit.setPlaceholderText(
-            "Default account" if account.id in ("claude", "codex") else "Account name"
+            "Default account"
+            if account.id in ("claude", "codex", "opencode_go")
+            else "Account name"
         )
         self.name_edit.setMinimumWidth(120)
 
@@ -531,15 +533,43 @@ class _BrowserAccountRow(QWidget):
         remove.setToolTip("Remove this account and clear its saved cookie.")
         remove.clicked.connect(lambda: self.remove_clicked.emit(self.account_id))
 
-        layout = QHBoxLayout(self)
+        account_actions = QHBoxLayout()
+        account_actions.setContentsMargins(0, 0, 0, 0)
+        account_actions.setSpacing(6)
+        account_actions.addWidget(self.name_edit, 1)
+        account_actions.addWidget(sign_in)
+        account_actions.addWidget(paste)
+        account_actions.addWidget(clear)
+        account_actions.addWidget(colors)
+        account_actions.addWidget(remove)
+
+        self.usage_url_edit: QLineEdit | None = None
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addWidget(self.name_edit, 1)
-        layout.addWidget(sign_in)
-        layout.addWidget(paste)
-        layout.addWidget(clear)
-        layout.addWidget(colors)
-        layout.addWidget(remove)
+        layout.setSpacing(4)
+        layout.addLayout(account_actions)
+        if account.kind == "opencode_go":
+            self.usage_url_edit = QLineEdit()
+            self.usage_url_edit.setText(account.usage_url or OPENCODE_GO_USAGE_URL)
+            self.usage_url_edit.setPlaceholderText(OPENCODE_GO_USAGE_URL)
+            self.usage_url_edit.setToolTip(
+                "The workspace Go usage page for this OpenCode subscription."
+            )
+            open_usage = QPushButton("Open usage")
+            open_usage.setObjectName(f"{account.id}_open_usage_btn")
+            open_usage.setFixedWidth(92)
+            open_usage.clicked.connect(
+                lambda _checked=False: _open_in_browser(
+                    self.usage_url_edit.text().strip() or OPENCODE_GO_USAGE_URL
+                )
+            )
+            usage_row = QHBoxLayout()
+            usage_row.setContentsMargins(0, 0, 0, 0)
+            usage_row.setSpacing(6)
+            usage_row.addWidget(QLabel("Usage URL:"))
+            usage_row.addWidget(self.usage_url_edit, 1)
+            usage_row.addWidget(open_usage)
+            layout.addLayout(usage_row)
 
     def _edit_colors(self) -> None:
         dialog = _ColorThresholdDialog(self.colors, self)
@@ -548,12 +578,16 @@ class _BrowserAccountRow(QWidget):
 
     def to_account(self) -> BrowserAccount:
         name = self.name_edit.text().strip() or None
+        usage_url = None
+        if self.usage_url_edit is not None:
+            usage_url = self.usage_url_edit.text().strip() or OPENCODE_GO_USAGE_URL
         return BrowserAccount(
             id=self.account_id,
             kind=self.kind,
             name=name,
             enabled=True,
             colors=self.colors.model_copy(deep=True),
+            usage_url=usage_url,
         )
 
 
@@ -678,8 +712,8 @@ class SettingsDialog(QDialog):
         providers_layout.setSpacing(8)
 
         providers_hint = _hint_label(
-            "Show or hide provider groups in the widget. Manage multiple Claude "
-            "or Codex accounts from their tabs."
+            "Show or hide provider groups in the widget. Manage multiple Claude, "
+            "Codex, or OpenCode accounts from their tabs."
         )
         providers_layout.addWidget(providers_hint)
 
@@ -694,7 +728,7 @@ class SettingsDialog(QDialog):
         providers_layout.addWidget(self.codex_cb)
 
         self.opencode_go_cb = QCheckBox("OpenCode")
-        self.opencode_go_cb.setToolTip("Show the OpenCode usage tile in the panel.")
+        self.opencode_go_cb.setToolTip("Show OpenCode accounts in the panel.")
         self.opencode_go_cb.setChecked(config.providers.opencode_go)
         providers_layout.addWidget(self.opencode_go_cb)
 
@@ -759,7 +793,6 @@ class SettingsDialog(QDialog):
         self._codex_accounts_layout = QVBoxLayout()
         self._codex_accounts_layout.setSpacing(6)
         codex_accounts_layout.addLayout(self._codex_accounts_layout)
-        self._rebuild_browser_account_rows()
 
         # ----- Copilot details -----
         copilot = QGroupBox("GitHub Copilot")
@@ -928,71 +961,22 @@ class SettingsDialog(QDialog):
         self.openrouter_colors = _ColorThresholdLauncher(config.openrouter.colors)
         openrouter_form.addRow("Gauge colors:", self.openrouter_colors)
 
-        # ----- OpenCode details -----
-        opencode_go = QGroupBox("OpenCode")
-        opencode_go_form = QFormLayout(opencode_go)
-        opencode_go_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        opencode_go_form.setHorizontalSpacing(12)
-        opencode_go_form.setVerticalSpacing(8)
-        opencode_go_form.setFieldGrowthPolicy(
-            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
-        )
-
-        self.opencode_go_url = QLineEdit()
-        self.opencode_go_url.setText(opencode_go_usage_url(config))
-        self.opencode_go_url.setPlaceholderText(OPENCODE_GO_USAGE_URL)
-        opencode_go_form.addRow("Usage URL:", self.opencode_go_url)
-
-        self.opencode_go_colors = _ColorThresholdLauncher(config.opencode_go.colors)
-        opencode_go_form.addRow("Gauge colors:", self.opencode_go_colors)
-
-        opencode_go_signin_btn = QPushButton("Sign in")
-        opencode_go_signin_btn.setObjectName("opencode_go_signin_btn")
-        opencode_go_signin_btn.setToolTip(
-            "Sign in with your installed browser; Google and passkeys are supported."
-        )
-        opencode_go_signin_btn.clicked.connect(
-            lambda _checked=False: self.sign_in_clicked.emit("opencode_go")
-        )
-        opencode_go_form.addRow("", opencode_go_signin_btn)
-
-        opencode_go_cookie_btn = QPushButton("Paste cookie")
-        opencode_go_cookie_btn.setObjectName("opencode_go_paste_cookie_btn")
-        opencode_go_cookie_btn.setToolTip(
-            "Paste a Cookie header from your signed-in OpenCode browser session."
-        )
-        opencode_go_cookie_btn.clicked.connect(
-            lambda _checked=False: self.paste_cookie_clicked.emit("opencode_go")
-        )
-        opencode_go_form.addRow("", opencode_go_cookie_btn)
-
-        opencode_go_clear_btn = QPushButton("Clear sign-in")
-        opencode_go_clear_btn.setObjectName("opencode_go_clear_signin_btn")
-        opencode_go_clear_btn.setToolTip(
-            "Remove the saved OpenCode sign-in from AI Gauge."
-        )
-        opencode_go_clear_btn.clicked.connect(
-            lambda _checked=False: self.clear_sign_in_clicked.emit("opencode_go")
-        )
-        opencode_go_form.addRow("", opencode_go_clear_btn)
-
-        opencode_go_usage_btn = QPushButton("Open usage in browser")
-        opencode_go_usage_btn.setObjectName("opencode_go_open_usage_btn")
-        opencode_go_usage_btn.setToolTip("Open the OpenCode usage page in your default browser.")
-        opencode_go_usage_btn.clicked.connect(
-            lambda _checked=False: _open_in_browser(
-                self.opencode_go_url.text().strip() or OPENCODE_GO_USAGE_URL
+        # ----- OpenCode accounts -----
+        opencode_go = QGroupBox("OpenCode Accounts")
+        opencode_go_layout = QVBoxLayout(opencode_go)
+        opencode_go_layout.setSpacing(8)
+        opencode_go_layout.addWidget(
+            _hint_label(
+                "Name each OpenCode subscription and paste its workspace <b>Go</b> "
+                "usage-page URL. Every row has an independent browser session, "
+                "tile, and gauge colors. <b>Sign in</b> opens a real installed "
+                "browser and connects that subscription automatically."
             )
         )
-        opencode_go_form.addRow("", opencode_go_usage_btn)
-
-        opencode_go_help = _hint_label(
-            "Paste the workspace <b>Go</b> usage page URL. The tile reads Rolling, "
-            "Weekly, and Monthly usage from that page. <b>Sign in</b> opens a "
-            "real installed browser and connects the session automatically."
-        )
-        opencode_go_form.addRow("", opencode_go_help)
-
+        self._opencode_go_accounts_layout = QVBoxLayout()
+        self._opencode_go_accounts_layout.setSpacing(8)
+        opencode_go_layout.addLayout(self._opencode_go_accounts_layout)
+        self._rebuild_browser_account_rows()
         general_tab = QWidget()
         general_tab_layout = QVBoxLayout(general_tab)
         general_tab_layout.setContentsMargins(10, 10, 10, 10)
@@ -1088,6 +1072,9 @@ class SettingsDialog(QDialog):
                 kind=kind,
                 name=self._next_account_name(kind),
                 enabled=True,
+                usage_url=(
+                    OPENCODE_GO_USAGE_URL if kind == "opencode_go" else None
+                ),
             )
         )
         self._rebuild_browser_account_rows()
@@ -1102,7 +1089,11 @@ class SettingsDialog(QDialog):
         self._rebuild_browser_account_rows()
 
     def _rebuild_browser_account_rows(self) -> None:
-        for layout in (self._claude_accounts_layout, self._codex_accounts_layout):
+        for layout in (
+            self._claude_accounts_layout,
+            self._codex_accounts_layout,
+            self._opencode_go_accounts_layout,
+        ):
             while layout.count():
                 item = layout.takeAt(0)
                 widget = item.widget()
@@ -1112,6 +1103,7 @@ class SettingsDialog(QDialog):
         for kind, layout in (
             ("claude", self._claude_accounts_layout),
             ("codex", self._codex_accounts_layout),
+            ("opencode_go", self._opencode_go_accounts_layout),
         ):
             for account in [a for a in self._browser_accounts if a.kind == kind]:
                 row = _BrowserAccountRow(
@@ -1133,6 +1125,16 @@ class SettingsDialog(QDialog):
 
     def _current_browser_accounts(self) -> list[BrowserAccount]:
         return [row.to_account() for row in self._browser_account_rows]
+
+    def draft_browser_account(self, account_id: str) -> BrowserAccount | None:
+        return next(
+            (
+                row.to_account()
+                for row in self._browser_account_rows
+                if row.account_id == account_id
+            ),
+            None,
+        )
 
     def _validate_browser_accounts(self) -> bool:
         seen: set[tuple[str, str]] = set()
@@ -1332,10 +1334,17 @@ class SettingsDialog(QDialog):
         budget = self.or_daily_budget.value()
         config.openrouter.daily_budget = budget if budget > 0 else None
         config.openrouter.colors = self.openrouter_colors.value()
-        config.opencode_go.usage_url = (
-            self.opencode_go_url.text().strip() or OPENCODE_GO_USAGE_URL
+        # Keep the legacy singleton fields synchronized for downgrade safety;
+        # account rows are the source of truth from schema version 2 onward.
+        first_opencode = next(
+            (account for account in accounts if account.kind == "opencode_go"),
+            None,
         )
-        config.opencode_go.colors = self.opencode_go_colors.value()
+        if first_opencode is not None:
+            config.opencode_go.usage_url = (
+                first_opencode.usage_url or OPENCODE_GO_USAGE_URL
+            )
+            config.opencode_go.colors = first_opencode.colors.model_copy(deep=True)
         # Persist all settings first: wiring up OS autostart can fail (e.g. a
         # rejected Task Scheduler entry), and that must neither lose the user's
         # other changes nor crash the app via an exception escaping this slot.

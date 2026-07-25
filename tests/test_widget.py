@@ -128,6 +128,14 @@ def test_browser_account_tiles_group_by_provider_kind(qtbot):
     config.browser_accounts.append(
         BrowserAccount(id="codex-work", kind="codex", name="Work")
     )
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="opencode_go-work",
+            kind="opencode_go",
+            name="Work",
+            usage_url="https://opencode.ai/workspace/work/go",
+        )
+    )
     widget = UsageWidget(config)
     qtbot.addWidget(widget)
 
@@ -135,6 +143,8 @@ def test_browser_account_tiles_group_by_provider_kind(qtbot):
     widget.ensure_tile("claude-team", "Claude (Team)")
     widget.ensure_tile("codex", "Codex")
     widget.ensure_tile("claude", "Claude")
+    widget.ensure_tile("opencode_go-work", "OpenCode (Work)")
+    widget.ensure_tile("opencode_go", "OpenCode")
     widget.ensure_tile("copilot", "Copilot")
 
     assert _tile_order(widget) == [
@@ -142,6 +152,8 @@ def test_browser_account_tiles_group_by_provider_kind(qtbot):
         "claude-team",
         "codex",
         "codex-work",
+        "opencode_go",
+        "opencode_go-work",
         "copilot",
     ]
 
@@ -363,6 +375,7 @@ def test_secondary_browser_account_auth_tile_uses_sign_in_button(qtbot):
     config.browser_accounts.append(
         BrowserAccount(id="codex-work", kind="codex", name="Work")
     )
+
     widget = UsageWidget(config)
     qtbot.addWidget(widget)
 
@@ -495,14 +508,23 @@ def test_configured_collapsed_browser_tile_starts_compact(qtbot):
     assert not tile._compact_summary.isHidden()  # noqa: SLF001
 
 
-def test_opencode_go_collapsed_tile_shows_rolling_and_monthly_inline_metrics(qtbot):
-    widget = UsageWidget(Config())
+def test_secondary_opencode_collapsed_tile_shows_rolling_and_monthly(qtbot):
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="opencode_go-work",
+            kind="opencode_go",
+            name="Work",
+            usage_url="https://opencode.ai/workspace/work/go",
+        )
+    )
+    widget = UsageWidget(config)
     qtbot.addWidget(widget)
     reset_at = datetime.now() + timedelta(hours=4)
 
     widget.update_snapshot(
         UsageSnapshot(
-            provider="opencode_go",
+            provider="opencode_go-work",
             status=SnapshotStatus.OK,
             metrics=[
                 UsageMetric("Rolling", 13.0, reset_at),
@@ -510,10 +532,10 @@ def test_opencode_go_collapsed_tile_shows_rolling_and_monthly_inline_metrics(qtb
                 UsageMetric("Monthly", 7.0, reset_at + timedelta(days=30)),
             ],
         ),
-        "OpenCode",
+        "OpenCode (Work)",
     )
 
-    tile = widget._tiles["opencode_go"]  # noqa: SLF001
+    tile = widget._tiles["opencode_go-work"]  # noqa: SLF001
     tile.set_expanded(False)
 
     assert [item.code.text() for item in tile._compact_metrics] == ["R", "M"]  # noqa: SLF001

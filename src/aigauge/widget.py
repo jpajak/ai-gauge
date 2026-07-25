@@ -54,6 +54,7 @@ from .config import (
     browser_account,
     display_name_for_account,
 )
+from .gauge import color_for_percent, thresholds_for_provider
 from .models import SnapshotStatus, UsageSnapshot
 from .ratio import (
     MIN_SAMPLES,
@@ -182,40 +183,12 @@ def _pace_tooltip_line(
     return f"Time elapsed: {pace:.0f}% ({remaining})"
 
 
-# Severity bands are shared between the expanded row bars and the compact
-# chips. Each band pairs a bright tone (used in row bars, where the percent
-# label sits next to the bar) with a darker tone of the same hue family
-# (used in chips, where text sits on top of the fill). Same band → same
-# color name in both views.
-def _color_for_percent(
-    p: float | None, colors: ColorThresholds | None = None
-) -> str:
-    colors = colors or ColorThresholds()
-    if p is None:
-        return "#6b7280"
-    if p <= colors.green_max:
-        return colors.green_color
-    if p <= colors.yellow_max:
-        return colors.yellow_color
-    if p <= colors.orange_max:
-        return colors.orange_color
-    return colors.red_color
-
-
 def _chip_fill_for_percent(
     p: float | None, colors: ColorThresholds | None = None
 ) -> str:
-    colors = colors or ColorThresholds()
     if p is None:
         return "#374151"
-    if p <= colors.green_max:
-        color = colors.green_color
-    elif p <= colors.yellow_max:
-        color = colors.yellow_color
-    elif p <= colors.orange_max:
-        color = colors.orange_color
-    else:
-        color = colors.red_color
+    color = color_for_percent(p, colors)
     return QColor(color).darker(135).name()
 
 
@@ -671,7 +644,7 @@ class _MetricRow(QWidget):
             )
             self.pct.setVisible(True)
             self.bar.setVisible(True)
-        color = _color_for_percent(percent, self._colors)
+        color = color_for_percent(percent, self._colors)
         self.bar.setStyleSheet(
             f"QProgressBar {{ background:#374151; border:none; border-radius:3px; }}"
             f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
@@ -781,7 +754,7 @@ class _CompactMetric(QWidget):
         self.reset.setText(reset if show_reset else "")
         self.reset.setVisible(show_reset and bool(reset))
         self.bar.setValue(0 if percent is None else int(round(percent)))
-        color = _color_for_percent(percent)
+        color = color_for_percent(percent)
         self.bar.setStyleSheet(
             f"QProgressBar {{ background:#374151; border:none; border-radius:3px; }}"
             f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
@@ -1478,16 +1451,7 @@ class UsageWidget(QWidget):
         return self._tiles[provider]
 
     def _colors_for(self, provider: str) -> ColorThresholds:
-        account = browser_account(self._config, provider)
-        if account is not None:
-            return account.colors
-        if provider == "copilot":
-            return self._config.copilot.colors
-        if provider == "openrouter":
-            return self._config.openrouter.colors
-        if provider == "opencode_go":
-            return self._config.opencode_go.colors
-        return ColorThresholds()
+        return thresholds_for_provider(self._config, provider)
 
     def _tile_sort_key(self, provider: str) -> tuple[int, int, str]:
         account_ids = [

@@ -8,7 +8,7 @@
 
 - Added distinct title-bar controls in both full and compact views: down/up switches between full and compact layouts, the dash hides the widget to the system tray, and ✕ quits AI Gauge completely.
 - Added expanded-window resizing with a dedicated bottom-right grip. The chosen size persists across launches, compact mode retains its fitted size, and expanding restores the saved dimensions.
-- Added per-account gauge customization for Claude and Codex accounts, plus Copilot, OpenCode, and OpenRouter. Users can tune three percentage cutoffs and choose all four band colors, including the final 90%+ band; live range labels and **Reset defaults** keep the controls understandable. Supplied defaults are green through 30%, yellow through 60%, orange through 90%, and red above 90%.
+- Added per-account gauge customization for Claude and Codex accounts, plus Copilot, OpenCode, and OpenRouter. Users can tune three percentage cutoffs and choose all four band colors, including the final 95%+ band; live range labels and **Reset defaults** keep the controls understandable. Supplied defaults preserve the existing behavior: green below 60%, yellow at 60–79%, orange at 80–94%, and red at 95%+.
 - Added the ability to remove the original Claude or Codex account as well as secondary accounts. Empty provider sections retain their add-account action, and removed original accounts stay removed after restart.
 
 ### Changed
@@ -22,7 +22,7 @@
 
 - Copilot usage above 100% now renders a full severity-colored bar while preserving the actual overage label. Previously, passing an above-maximum value to Qt could leave the progress chunk unpainted.
 - The resize grip now occupies its own footer instead of overlaying the last provider row, preventing it from obscuring Copilot and other bottom-most gauges.
-- Gauge color descriptions now update immediately as cutoffs change, and custom colors apply consistently to expanded bars and compact summary chips.
+- Gauge color descriptions now update immediately as cutoffs change, and custom ranges/colors apply consistently to expanded bars, compact summary chips, the Windows/Linux tray indicator, and macOS menu-bar status dots.
 
 ## 0.6.5 - 2026-07-18
 

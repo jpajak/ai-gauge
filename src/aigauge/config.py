@@ -97,11 +97,13 @@ class ProviderToggles(BaseModel):
 
 
 class ColorThresholds(BaseModel):
-    green_max: int = Field(default=30, ge=0, le=100)
-    yellow_max: int = Field(default=60, ge=0, le=100)
-    orange_max: int = Field(default=90, ge=0, le=100)
+    # Inclusive integer bands matching AI Gauge's original severity behavior:
+    # green below 60%, yellow at 60-79%, orange at 80-94%, red at 95%+.
+    green_max: int = Field(default=59, ge=0, le=100)
+    yellow_max: int = Field(default=79, ge=0, le=100)
+    orange_max: int = Field(default=94, ge=0, le=100)
     green_color: str = "#22c55e"
-    yellow_color: str = "#facc15"
+    yellow_color: str = "#f59e0b"
     orange_color: str = "#f97316"
     red_color: str = "#ef4444"
 

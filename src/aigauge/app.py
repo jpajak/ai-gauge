@@ -30,6 +30,7 @@ from .config import (
 )
 from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
+from .gauge import highest_indicator
 from .history import HistoryStore
 from .logging_setup import setup_logging
 from .menubar import render_menubar_pixmap
@@ -61,19 +62,12 @@ _HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 _LOG_VALUE_LIMIT = 300
 
 
-def _make_dot_tray_icon(percent: float | None = None) -> QIcon:
+def _make_dot_tray_icon(color: str | None = None) -> QIcon:
     pix = QPixmap(32, 32)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    if percent is None:
-        painter.setBrush(QColor("#6b7280"))
-    elif percent >= 90:
-        painter.setBrush(QColor("#ef4444"))
-    elif percent >= 75:
-        painter.setBrush(QColor("#f59e0b"))
-    else:
-        painter.setBrush(QColor("#22c55e"))
+    painter.setBrush(QColor(color or "#6b7280"))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawEllipse(4, 4, 24, 24)
     painter.end()
@@ -81,16 +75,18 @@ def _make_dot_tray_icon(percent: float | None = None) -> QIcon:
 
 
 def _enabled_providers(config: Config) -> tuple[str, ...]:
+    configured_accounts = getattr(config, "browser_accounts", None)
     out: list[str] = [
         account.id
         for account in browser_accounts(config)
         if getattr(config.providers, account.kind, False)
     ]
-    if not out:
-        providers = getattr(config, "providers", None)
-        if getattr(providers, "claude", False):
+    # Compatibility for pre-multi-account config-like objects. An explicit
+    # empty list is authoritative and must not resurrect removed accounts.
+    if configured_accounts is None:
+        if getattr(config.providers, "claude", False):
             out.append("claude")
-        if getattr(providers, "codex", False):
+        if getattr(config.providers, "codex", False):
             out.append("codex")
     if config.providers.copilot:
         out.append("copilot")
@@ -285,6 +281,7 @@ class App(QObject):
                 self._native_status.update(
                     self._snapshots,
                     _enabled_providers(self._config),
+                    self._config,
                 )
                 self._native_status.set_tooltip(f"AI Gauge {__version__}")
                 self._tray = None
@@ -699,6 +696,7 @@ class App(QObject):
             self._native_status.update(
                 self._snapshots,
                 _enabled_providers(self._config),
+                self._config,
             )
             self._native_status.set_tooltip(tooltip)
             return
@@ -722,18 +720,13 @@ class App(QObject):
     def _render_tray_icon(self) -> QIcon:
         if self._ui_mode == "menubar":
             providers = _enabled_providers(self._config)
-            pixmap = render_menubar_pixmap(self._snapshots, providers)
+            pixmap = render_menubar_pixmap(
+                self._snapshots, providers, config=self._config
+            )
             return QIcon(pixmap)
-        max_pct: float | None = None
-        for snap in self._snapshots.values():
-            if snap.status != SnapshotStatus.OK:
-                continue
-            for m in snap.metrics:
-                if m.percent_used is None:
-                    continue
-                if max_pct is None or m.percent_used > max_pct:
-                    max_pct = m.percent_used
-        return _make_dot_tray_icon(max_pct)
+        providers = _enabled_providers(self._config)
+        indicator = highest_indicator(self._config, self._snapshots, providers)
+        return _make_dot_tray_icon(indicator.color if indicator is not None else None)
 
     # ----- Login / cookie paste -----
 

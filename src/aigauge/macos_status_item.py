@@ -5,6 +5,7 @@ from collections.abc import Callable
 
 from PyQt6.QtCore import QPoint
 
+from .config import Config
 from .menubar import status_items
 from .models import UsageSnapshot
 
@@ -135,8 +136,9 @@ class NativeMacStatusItem:
         self,
         snapshots: dict[str, UsageSnapshot],
         enabled_providers: tuple[str, ...],
+        config: Config | None = None,
     ) -> None:
-        items = status_items(snapshots, enabled_providers)
+        items = status_items(snapshots, enabled_providers, config)
         button = self._status_item.button()
         button.setAttributedTitle_(_attributed_title(items))
 

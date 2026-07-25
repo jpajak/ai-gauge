@@ -371,7 +371,7 @@ class _ColorThresholdEditor(QWidget):
             "green": f"0–{self.green.value()}%",
             "yellow": f"{self.green.value() + 1}–{self.yellow.value()}%",
             "orange": f"{self.yellow.value() + 1}–{self.orange.value()}%",
-            "red": f"{self.orange.value()}%+",
+            "red": f"{self.orange.value() + 1}%+",
         }
         for key, button in self._color_buttons.items():
             color = QColor(self._colors[key])
@@ -394,9 +394,11 @@ class _ColorThresholdEditor(QWidget):
 
     def reset_defaults(self) -> None:
         defaults = ColorThresholds()
-        self.green.setValue(defaults.green_max)
-        self.yellow.setValue(defaults.yellow_max)
+        # Raise the dependent maxima from the outside in so Qt does not clamp
+        # a restored lower cutoff against the editor's current upper cutoffs.
         self.orange.setValue(defaults.orange_max)
+        self.yellow.setValue(defaults.yellow_max)
+        self.green.setValue(defaults.green_max)
         self._colors = {
             "green": defaults.green_color,
             "yellow": defaults.yellow_color,
@@ -460,7 +462,7 @@ class _ColorThresholdLauncher(QWidget):
             f"0–{self.colors.green_max} / "
             f"{self.colors.green_max + 1}–{self.colors.yellow_max} / "
             f"{self.colors.yellow_max + 1}–{self.colors.orange_max} / "
-            f"{self.colors.orange_max}%+"
+            f"{self.colors.orange_max + 1}%+"
         )
 
     def _edit(self) -> None:

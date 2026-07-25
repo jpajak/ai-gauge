@@ -215,6 +215,13 @@ def test_enabled_providers_includes_enabled_browser_accounts():
 
 
 
+def test_enabled_providers_respects_explicitly_empty_browser_accounts():
+    config = Config(browser_accounts=[])
+    config.providers.copilot = False
+
+    assert _enabled_providers(config) == ()
+
+
 def test_enabled_providers_includes_opencode_go_when_enabled():
     config = Config()
     config.providers.opencode_go = True

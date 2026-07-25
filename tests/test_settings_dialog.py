@@ -192,7 +192,7 @@ def test_color_editor_updates_live_ranges_and_all_four_colors(qtbot):
     assert editor._color_buttons["green"].text() == "Green · 0–25%"  # noqa: SLF001
     assert editor._color_buttons["yellow"].text() == "Yellow · 26–55%"  # noqa: SLF001
     assert editor._color_buttons["orange"].text() == "Orange · 56–85%"  # noqa: SLF001
-    assert editor._color_buttons["red"].text() == "Red · 85%+"  # noqa: SLF001
+    assert editor._color_buttons["red"].text() == "Red · 86%+"  # noqa: SLF001
     assert editor.value().red_color == "#123456"
 
     editor.reset_defaults()

@@ -32,7 +32,7 @@ def test_defaults():
     assert c.window.opacity == 0.8
     assert c.window.ui_scale == 1.0
     assert c.copilot.colors == ColorThresholds(
-        green_max=30, yellow_max=60, orange_max=90
+        green_max=59, yellow_max=79, orange_max=94
     )
 
 

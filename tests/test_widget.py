@@ -1,9 +1,11 @@
 from datetime import datetime, timedelta
 
 import pytest
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
+from aigauge import __version__
 from aigauge.config import BrowserAccount, ColorThresholds, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 from aigauge.ratio import RatioEstimate
@@ -541,7 +543,8 @@ def test_secondary_opencode_collapsed_tile_shows_rolling_and_monthly(qtbot):
     assert [item.code.text() for item in tile._compact_metrics] == ["R", "M"]  # noqa: SLF001
     assert [item.pct.text() for item in tile._compact_metrics] == ["13%", "7%"]  # noqa: SLF001
 
-def test_narrow_expanded_refresh_state_shows_next_refresh_countdown(qtbot):
+
+def test_expanded_refresh_state_includes_next_refresh_countdown(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -551,11 +554,11 @@ def test_narrow_expanded_refresh_state_shows_next_refresh_countdown(qtbot):
         next_at=datetime.now() + timedelta(minutes=3, seconds=5),
     )
 
-    assert widget.cadence_label.text() == "4m"
+    assert widget.cadence_label.text().endswith("4m")
     assert "5 min cadence" in widget.cadence_label.toolTip()
 
 
-def test_narrow_expanded_refresh_state_shows_now_when_refresh_is_due(qtbot):
+def test_expanded_refresh_state_includes_now_when_refresh_is_due(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -565,7 +568,7 @@ def test_narrow_expanded_refresh_state_shows_now_when_refresh_is_due(qtbot):
         next_at=datetime.now() - timedelta(seconds=1),
     )
 
-    assert widget.cadence_label.text() == "now"
+    assert widget.cadence_label.text().endswith("now")
 
 
 def test_widget_clamps_saved_width_and_ignores_saved_height(qtbot):
@@ -605,22 +608,39 @@ def test_expanded_widget_resizes_width_only_and_persists_width(qtbot):
     assert widget.height() == fitted_height
 
 
-def test_expanded_widget_wraps_long_summaries_at_400_pixels(qtbot):
-    widget = UsageWidget(Config())
+def test_resize_grip_stops_before_standard_gauge_rows_would_wrap(qtbot):
+    config = Config()
+    config.window.width = 620
+    widget = UsageWidget(config)
     qtbot.addWidget(widget)
     widget.update_snapshot(
         UsageSnapshot(
-            provider="opencode_go",
+            provider="copilot",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric(
+                    "Monthly credits",
+                    52.0,
+                    reset_label="123d 12h",
+                )
+            ],
+        ),
+        "Copilot",
+    )
+    gauge_row = widget._tiles["copilot"]._rows[0]  # noqa: SLF001
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="opencode_go-gmail",
             status=SnapshotStatus.OK,
             metrics=[
                 UsageMetric("Rolling", 13.0, reset_label="2h 13m"),
                 UsageMetric("Weekly", 5.0, reset_label="23h 58m"),
-                UsageMetric("Monthly", 2.0, reset_label="30.9d"),
+                UsageMetric("Monthly", 97.0, reset_label="30.9d"),
             ],
         ),
-        "OpenCode (AloeDesk)",
+        "OpenCode (Gmail)",
     )
-    compact_tile = widget._tiles["opencode_go"]  # noqa: SLF001
+    compact_tile = widget._tiles["opencode_go-gmail"]  # noqa: SLF001
     compact_tile.set_expanded(False)
     widget.update_snapshot(
         UsageSnapshot(
@@ -628,50 +648,77 @@ def test_expanded_widget_wraps_long_summaries_at_400_pixels(qtbot):
             status=SnapshotStatus.OK,
             metrics=[
                 UsageMetric(
-                    "Balance $51.39 left · Spend today $3.34 / month $95.11"
+                    "Balance $51.39 left · Spend today $0.00 / month $95.11"
                 )
             ],
         ),
         "OpenRouter",
     )
-    openrouter_tile = widget._tiles["openrouter"]  # noqa: SLF001
-    openrouter_row = openrouter_tile._rows[0]  # noqa: SLF001
+    openrouter_row = widget._tiles["openrouter"]._rows[0]  # noqa: SLF001
+    widget.set_refresh_state(
+        active=True,
+        minutes=5,
+        next_at=datetime.now() + timedelta(minutes=4),
+    )
+    widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
+    widget._refresh_header_labels()  # noqa: SLF001
     widget.show()
-
     widget.resize(620, widget.height())
     widget._do_refit_height()  # noqa: SLF001
     QApplication.processEvents()
     wide_height = widget.height()
-    assert widget.minimumWidth() == 400
-    assert compact_tile._narrow_layout is False  # noqa: SLF001
+    minimum_width = widget.minimumWidth()
+
+    assert minimum_width > 280
+    assert compact_tile._compact_below_header is False  # noqa: SLF001
     assert openrouter_row._reset_stacked is False  # noqa: SLF001
-    assert (
-        abs(compact_tile._compact_summary.y() - compact_tile.header.y()) <= 2  # noqa: SLF001
+
+    grip = widget._resize_grip  # noqa: SLF001
+    start = grip.rect().center()
+    QTest.mousePress(
+        grip,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        start,
     )
-    assert openrouter_row.reset.y() == openrouter_row.label.y()
+    assert widget._resizing_with_grip is True  # noqa: SLF001
+    last_pos = start
+    for delta in (-120, -180, -220, -260, -320, -400):
+        last_pos = QPoint(start.x() + delta, start.y())
+        QTest.mouseMove(grip, last_pos)
+        QApplication.processEvents()
 
-    widget.resize(400, widget.height())
-    widget._do_refit_height()  # noqa: SLF001
+    # The live minimum clamps the drag before the normal gauge can clip or
+    # move onto a second line. Height and layout remain stable during drag.
+    assert widget.width() == minimum_width
+    assert widget.height() == wide_height
+    assert gauge_row.bar.y() < gauge_row.label.geometry().bottom()
+    assert gauge_row.bar.geometry().right() < gauge_row.pct.x()
+    assert gauge_row.reset.geometry().right() <= gauge_row.rect().right()
+
+    QTest.mouseRelease(
+        grip,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        last_pos,
+    )
     QApplication.processEvents()
-    assert widget.width() == 400
-    assert widget.height() > wide_height
-    assert compact_tile._narrow_layout is True  # noqa: SLF001
-    assert openrouter_row._reset_stacked is True  # noqa: SLF001
-    assert compact_tile._compact_summary.y() > compact_tile.header.y()  # noqa: SLF001
-    assert openrouter_row.reset.y() > openrouter_row.label.y()
-    assert compact_tile.sizeHint().width() <= 400
-    assert openrouter_tile.sizeHint().width() <= 400
 
-    widget.resize(320, widget.height())
-    assert widget.width() == 400
+    assert widget._resizing_with_grip is False  # noqa: SLF001
+    assert widget.width() == minimum_width
+    assert gauge_row.bar.y() < gauge_row.label.geometry().bottom()
+    assert gauge_row.reset.geometry().right() <= gauge_row.rect().right()
+    assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
+    assert widget.refresh_btn.isVisible()
+    assert widget.settings_btn.isVisible()
+    assert widget.close_btn.isVisible()
 
     widget.resize(620, widget.height())
     widget._do_refit_height()  # noqa: SLF001
     QApplication.processEvents()
-    assert widget.height() == wide_height
-    assert compact_tile._narrow_layout is False  # noqa: SLF001
+    assert compact_tile._compact_below_header is False  # noqa: SLF001
     assert openrouter_row._reset_stacked is False  # noqa: SLF001
-
+    assert widget.title_label.text() == f"AI Gauge {__version__}"
 
 def test_expanded_height_caps_and_scrolls_when_content_exceeds_screen(
     qtbot,
@@ -697,6 +744,7 @@ def test_expanded_height_caps_and_scrolls_when_content_exceeds_screen(
     assert widget.height() == 180
     assert widget._tile_scroll.verticalScrollBar().maximum() > 0  # noqa: SLF001
 
+
 def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
@@ -710,22 +758,42 @@ def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
     )
 
 
-def test_expanded_header_shortens_cadence_at_responsive_minimum(qtbot):
+def test_expanded_header_compacts_progressively_at_280(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
     next_at = datetime.now() + timedelta(minutes=4)
     widget.set_refresh_state(True, 5, next_at)
-    widget._do_refit_height()  # noqa: SLF001
-
-    widget.resize(320, widget.height())
-    widget._refresh_cadence_label()  # noqa: SLF001
-
-    assert widget.width() == 400
-    assert widget.cadence_label.text() == "4m"
-    assert widget._header_widget.sizeHint().width() <= widget.width()  # noqa: SLF001
+    widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
+    widget._refresh_header_labels()  # noqa: SLF001
 
     widget.resize(620, widget.height())
     widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.title_label.text() == f"AI Gauge {__version__}"
+    assert not widget.age_label.isHidden()
+    assert "active next" in widget.cadence_label.text()
+
+    widget.resize(360, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.width() == 360
+    assert widget.cadence_label.text().endswith("4m")
+    assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
+
+    widget.resize(280, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.width() == 280
+    assert not widget.title_label.isHidden()
+    assert not widget.refresh_btn.isHidden()
+    assert not widget.settings_btn.isHidden()
+    assert not widget.close_btn.isHidden()
+    assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
+
+    widget.resize(200, widget.height())
+    assert widget.width() == 280
+
+    widget.resize(620, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.title_label.text() == f"AI Gauge {__version__}"
+    assert not widget.age_label.isHidden()
     assert "active next" in widget.cadence_label.text()
 
 
@@ -755,6 +823,54 @@ def test_metric_row_percent_and_reset_columns_fit_their_text(qtbot):
     assert row.reset.width() <= (
         row.reset.fontMetrics().horizontalAdvance(row.reset.text()) + 2
     )
+
+
+def test_provider_gauges_share_normalized_columns_at_minimum_width(qtbot):
+    config = Config()
+    config.window.width = 620
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="opencode_go-work",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Rolling", 26.0, reset_label="57m"),
+                UsageMetric("Weekly", 100.0, reset_label="23h 06m"),
+                UsageMetric("Monthly", 5.0, reset_label="30.9d"),
+            ],
+        ),
+        "OpenCode (Work)",
+    )
+    widget.show()
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    rows = widget._tiles["opencode_go-work"]._rows  # noqa: SLF001
+
+    def assert_columns_aligned():
+        assert len({row.label.width() for row in rows}) == 1
+        assert len({row.bar.x() for row in rows}) == 1
+        assert len({row.bar.width() for row in rows}) == 1
+        assert len({row.pct.x() for row in rows}) == 1
+        assert len({row.reset.x() for row in rows}) == 1
+        assert len({row.reset.width() for row in rows}) == 1
+
+    assert_columns_aligned()
+    minimum_width = widget.minimumWidth()
+    assert minimum_width > 280
+
+    widget.resize(280, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    assert widget.width() == minimum_width
+    assert all(row.bar.y() < row.label.geometry().bottom() for row in rows)
+    assert all(row.reset.geometry().right() <= row.rect().right() for row in rows)
+    assert_columns_aligned()
+
+    widget.resize(620, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    assert_columns_aligned()
 
 
 def test_collapsed_mode_shows_session_summary(qtbot):

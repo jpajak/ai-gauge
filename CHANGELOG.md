@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-## 0.7.0 - 2026-07-20
+## 0.7.0 - 2026-07-25
 
 ### Added
 
@@ -14,7 +14,7 @@
 
 ### Changed
 
-- The expanded widget can narrow to 400 pixels without clipping. Below 600 pixels, collapsed account metrics move beneath the account name and OpenRouter balance/spending values stack; height follows the additional rows automatically and remains capped to the available screen with vertical scrolling when necessary.
+- The expanded widget uses a horizontal-only resize handle and a content-derived minimum width, never below 280 pixels. Comparable gauges within each provider share label, percentage, and reset-time columns so their bars use the same length and scale, and the resize handle stops before those gauge rows would clip or wrap. At measured content limits, compact account gauges can use a full-width second row, OpenRouter text can wrap, and secondary header details compact while core controls remain visible. Automatic height is applied after the resize drag and remains capped to the available screen.
 - The expanded header shows the full refresh cadence at wider sizes and just the countdown below the responsive breakpoint; compact mode also shows only the countdown.
 - Percentage and reset-time columns now size to their actual text instead of reserving fixed blank space between values and day labels.
 - Settings spin boxes and decimal controls now use explicit, high-contrast arrow buttons in the dark theme, including the account-specific gauge-color dialog.

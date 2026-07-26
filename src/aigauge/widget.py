@@ -1984,14 +1984,14 @@ class UsageWidget(QWidget):
         # Progressively reduce secondary information only when the measured
         # header no longer fits. Core controls always remain visible.
         if (
-            self.age_label.isVisible()
+            not self.age_label.isHidden()
             and header_layout.minimumSize().width() > self.width()
         ):
             self.age_label.hide()
             header_layout.invalidate()
             header_layout.activate()
         if (
-            self.cadence_label.isVisible()
+            not self.cadence_label.isHidden()
             and self._cadence_short_text
             and header_layout.minimumSize().width() > self.width()
         ):
@@ -2003,7 +2003,7 @@ class UsageWidget(QWidget):
             header_layout.invalidate()
             header_layout.activate()
         if (
-            self.cadence_label.isVisible()
+            not self.cadence_label.isHidden()
             and header_layout.minimumSize().width() > self.width()
         ):
             self.cadence_label.hide()

@@ -758,9 +758,13 @@ def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
     )
 
 
-def test_expanded_header_compacts_progressively_at_280(qtbot):
+def test_expanded_header_compacts_progressively_at_280(qtbot, monkeypatch):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
+    # A hidden parent makes Qt report effective visibility as false even when
+    # these labels are logically enabled. Compaction must use hidden state.
+    monkeypatch.setattr(widget.age_label, "isVisible", lambda: False)
+    monkeypatch.setattr(widget.cadence_label, "isVisible", lambda: False)
     next_at = datetime.now() + timedelta(minutes=4)
     widget.set_refresh_state(True, 5, next_at)
     widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
@@ -785,6 +789,7 @@ def test_expanded_header_compacts_progressively_at_280(qtbot):
     assert not widget.refresh_btn.isHidden()
     assert not widget.settings_btn.isHidden()
     assert not widget.close_btn.isHidden()
+    assert widget.age_label.isHidden()
     assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
 
     widget.resize(200, widget.height())

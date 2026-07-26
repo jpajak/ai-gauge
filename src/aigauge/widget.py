@@ -49,7 +49,6 @@ from .config import (
     WINDOW_MAX_HEIGHT,
     WINDOW_MAX_WIDTH,
     WINDOW_MIN_HEIGHT,
-    WINDOW_MIN_WIDTH,
     WINDOW_WIDTH,
     browser_account,
     display_name_for_account,
@@ -64,12 +63,13 @@ from .ratio import (
 )
 
 ROW_BAR_HEIGHT = 8
+MIN_GAUGE_WIDTH = 120
 PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
 PROVIDER_ORDER = ("claude", "codex", "opencode_go", "copilot", "openrouter")
 COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_HEIGHT
-FULL_CADENCE_MIN_WIDTH = 350
+EXPANDED_MIN_WIDTH = 400
 
 
 def _clamp_height(value: int) -> int:
@@ -571,6 +571,7 @@ class _MetricRow(QWidget):
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(ROW_BAR_HEIGHT + PACE_TICK_OVERHANG * 2)
+        self.bar.setMinimumWidth(MIN_GAUGE_WIDTH)
         self.bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.pct = QLabel("--")
@@ -621,6 +622,8 @@ class _MetricRow(QWidget):
         else:
             self.label.setText(label)
             self.reset.setStyleSheet("color: #9ca3af; font-size: 10px;")
+        label_width = self.label.fontMetrics().horizontalAdvance(self.label.text()) + 4
+        self.label.setMinimumWidth(max(70, label_width))
         self.setToolTip(note or "")
         self._resets_at = resets_at
         self._window = window
@@ -655,7 +658,7 @@ class _MetricRow(QWidget):
             self.reset.setText(right)
             self.reset.setVisible(True)
             right_width = self.reset.fontMetrics().horizontalAdvance(right) + 4
-            self.reset.setFixedWidth(max(92, min(190, right_width)))
+            self.reset.setFixedWidth(max(92, right_width))
             self.reset.setToolTip("")
         else:
             self.reset.setText(rel)
@@ -686,6 +689,8 @@ class _MetricRow(QWidget):
         bar still respects the QSS chunk color, so we get a muted shimmer.
         """
         self.label.setText(label)
+        label_width = self.label.fontMetrics().horizontalAdvance(label) + 4
+        self.label.setMinimumWidth(max(70, label_width))
         self.setToolTip("")
         self._resets_at = None
         self._window = None
@@ -1226,7 +1231,8 @@ class UsageWidget(QWidget):
         self._config = config
         self._mouse_inside = False
         self._drag_offset: QPoint | None = None
-        self.setFixedWidth(WINDOW_WIDTH)
+        self.setMinimumWidth(WINDOW_WIDTH)
+        self.setMaximumWidth(WINDOW_MAX_WIDTH)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         # Background is drawn in paintEvent; no widget-level stylesheet — that
         # would cascade into child dialogs (Settings) and break their layout.
@@ -1241,7 +1247,6 @@ class UsageWidget(QWidget):
         self._refresh_interval_minutes: int | None = None
         self._next_refresh_at: datetime | None = None
         self._collapsed = config.window.collapsed
-        self._manually_resized = config.window.manually_resized
         self._always_on_top_suspensions = 0
 
         # Header bar
@@ -1390,17 +1395,16 @@ class UsageWidget(QWidget):
         resize_footer_layout.setContentsMargins(0, 0, 1, 1)
         resize_footer_layout.addStretch(1)
         self._resize_grip = QSizeGrip(self._resize_footer)
-        self._resize_grip.setToolTip("Drag to resize")
+        self._resize_grip.setToolTip("Drag to resize width")
         self._resize_grip.installEventFilter(self)
         resize_footer_layout.addWidget(self._resize_grip)
         outer.addWidget(self._resize_footer)
 
-        self.resize(
-            QSize(
-                config.window.width,
-                _clamp_height(config.window.height),
-            )
+        initial_width = max(
+            WINDOW_WIDTH,
+            min(config.window.width, WINDOW_MAX_WIDTH),
         )
+        self.resize(QSize(initial_width, WINDOW_MIN_HEIGHT))
         if config.window.x is not None and config.window.y is not None:
             self.move(QPoint(config.window.x, config.window.y))
             self._clamp_to_visible_screen()
@@ -1541,12 +1545,44 @@ class UsageWidget(QWidget):
         self._do_refit_height()
 
     def _refit_height(self) -> None:
-        """Resize the window vertically to match the layout's preferred height.
-
-        Width stays fixed. Deferred to the next event-loop tick so
-        Qt has flushed any pending tile add/remove or stylesheet updates first.
-        """
+        """Refit automatic height and refresh the visible-content width floor."""
         QTimer.singleShot(0, self._do_refit_height)
+
+    def _expanded_content_min_width(self) -> int:
+        """Smallest expanded width that keeps every visible value readable."""
+        # Expanded mode keeps all columns visible; compact mode is the
+        # deliberately narrow presentation.
+        preferred_width = EXPANDED_MIN_WIDTH
+        container_margins = self._tile_layout.contentsMargins()
+        container_padding = container_margins.left() + container_margins.right()
+        for tile in self._tiles.values():
+            for row in tile._rows:
+                row.layout().invalidate()
+                row.layout().activate()
+                row.updateGeometry()
+            tile.layout().invalidate()
+            tile.layout().activate()
+            tile.updateGeometry()
+            preferred_width = max(
+                preferred_width,
+                tile.sizeHint().width() + container_padding + 8,
+            )
+        # The scroll area has no horizontal scrollbar; the final eight pixels
+        # reserve its viewport edge and styled vertical scrollbar when needed.
+        return min(preferred_width, WINDOW_MAX_WIDTH)
+
+    def _available_expanded_height(self) -> int:
+        screen = (
+            QApplication.screenAt(self.frameGeometry().center())
+            or self.screen()
+            or QApplication.primaryScreen()
+        )
+        if screen is None:
+            return WINDOW_MAX_HEIGHT
+        return max(
+            WINDOW_MIN_HEIGHT,
+            min(WINDOW_MAX_HEIGHT, screen.availableGeometry().height() - 8),
+        )
 
     def _do_refit_height(self) -> None:
         if self._collapsed:
@@ -1554,35 +1590,46 @@ class UsageWidget(QWidget):
                 COLLAPSED_MIN_HEIGHT,
                 min(WINDOW_MAX_HEIGHT, self._collapsed_widget.sizeHint().height()),
             )
-            if self.height() != target_height or self.width() != WINDOW_WIDTH:
-                self.resize(WINDOW_WIDTH, target_height)
+            self.setFixedSize(WINDOW_WIDTH, target_height)
             return
+
+        # Release the collapsed/fitted constraints before measuring this pass.
+        self.setMaximumWidth(WINDOW_MAX_WIDTH)
+        self.setMinimumWidth(WINDOW_WIDTH)
+        content_min_width = self._expanded_content_min_width()
+        self.setMinimumWidth(content_min_width)
+        target_width = max(content_min_width, min(self.width(), WINDOW_MAX_WIDTH))
+        if self.width() != target_width:
+            self.resize(target_width, self.height())
+
         self._tile_layout.invalidate()
         self._tile_container.updateGeometry()
         self._tile_scroll.updateGeometry()
         self.updateGeometry()
         self.layout().invalidate()
+        self.layout().activate()
         header_height = self._header_widget.sizeHint().height()
-        tile_height = self._tile_container.sizeHint().height()
-        max_tile_height = max(40, WINDOW_MAX_HEIGHT - header_height)
-        fitted_tile_height = min(tile_height, max_tile_height)
         footer_height = self._resize_footer.sizeHint().height()
-        fitted_height = _clamp_height(
-            header_height + fitted_tile_height + footer_height
+        tile_height = self._tile_container.sizeHint().height()
+        height_limit = self._available_expanded_height()
+        max_tile_height = max(
+            40,
+            height_limit - header_height - footer_height,
         )
-        # Resizing is for adding room, not clipping the normal information
-        # layout. Recalculate this floor whenever tiles or rows change.
-        self.setMinimumHeight(fitted_height)
-        if self._manually_resized:
-            available = max(40, self.height() - header_height - footer_height)
-            self._tile_scroll.setFixedHeight(available)
-            return
+        fitted_tile_height = min(tile_height, max_tile_height)
+        fitted_height = max(
+            WINDOW_MIN_HEIGHT,
+            min(
+                height_limit,
+                header_height + fitted_tile_height + footer_height,
+            ),
+        )
         self._tile_scroll.setFixedHeight(fitted_tile_height)
-        target_height = fitted_height
-        target_width = self.width()
-        if target_height != self.height() or target_width != self.width():
-            self.resize(target_width, target_height)
-
+        # Height is content-owned. Locking it also turns the corner grip into a
+        # width-only control and prevents both clipping and empty vertical space.
+        self.setFixedHeight(fitted_height)
+        if self.width() != target_width:
+            self.resize(target_width, fitted_height)
 
     def set_refreshing(self, refreshing: bool) -> None:
         self.refresh_btn.setEnabled(not refreshing)
@@ -1624,11 +1671,7 @@ class UsageWidget(QWidget):
             self.cadence_label.setToolTip("")
             return
         remaining = _format_countdown(self._next_refresh_at)
-        text = (
-            f"· {self._refresh_mode} next {remaining}"
-            if self.width() >= FULL_CADENCE_MIN_WIDTH
-            else remaining
-        )
+        text = f"· {self._refresh_mode} next {remaining}"
         self.cadence_label.setText(text)
         self._collapsed_cadence_label.setText(remaining)
         interval = self._refresh_interval_minutes or 0
@@ -1775,7 +1818,7 @@ class UsageWidget(QWidget):
         if self._collapsed == collapsed:
             return
         if collapsed:
-            self._save_expanded_size(manual=self._manually_resized)
+            self._save_expanded_width()
         self._collapsed = collapsed
         self._config.window.collapsed = collapsed
         self._config.save()
@@ -1789,23 +1832,20 @@ class UsageWidget(QWidget):
         self._resize_footer.setVisible(not self._collapsed)
         self._refresh_collapsed_summary()
         if self._collapsed:
-            self.setFixedWidth(WINDOW_WIDTH)
-            self.setMinimumHeight(COLLAPSED_MIN_HEIGHT)
-            self.setMaximumHeight(WINDOW_MAX_HEIGHT)
             self._do_refit_height()
         else:
-            self.setMinimumWidth(WINDOW_MIN_WIDTH)
+            # Release compact mode's fixed size, restore the saved width, and
+            # let visible content determine both the width floor and height.
             self.setMaximumWidth(WINDOW_MAX_WIDTH)
-            self.setMinimumHeight(WINDOW_MIN_HEIGHT)
+            self.setMinimumWidth(WINDOW_WIDTH)
             self.setMaximumHeight(WINDOW_MAX_HEIGHT)
-            if self._manually_resized:
-                self.resize(
-                    self._config.window.width,
-                    _clamp_height(self._config.window.height),
-                )
-                self._do_refit_height()
-            else:
-                self._refit_height()
+            self.setMinimumHeight(WINDOW_MIN_HEIGHT)
+            target_width = max(
+                WINDOW_WIDTH,
+                min(self._config.window.width, WINDOW_MAX_WIDTH),
+            )
+            self.resize(target_width, WINDOW_MIN_HEIGHT)
+            self._refit_height()
         if save:
             self._config.window.collapsed = self._collapsed
             self._config.save()
@@ -1917,8 +1957,7 @@ class UsageWidget(QWidget):
 
     def eventFilter(self, watched, event):  # noqa: N802
         if watched is self._resize_grip and event.type() == QEvent.Type.MouseButtonRelease:
-            self._manually_resized = True
-            self._save_expanded_size(manual=True)
+            self._save_expanded_width()
             self._do_refit_height()
         return super().eventFilter(watched, event)
 
@@ -1927,14 +1966,17 @@ class UsageWidget(QWidget):
         if hasattr(self, "cadence_label"):
             self._refresh_cadence_label()
 
-    def _save_expanded_size(self, *, manual: bool) -> None:
+    def _save_expanded_width(self) -> None:
         if self._collapsed:
             return
         self._config.window.width = max(
-            WINDOW_MIN_WIDTH, min(self.width(), WINDOW_MAX_WIDTH)
+            WINDOW_WIDTH,
+            min(self.width(), WINDOW_MAX_WIDTH),
         )
+        # Retain these serialized fields for compatibility with older configs,
+        # but height is no longer user-controlled or restored.
         self._config.window.height = _clamp_height(self.height())
-        self._config.window.manually_resized = manual
+        self._config.window.manually_resized = False
         self._config.save()
 
     def show_as_popover(self, anchor_global_x: int, anchor_global_y: int) -> None:
@@ -1990,13 +2032,13 @@ class UsageWidget(QWidget):
         self._config.window.x = self.x()
         self._config.window.y = self.y()
         self._config.window.collapsed = self._collapsed
-        self._save_expanded_size(manual=self._manually_resized)
+        self._save_expanded_width()
         self._config.save()
 
     def closeEvent(self, event):  # noqa: N802
         self._do_refit_height()
         self._config.window.collapsed = self._collapsed
-        self._save_expanded_size(manual=self._manually_resized)
+        self._save_expanded_width()
         self._config.save()
         self.closed.emit()
         super().closeEvent(event)

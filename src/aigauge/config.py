@@ -78,6 +78,8 @@ class WindowState(BaseModel):
     x: int | None = None
     y: int | None = None
     width: int = Field(default=WINDOW_WIDTH, ge=WINDOW_MIN_WIDTH, le=WINDOW_MAX_WIDTH)
+    # Legacy 0.7.0 fields retained for config compatibility. Expanded height is
+    # content-owned; only width is restored or changed by the resize grip.
     height: int = Field(default=220, ge=WINDOW_MIN_HEIGHT, le=WINDOW_MAX_HEIGHT)
     manually_resized: bool = False
     collapsed: bool = False

@@ -1,7 +1,7 @@
 from datetime import datetime, timedelta
 
 import pytest
-from PyQt6.QtCore import QSize, Qt
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import QApplication
 
 from aigauge.config import BrowserAccount, ColorThresholds, Config
@@ -541,7 +541,7 @@ def test_secondary_opencode_collapsed_tile_shows_rolling_and_monthly(qtbot):
     assert [item.code.text() for item in tile._compact_metrics] == ["R", "M"]  # noqa: SLF001
     assert [item.pct.text() for item in tile._compact_metrics] == ["13%", "7%"]  # noqa: SLF001
 
-def test_refresh_state_shows_next_refresh_countdown(qtbot):
+def test_expanded_refresh_state_shows_full_next_refresh_status(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -551,11 +551,11 @@ def test_refresh_state_shows_next_refresh_countdown(qtbot):
         next_at=datetime.now() + timedelta(minutes=3, seconds=5),
     )
 
-    assert widget.cadence_label.text() == "4m"
+    assert widget.cadence_label.text() == "· active next 4m"
     assert "5 min cadence" in widget.cadence_label.toolTip()
 
 
-def test_refresh_state_shows_now_when_next_refresh_is_due(qtbot):
+def test_expanded_refresh_state_shows_full_status_when_refresh_is_due(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -565,53 +565,106 @@ def test_refresh_state_shows_now_when_next_refresh_is_due(qtbot):
         next_at=datetime.now() - timedelta(seconds=1),
     )
 
-    assert widget.cadence_label.text() == "now"
+    assert widget.cadence_label.text() == "· idle next now"
 
 
-def test_widget_uses_fixed_width_despite_extreme_saved_size(qtbot):
+def test_widget_clamps_saved_width_and_ignores_saved_height(qtbot):
     config = Config()
     config.window.width = 5000
-    config.window.height = 2
+    config.window.height = 700
+    config.window.manually_resized = True
 
     widget = UsageWidget(config)
     qtbot.addWidget(widget)
+    widget._do_refit_height()  # noqa: SLF001
 
-    assert widget.width() == 340
-    assert widget.height() >= 80
+    assert widget.width() == 900
+    assert widget.height() != 700
+    assert widget.minimumHeight() == widget.maximumHeight() == widget.height()
 
 
-def test_expanded_widget_can_be_resized_and_persists_size(qtbot):
+def test_expanded_widget_resizes_width_only_and_persists_width(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
-    widget._manually_resized = True  # noqa: SLF001
-    widget.resize(520, 360)
-    widget._save_expanded_size(manual=True)  # noqa: SLF001
+    widget._do_refit_height()  # noqa: SLF001
+    fitted_height = widget.height()
+
+    widget.resize(520, fitted_height + 300)
+    widget._save_expanded_width()  # noqa: SLF001
 
     assert widget.width() == 520
-    assert widget.height() == 360
+    assert widget.height() == fitted_height
     assert widget._config.window.width == 520  # noqa: SLF001
-    assert widget._config.window.height == 360  # noqa: SLF001
-    assert widget._config.window.manually_resized is True  # noqa: SLF001
+    assert widget._config.window.manually_resized is False  # noqa: SLF001
 
     widget.set_collapsed(True)
     assert widget.width() == 340
     widget.set_collapsed(False)
-    assert widget.size() == QSize(520, 360)
+    widget._do_refit_height()  # noqa: SLF001
+    assert widget.width() == 520
+    assert widget.height() == fitted_height
 
 
-def test_expanded_widget_cannot_resize_below_fitted_contents(qtbot):
+def test_expanded_widget_stops_at_visible_content_width(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
-    widget.ensure_tile("claude", "Claude")
-    widget.update_snapshot(_ok_snapshot("claude"), "Claude")
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="opencode_go",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Rolling", 13.0, reset_label="2h 13m"),
+                UsageMetric("Weekly", 5.0, reset_label="23h 58m"),
+                UsageMetric("Monthly", 2.0, reset_label="30.9d"),
+            ],
+        ),
+        "OpenCode",
+    )
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="openrouter",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric(
+                    "Balance $51.39 left · Spend today $3.34 / month $95.11"
+                )
+            ],
+        ),
+        "OpenRouter",
+    )
     widget._do_refit_height()  # noqa: SLF001
-    fitted_height = widget.minimumHeight()
+    content_width = widget.minimumWidth()
+    fitted_height = widget.height()
 
-    widget.resize(100, 20)
+    assert content_width >= 400
+    widget.resize(100, fitted_height + 300)
+    assert widget.width() == content_width
+    assert widget.height() == fitted_height
 
-    assert widget.width() >= 280
-    assert widget.height() >= fitted_height
 
+def test_expanded_height_caps_and_scrolls_when_content_exceeds_screen(
+    qtbot,
+    monkeypatch,
+):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    for index in range(20):
+        provider = f"provider-{index}"
+        widget.update_snapshot(
+            UsageSnapshot(
+                provider=provider,
+                status=SnapshotStatus.OK,
+                metrics=[UsageMetric("Usage", 25.0)],
+            ),
+            f"Provider {index}",
+        )
+    monkeypatch.setattr(widget, "_available_expanded_height", lambda: 180)
+    widget.show()
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+
+    assert widget.height() == 180
+    assert widget._tile_scroll.verticalScrollBar().maximum() > 0  # noqa: SLF001
 
 def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
     widget = UsageWidget(Config())
@@ -626,19 +679,18 @@ def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
     )
 
 
-def test_header_cadence_shortens_at_narrow_width(qtbot):
+def test_expanded_header_cannot_shrink_below_readable_width(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
     next_at = datetime.now() + timedelta(minutes=4)
     widget.set_refresh_state(True, 5, next_at)
-
-    widget.resize(360, widget.height())
-    widget._refresh_cadence_label()  # noqa: SLF001
-    assert "active next" in widget.cadence_label.text()
+    widget._do_refit_height()  # noqa: SLF001
 
     widget.resize(320, widget.height())
     widget._refresh_cadence_label()  # noqa: SLF001
-    assert widget.cadence_label.text() == "4m"
+
+    assert widget.width() >= 400
+    assert "active next" in widget.cadence_label.text()
 
 
 def test_metric_row_clamps_overage_fill_and_uses_account_threshold_color(qtbot):
@@ -946,7 +998,12 @@ def test_metric_row_right_aligns_split_note_metric(qtbot):
 
     assert row.label.text() == "Balance $11.50 left"
     assert row.reset.text() == "Spend today $0.00 / month $0.00"
-    assert row.reset.width() > 92
+    assert row.reset.width() >= (
+        row.reset.fontMetrics().horizontalAdvance(row.reset.text()) + 4
+    )
+    assert row.label.minimumWidth() >= (
+        row.label.fontMetrics().horizontalAdvance(row.label.text()) + 4
+    )
     assert row.reset.toolTip() == ""
     assert "#d1d5db" in row.reset.styleSheet()
     assert row.bar.isHidden()

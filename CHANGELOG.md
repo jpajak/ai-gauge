@@ -8,14 +8,14 @@
 
 - Added support for multiple named OpenCode subscriptions. Each account has its own workspace Go usage URL, browser profile, saved session, gauge colors, tile, snapshot identity, and sign-in controls. Existing single-OpenCode configurations migrate automatically without losing their URL or colors.
 - Added distinct title-bar controls in both full and compact views: down/up switches between full and compact layouts, the dash hides the widget to the system tray, and ✕ quits AI Gauge completely.
-- Added expanded-window resizing with a dedicated bottom-right grip. The chosen size persists across launches, compact mode retains its fitted size, and expanding restores the saved dimensions.
+- Added expanded-window horizontal resizing with a dedicated bottom-right grip. The chosen width persists across launches, compact mode retains its fitted size, and expanded height follows visible content automatically.
 - Added per-account gauge customization for Claude, Codex, and OpenCode accounts, plus Copilot and OpenRouter. Users can tune three percentage cutoffs and choose all four band colors, including the final 95%+ band; live range labels and **Reset defaults** keep the controls understandable. Supplied defaults preserve the existing behavior: green below 60%, yellow at 60–79%, orange at 80–94%, and red at 95%+.
 - Added the ability to remove the original Claude, Codex, or OpenCode account as well as secondary accounts. Empty provider sections retain their add-account action, and removed original accounts stay removed after restart.
 
 ### Changed
 
-- The expanded widget can grow without clipping its normal content layout. Its minimum height follows the currently rendered provider rows, while its responsive minimum width permits a tighter presentation.
-- Header refresh cadence is responsive: narrower windows show only the countdown (for example, `4m`), while wider windows show the full `active next 4m` or `idle next ...` status.
+- The expanded widget can grow without clipping its normal content layout. Its height follows the currently rendered provider rows and is capped to the available screen with vertical scrolling when necessary. Its minimum width now preserves complete metric labels, gauges, percentages, reset times, and summary values instead of permitting clipped text.
+- The expanded header shows the full refresh cadence, while compact mode shows only the countdown.
 - Percentage and reset-time columns now size to their actual text instead of reserving fixed blank space between values and day labels.
 - Settings spin boxes and decimal controls now use explicit, high-contrast arrow buttons in the dark theme, including the account-specific gauge-color dialog.
 

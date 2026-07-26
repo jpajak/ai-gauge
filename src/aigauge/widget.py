@@ -42,14 +42,18 @@ from PyQt6.QtWidgets import (
 
 from . import __version__
 from .config import (
+    ColorThresholds,
     Config,
     WINDOW_COLLAPSED_HEIGHT,
     WINDOW_MAX_HEIGHT,
+    WINDOW_MAX_WIDTH,
     WINDOW_MIN_HEIGHT,
+    WINDOW_MIN_WIDTH,
     WINDOW_WIDTH,
     browser_account,
     display_name_for_account,
 )
+from .gauge import color_for_percent, thresholds_for_provider
 from .models import SnapshotStatus, UsageSnapshot
 from .ratio import (
     MIN_SAMPLES,
@@ -59,11 +63,13 @@ from .ratio import (
 )
 
 ROW_BAR_HEIGHT = 8
+MIN_GAUGE_WIDTH = 120
 PACE_TICK_OVERHANG = 2
 CHIP_NOTCH_HEIGHT = 4
 CHIP_NOTCH_HALF_WIDTH = 3.5
 PROVIDER_ORDER = ("claude", "codex", "opencode_go", "copilot", "openrouter")
 COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_HEIGHT
+EXPANDED_MIN_WIDTH = WINDOW_MIN_WIDTH
 
 
 def _clamp_height(value: int) -> int:
@@ -75,6 +81,8 @@ def _provider_family(provider: str) -> str:
         return "claude"
     if provider == "codex" or provider.startswith("codex-"):
         return "codex"
+    if provider == "opencode_go" or provider.startswith("opencode_go-"):
+        return "opencode_go"
     return provider
 
 
@@ -177,33 +185,13 @@ def _pace_tooltip_line(
     return f"Time elapsed: {pace:.0f}% ({remaining})"
 
 
-# Severity bands are shared between the expanded row bars and the compact
-# chips. Each band pairs a bright tone (used in row bars, where the percent
-# label sits next to the bar) with a darker tone of the same hue family
-# (used in chips, where text sits on top of the fill). Same band → same
-# color name in both views.
-def _color_for_percent(p: float | None) -> str:
-    if p is None:
-        return "#6b7280"
-    if p >= 95:
-        return "#ef4444"  # red-500
-    if p >= 80:
-        return "#f97316"  # orange-500
-    if p >= 60:
-        return "#f59e0b"  # amber-500
-    return "#22c55e"  # green-500
-
-
-def _chip_fill_for_percent(p: float | None) -> str:
+def _chip_fill_for_percent(
+    p: float | None, colors: ColorThresholds | None = None
+) -> str:
     if p is None:
         return "#374151"
-    if p >= 95:
-        return "#b91c1c"  # red-700
-    if p >= 80:
-        return "#c2410c"  # orange-700
-    if p >= 60:
-        return "#b45309"  # amber-700
-    return "#15803d"  # green-700
+    color = color_for_percent(p, colors)
+    return QColor(color).darker(135).name()
 
 
 def _format_summary_percent(p: float | None) -> str:
@@ -412,13 +400,14 @@ class _SummaryChip(QWidget):
         percent: float | None,
         kind: str,
         pace: float | None = None,
+        colors: ColorThresholds | None = None,
     ) -> None:
         """kind ∈ {"ok", "loading", "auth", "error"}."""
         self._text = text
         self._pace_pct = max(0.0, min(100.0, pace)) if pace is not None else None
         if kind == "ok":
             self._percent = percent
-            self._fill_color = QColor(_chip_fill_for_percent(percent))
+            self._fill_color = QColor(_chip_fill_for_percent(percent, colors))
         elif kind == "auth":
             self._percent = 100.0
             self._fill_color = self._AUTH_FILL
@@ -565,8 +554,13 @@ class _PaceProgressBar(QWidget):
 class _MetricRow(QWidget):
     """A single label / bar / pct / reset row."""
 
-    def __init__(self, parent: QWidget | None = None):
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        colors: ColorThresholds | None = None,
+    ):
         super().__init__(parent)
+        self._colors = colors or ColorThresholds()
         self.label = QLabel()
         self.label.setStyleSheet("color: #d1d5db; font-size: 11px;")
         self.label.setMinimumWidth(70)
@@ -577,29 +571,107 @@ class _MetricRow(QWidget):
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
         self.bar.setFixedHeight(ROW_BAR_HEIGHT + PACE_TICK_OVERHANG * 2)
+        self.bar.setMinimumWidth(MIN_GAUGE_WIDTH)
         self.bar.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
         self.pct = QLabel("--")
         self.pct.setStyleSheet("color: #f3f4f6; font-size: 11px; font-weight: 600;")
-        self.pct.setFixedWidth(34)
+        self.pct.setMinimumWidth(0)
         self.pct.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
         self.reset = QLabel("")
         self.reset.setStyleSheet("color: #9ca3af; font-size: 10px;")
-        self.reset.setFixedWidth(58)
+        self.reset.setMinimumWidth(0)
         self.reset.setAlignment(
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 1, 0, 1)
-        layout.setSpacing(6)
-        layout.addWidget(self.label)
-        layout.addWidget(self.bar, 1)
-        layout.addWidget(self.pct)
-        layout.addWidget(self.reset)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 1, 0, 1)
+        self._layout.setSpacing(1)
+        self._main_layout = QHBoxLayout()
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self._main_layout.setSpacing(6)
+        self._main_layout.addWidget(self.label)
+        self._main_layout.addWidget(self.bar, 1)
+        self._main_layout.addWidget(self.pct)
+        self._main_layout.addWidget(self.reset)
+        self._layout.addLayout(self._main_layout)
+        self._split_note = False
+        self._available_width = WINDOW_MAX_WIDTH
+        self._reset_natural_width = 0
+        self._reset_stacked = False
+
+    def set_available_width(self, available_width: int) -> bool:
+        self._available_width = max(0, available_width)
+        return self._sync_responsive_layout()
+
+    def _inline_minimum_width(self) -> int:
+        widgets = [self.label, self.bar, self.pct, self.reset]
+        visible = [widget for widget in widgets if not widget.isHidden()]
+        widths = []
+        for widget in visible:
+            if widget is self.reset and self._split_note:
+                widths.append(self._reset_natural_width)
+            else:
+                widths.append(widget.minimumWidth())
+        spacing = max(0, len(visible) - 1) * self._main_layout.spacing()
+        return sum(widths) + spacing
+
+    def _sync_responsive_layout(self) -> bool:
+        should_stack_reset = (
+            self._split_note
+            and (
+                self.label.minimumWidth()
+                + self._reset_natural_width
+                + self._main_layout.spacing()
+            )
+            > self._available_width
+        )
+        changed = False
+
+        if should_stack_reset != self._reset_stacked:
+            self._main_layout.removeWidget(self.reset)
+            self._layout.removeWidget(self.reset)
+            if should_stack_reset:
+                self.reset.setAlignment(
+                    Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+                )
+                self._layout.addWidget(self.reset)
+            else:
+                self.reset.setAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                self._main_layout.addWidget(self.reset)
+            self._reset_stacked = should_stack_reset
+            changed = True
+
+        if self._split_note and self._reset_stacked:
+            wrapped_width = max(1, self._available_width)
+            if (
+                not self.reset.wordWrap()
+                or self.reset.maximumWidth() != wrapped_width
+            ):
+                self.reset.setWordWrap(True)
+                self.reset.setMinimumWidth(0)
+                self.reset.setMaximumWidth(wrapped_width)
+                changed = True
+        elif self._split_note:
+            if (
+                self.reset.wordWrap()
+                or self.reset.width() != self._reset_natural_width
+            ):
+                self.reset.setWordWrap(False)
+                self.reset.setFixedWidth(self._reset_natural_width)
+                changed = True
+
+        if changed:
+            self._layout.invalidate()
+            self._layout.activate()
+            self.updateGeometry()
+        return changed
 
     def set_metric(
         self,
@@ -620,6 +692,8 @@ class _MetricRow(QWidget):
             and reset_label is None
             and " · " in label
         )
+        self._split_note = split_note
+        self.reset.setWordWrap(False)
         if split_note:
             left, right = label.split(" · ", 1)
             self.label.setText(left)
@@ -627,6 +701,8 @@ class _MetricRow(QWidget):
         else:
             self.label.setText(label)
             self.reset.setStyleSheet("color: #9ca3af; font-size: 10px;")
+        label_width = self.label.fontMetrics().horizontalAdvance(self.label.text()) + 4
+        self.label.setMinimumWidth(max(70, label_width))
         self.setToolTip(note or "")
         self._resets_at = resets_at
         self._window = window
@@ -642,11 +718,17 @@ class _MetricRow(QWidget):
             self.pct.setVisible(False)
             self.bar.setVisible(has_timeline)
         else:
-            self.bar.setValue(int(round(percent)))
+            # QProgressBar treats an above-maximum value as out of range and
+            # may draw no chunk at all. Keep the label truthful (e.g. 110%)
+            # while clamping only the visual fill to a complete bar.
+            self.bar.setValue(int(round(max(0.0, min(percent, 100.0)))))
             self.pct.setText(f"{percent:.0f}%")
+            self.pct.setFixedWidth(
+                self.pct.fontMetrics().horizontalAdvance(self.pct.text()) + 2
+            )
             self.pct.setVisible(True)
             self.bar.setVisible(True)
-        color = _color_for_percent(percent)
+        color = color_for_percent(percent, self._colors)
         self.bar.setStyleSheet(
             f"QProgressBar {{ background:#374151; border:none; border-radius:3px; }}"
             f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
@@ -655,12 +737,16 @@ class _MetricRow(QWidget):
             self.reset.setText(right)
             self.reset.setVisible(True)
             right_width = self.reset.fontMetrics().horizontalAdvance(right) + 4
-            self.reset.setFixedWidth(max(92, min(190, right_width)))
+            self._reset_natural_width = max(92, right_width)
+            self.reset.setFixedWidth(self._reset_natural_width)
             self.reset.setToolTip("")
         else:
             self.reset.setText(rel)
             self.reset.setVisible(bool(rel))
-            self.reset.setFixedWidth(58)
+            self._reset_natural_width = (
+                self.reset.fontMetrics().horizontalAdvance(rel) + 2 if rel else 0
+            )
+            self.reset.setFixedWidth(self._reset_natural_width)
         if reset_label:
             self.reset.setToolTip(note or reset_label)
         elif resets_at:
@@ -673,6 +759,7 @@ class _MetricRow(QWidget):
             self.bar.setToolTip((tooltip + "\n\n" if tooltip else "") + pace_line)
         else:
             self.bar.setToolTip(note or "")
+        self._sync_responsive_layout()
 
     def refresh_pace(self) -> None:
         self.bar.set_pace(_time_elapsed_percent(self._resets_at, self._window))
@@ -683,7 +770,12 @@ class _MetricRow(QWidget):
         Qt animates a stripe inside the chunk when ``range == (0, 0)``; the
         bar still respects the QSS chunk color, so we get a muted shimmer.
         """
+        self._split_note = False
+        self._reset_natural_width = 0
+        self.reset.setWordWrap(False)
         self.label.setText(label)
+        label_width = self.label.fontMetrics().horizontalAdvance(label) + 4
+        self.label.setMinimumWidth(max(70, label_width))
         self.setToolTip("")
         self._resets_at = None
         self._window = None
@@ -697,8 +789,11 @@ class _MetricRow(QWidget):
         self.pct.setVisible(True)
         self.reset.setVisible(True)
         self.pct.setText("")
+        self.pct.setFixedWidth(0)
         self.reset.setText("")
+        self.reset.setFixedWidth(0)
         self.reset.setToolTip("")
+        self._sync_responsive_layout()
 
 
 
@@ -718,6 +813,7 @@ class _CompactMetric(QWidget):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.code = QLabel("")
         self.code.setStyleSheet("color:#d1d5db; font-size:10px; font-weight:700;")
         self.code.setFixedWidth(10)
@@ -727,6 +823,8 @@ class _CompactMetric(QWidget):
         self.bar.setRange(0, 100)
         self.bar.setTextVisible(False)
         self.bar.setFixedSize(30, 6)
+        self.bar.setSizePolicy(QSizePolicy.Policy.Fixed, QSizePolicy.Policy.Fixed)
+        self._bar_expanding = False
 
         self.pct = QLabel("--")
         self.pct.setStyleSheet("color:#f3f4f6; font-size:10px; font-weight:600;")
@@ -746,6 +844,25 @@ class _CompactMetric(QWidget):
         layout.addWidget(self.pct)
         layout.addWidget(self.reset)
 
+    def set_bar_expanding(self, expanding: bool) -> None:
+        if self._bar_expanding == expanding:
+            return
+        self._bar_expanding = expanding
+        if expanding:
+            self.bar.setMinimumWidth(30)
+            self.bar.setMaximumWidth(16777215)
+            self.bar.setSizePolicy(
+                QSizePolicy.Policy.Expanding,
+                QSizePolicy.Policy.Fixed,
+            )
+        else:
+            self.bar.setFixedWidth(30)
+            self.bar.setSizePolicy(
+                QSizePolicy.Policy.Fixed,
+                QSizePolicy.Policy.Fixed,
+            )
+        self.updateGeometry()
+
     def set_metric(self, metric, *, show_reset: bool = True) -> None:
         percent = metric.percent_used
         reset = metric.reset_label if metric.reset_label is not None else _format_relative(metric.resets_at)
@@ -754,7 +871,7 @@ class _CompactMetric(QWidget):
         self.reset.setText(reset if show_reset else "")
         self.reset.setVisible(show_reset and bool(reset))
         self.bar.setValue(0 if percent is None else int(round(percent)))
-        color = _color_for_percent(percent)
+        color = color_for_percent(percent)
         self.bar.setStyleSheet(
             f"QProgressBar {{ background:#374151; border:none; border-radius:3px; }}"
             f"QProgressBar::chunk {{ background:{color}; border-radius:3px; }}"
@@ -765,6 +882,8 @@ class _CompactMetric(QWidget):
         if metric.note:
             tooltip += f"\n{metric.note}"
         self.setToolTip(tooltip)
+
+
 class _ProviderTile(QFrame):
     """A provider section: header line + N metric rows."""
 
@@ -773,9 +892,16 @@ class _ProviderTile(QFrame):
     ratio_history_requested = pyqtSignal(str)  # provider name (ratio label clicked)
     expanded_changed = pyqtSignal(str, bool)  # provider name, expanded
 
-    def __init__(self, provider: str, display_name: str, parent: QWidget | None = None):
+    def __init__(
+        self,
+        provider: str,
+        display_name: str,
+        colors: ColorThresholds | None = None,
+        parent: QWidget | None = None,
+    ):
         super().__init__(parent)
         self.provider = provider
+        self._colors = colors or ColorThresholds()
         self.setFrameShape(QFrame.Shape.NoFrame)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
 
@@ -832,10 +958,10 @@ class _ProviderTile(QFrame):
         self.expand_btn.setToolTip("Show top models")
         self.expand_btn.clicked.connect(self._on_expand_clicked)
 
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.addWidget(self.expand_btn)
-        header_row.addWidget(self.header)
+        self._header_row = QHBoxLayout()
+        self._header_row.setContentsMargins(0, 0, 0, 0)
+        self._header_row.addWidget(self.expand_btn)
+        self._header_row.addWidget(self.header)
 
         self._compact_metrics: list[_CompactMetric] = []
         self._compact_summary = QWidget(self)
@@ -845,11 +971,11 @@ class _ProviderTile(QFrame):
         self._compact_layout.setContentsMargins(4, 0, 0, 0)
         self._compact_layout.setSpacing(6)
         self._compact_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        header_row.addStretch(1)
-        header_row.addWidget(self._compact_summary)
-        header_row.addWidget(self.action_btn)
-        header_row.addWidget(self.ratio_label)
-        header_row.addWidget(self.status)
+        self._header_row.addStretch(1)
+        self._header_row.addWidget(self._compact_summary)
+        self._header_row.addWidget(self.action_btn)
+        self._header_row.addWidget(self.ratio_label)
+        self._header_row.addWidget(self.status)
 
         self._rows: list[_MetricRow] = []
         self._expanded = self._supports_compact_collapse()
@@ -861,7 +987,9 @@ class _ProviderTile(QFrame):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 4, 6, 4)
         self._layout.setSpacing(2)
-        self._layout.addLayout(header_row)
+        self._layout.addLayout(self._header_row)
+        self._available_width = WINDOW_MAX_WIDTH
+        self._compact_below_header = False
 
         # Refresh-in-progress dim. Animates between 1.0 and 0.55 so the user
         # sees a brief breath when refresh starts/completes instead of a snap.
@@ -876,6 +1004,109 @@ class _ProviderTile(QFrame):
         # Show skeleton state immediately so first launch isn't a blank tile.
         self.set_snapshot(None)
 
+    def _inline_compact_minimum_width(self) -> int:
+        widgets = [
+            self.expand_btn,
+            self.header,
+            self._compact_summary,
+            self.action_btn,
+            self.ratio_label,
+            self.status,
+        ]
+        visible = [widget for widget in widgets if not widget.isHidden()]
+        margins = self._layout.contentsMargins()
+        spacing = max(0, len(visible) - 1) * self._header_row.spacing()
+        widget_width = 0
+        for widget in visible:
+            if widget is self._compact_summary:
+                compact_margins = self._compact_layout.contentsMargins()
+                compact_spacing = max(
+                    0,
+                    len(self._compact_metrics) - 1,
+                ) * self._compact_layout.spacing()
+                widget_width += (
+                    compact_margins.left()
+                    + compact_margins.right()
+                    + compact_spacing
+                    + sum(
+                        item.minimumSizeHint().width()
+                        for item in self._compact_metrics
+                    )
+                )
+            else:
+                widget_width += widget.sizeHint().width()
+        return margins.left() + margins.right() + spacing + widget_width
+
+    def _row_available_width(self) -> int:
+        margins = self._layout.contentsMargins()
+        return max(
+            0,
+            self._available_width - margins.left() - margins.right(),
+        )
+
+    def minimum_inline_gauge_width(self) -> int:
+        """Width required to keep this provider's percentage gauges inline."""
+        gauge_width = max(
+            (
+                row._inline_minimum_width()
+                for row in self._rows
+                if not row.bar.isHidden() and not row.pct.isHidden()
+            ),
+            default=0,
+        )
+        if gauge_width == 0:
+            return 0
+        margins = self._layout.contentsMargins()
+        return gauge_width + margins.left() + margins.right()
+
+    def set_available_width(self, available_width: int) -> bool:
+        self._available_width = max(0, available_width)
+        should_wrap = (
+            not self._compact_summary.isHidden()
+            and self._inline_compact_minimum_width() > self._available_width
+        )
+        layout_changed = self._compact_below_header != should_wrap
+        if layout_changed:
+            self._header_row.removeWidget(self._compact_summary)
+            self._layout.removeWidget(self._compact_summary)
+            if should_wrap:
+                self._compact_summary.setSizePolicy(
+                    QSizePolicy.Policy.Expanding,
+                    QSizePolicy.Policy.Fixed,
+                )
+                self._compact_layout.setAlignment(Qt.AlignmentFlag.AlignVCenter)
+                self._layout.insertWidget(1, self._compact_summary)
+            else:
+                self._compact_summary.setSizePolicy(
+                    QSizePolicy.Policy.Fixed,
+                    QSizePolicy.Policy.Fixed,
+                )
+                self._compact_layout.setAlignment(
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+                )
+                self._header_row.insertWidget(3, self._compact_summary)
+            self._compact_below_header = should_wrap
+        for item in self._compact_metrics:
+            item.set_bar_expanding(self._compact_below_header)
+        rows_changed = False
+        row_width = self._row_available_width()
+        for row in self._rows:
+            rows_changed = row.set_available_width(row_width) or rows_changed
+        if layout_changed or rows_changed:
+            self._layout.invalidate()
+            self._layout.activate()
+            self.updateGeometry()
+        return layout_changed or rows_changed
+
+    def set_colors(self, colors: ColorThresholds) -> None:
+        if self._colors == colors:
+            return
+        self._colors = colors
+        for row in self._rows:
+            row._colors = colors
+        if self._latest_snapshot is not None:
+            self.set_snapshot(self._latest_snapshot)
+
     def _supports_compact_collapse(self) -> bool:
         return _provider_family(self.provider) in ("claude", "codex", "opencode_go")
 
@@ -885,7 +1116,7 @@ class _ProviderTile(QFrame):
             for metric in snapshot.metrics
             if metric.tag is None and metric.percent_used is not None
         ]
-        if self.provider == 'opencode_go':
+        if _provider_family(self.provider) == "opencode_go":
             return [
                 metric
                 for metric in metrics
@@ -908,6 +1139,7 @@ class _ProviderTile(QFrame):
             item.set_metric(metric, show_reset=show_reset)
             item.show()
         self._compact_summary.setVisible(bool(metrics))
+        self.set_available_width(self._available_width)
 
     def _hide_compact_metrics(self) -> None:
         self._compact_summary.setVisible(False)
@@ -1140,7 +1372,8 @@ class _ProviderTile(QFrame):
     ) -> None:
         # Grow / shrink the row pool to match
         while len(self._rows) < len(rows):
-            r = _MetricRow(self)
+            r = _MetricRow(self, self._colors)
+            r.set_available_width(self._row_available_width())
             self._rows.append(r)
             self._layout.addWidget(r)
         while len(self._rows) > len(rows):
@@ -1149,29 +1382,44 @@ class _ProviderTile(QFrame):
             r.hide()
             r.setParent(None)
             r.deleteLater()
-        grouped: dict[str, list[QLabel]] = {}
-        for row, (label, pct, reset, reset_label, note, window, tag) in zip(
+        for row, (label, pct, reset, reset_label, note, window, _tag) in zip(
             self._rows,
             rows,
         ):
             row.set_metric(label, pct, reset, reset_label, note, window)
-            if tag and pct is not None:
-                grouped.setdefault(tag, []).append(row.label)
-        for labels in grouped.values():
-            if len(labels) <= 1:
-                continue
-            max_w = max(
-                lbl.fontMetrics().horizontalAdvance(lbl.text()) for lbl in labels
-            )
-            for lbl in labels:
-                lbl.setFixedWidth(max_w + 4)
+        self._normalize_gauge_columns()
+        row_width = self._row_available_width()
+        for row in self._rows:
+            row.set_available_width(row_width)
         self._layout.invalidate()
         self.layout().activate()
         self.updateGeometry()
 
+    def _normalize_gauge_columns(self) -> None:
+        """Give comparable gauges one consistent scale within this provider."""
+        gauge_rows = [
+            row
+            for row in self._rows
+            if not row.bar.isHidden() and not row.pct.isHidden()
+        ]
+        if len(gauge_rows) <= 1:
+            return
+
+        label_width = max(row.label.minimumWidth() for row in gauge_rows)
+        percent_width = max(row.pct.width() for row in gauge_rows)
+        reset_width = max(row._reset_natural_width for row in gauge_rows)
+        for row in gauge_rows:
+            row.label.setFixedWidth(label_width)
+            row.pct.setFixedWidth(percent_width)
+            row.reset.setFixedWidth(reset_width)
+            # Reserve an empty reset column when another row has one so every
+            # bar still starts and ends at the same coordinates.
+            row.reset.setVisible(reset_width > 0)
+
     def _set_skeleton(self, labels: list[str]) -> None:
         while len(self._rows) < len(labels):
-            r = _MetricRow(self)
+            r = _MetricRow(self, self._colors)
+            r.set_available_width(self._row_available_width())
             self._rows.append(r)
             self._layout.addWidget(r)
         while len(self._rows) > len(labels):
@@ -1187,6 +1435,65 @@ class _ProviderTile(QFrame):
         self.updateGeometry()
 
 
+class _HorizontalResizeGrip(QWidget):
+    """Bottom-right handle that changes only its target window's width."""
+
+    resize_started = pyqtSignal()
+    resize_finished = pyqtSignal()
+
+    def __init__(self, target: QWidget, parent: QWidget | None = None):
+        super().__init__(parent)
+        self._target = target
+        self._start_global_x: int | None = None
+        self._start_width = 0
+        self.setFixedSize(14, 14)
+        self.setCursor(Qt.CursorShape.SizeHorCursor)
+        self.setToolTip("Drag to resize width")
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if event.button() != Qt.MouseButton.LeftButton:
+            super().mousePressEvent(event)
+            return
+        self._start_global_x = int(round(event.globalPosition().x()))
+        self._start_width = self._target.width()
+        self.resize_started.emit()
+        event.accept()
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if (
+            self._start_global_x is None
+            or not event.buttons() & Qt.MouseButton.LeftButton
+        ):
+            super().mouseMoveEvent(event)
+            return
+        delta = int(round(event.globalPosition().x())) - self._start_global_x
+        width = max(
+            self._target.minimumWidth(),
+            min(self._start_width + delta, self._target.maximumWidth()),
+        )
+        self._target.resize(width, self._target.height())
+        event.accept()
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:  # noqa: N802
+        if (
+            self._start_global_x is None
+            or event.button() != Qt.MouseButton.LeftButton
+        ):
+            super().mouseReleaseEvent(event)
+            return
+        self._start_global_x = None
+        self.resize_finished.emit()
+        event.accept()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        super().paintEvent(event)
+        painter = QPainter(self)
+        painter.setPen(QPen(QColor("#9ca3af"), 1))
+        edge = self.width() - 2
+        for offset in (4, 8, 12):
+            painter.drawLine(edge - offset, edge, edge, edge - offset)
+
+
 class UsageWidget(QWidget):
     """The compact always-on-top window."""
 
@@ -1197,6 +1504,7 @@ class UsageWidget(QWidget):
     ratio_history_requested = pyqtSignal(str)
     tile_expanded_changed = pyqtSignal(str, bool)
     activated_requested = pyqtSignal()
+    quit_requested = pyqtSignal()
     closed = pyqtSignal()
 
     def __init__(self, config: Config, parent: QWidget | None = None):
@@ -1207,7 +1515,9 @@ class UsageWidget(QWidget):
         self._config = config
         self._mouse_inside = False
         self._drag_offset: QPoint | None = None
-        self.setFixedWidth(WINDOW_WIDTH)
+        self._resizing_with_grip = False
+        self.setMinimumWidth(WINDOW_WIDTH)
+        self.setMaximumWidth(WINDOW_MAX_WIDTH)
         self.setAttribute(Qt.WidgetAttribute.WA_TranslucentBackground, False)
         # Background is drawn in paintEvent; no widget-level stylesheet — that
         # would cascade into child dialogs (Settings) and break their layout.
@@ -1221,13 +1531,17 @@ class UsageWidget(QWidget):
         self._refresh_mode: str | None = None
         self._refresh_interval_minutes: int | None = None
         self._next_refresh_at: datetime | None = None
+        self._cadence_full_text = ""
+        self._cadence_short_text = ""
         self._collapsed = config.window.collapsed
         self._always_on_top_suspensions = 0
 
         # Header bar
-        title = QLabel(f"AI Gauge {__version__}")
-        title.setToolTip(f"ai-gauge {__version__}")
-        title.setStyleSheet("color:#9ca3af; font-size:10px; font-weight:600;")
+        self.title_label = QLabel(f"AI Gauge {__version__}")
+        self.title_label.setToolTip(f"ai-gauge {__version__}")
+        self.title_label.setStyleSheet(
+            "color:#9ca3af; font-size:10px; font-weight:600;"
+        )
 
         self.cadence_label = QLabel("")
         self.cadence_label.setStyleSheet("color:#6b7280; font-size:10px;")
@@ -1240,14 +1554,17 @@ class UsageWidget(QWidget):
         self.refresh_btn.setIconSize(QSize(16, 16))
         self.refresh_btn.clicked.connect(self.refresh_requested.emit)
 
-        self.collapse_btn = self._mini_button("−", "Collapse to compact view")
+        self.collapse_btn = self._mini_button("▾", "Switch to compact view")
         self.collapse_btn.clicked.connect(lambda: self.set_collapsed(True))
 
         self.settings_btn = self._mini_button("⚙", "Settings")
         self.settings_btn.clicked.connect(self.settings_requested.emit)
 
-        self.close_btn = self._mini_button("✕", "Hide window")
-        self.close_btn.clicked.connect(self.hide)
+        self.hide_btn = self._mini_button("—", "Hide to system tray")
+        self.hide_btn.clicked.connect(self.hide)
+
+        self.close_btn = self._mini_button("✕", "Quit AI Gauge")
+        self.close_btn.clicked.connect(self.quit_requested.emit)
 
         self.age_label = QLabel("")
         self.age_label.setStyleSheet("color:#6b7280; font-size:10px;")
@@ -1255,13 +1572,14 @@ class UsageWidget(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(8, 4, 4, 2)
         header.setSpacing(4)
-        header.addWidget(title)
+        header.addWidget(self.title_label)
         header.addWidget(self.cadence_label)
         header.addStretch(1)
         header.addWidget(self.age_label)
         header.addWidget(self.refresh_btn)
         header.addWidget(self.collapse_btn)
         header.addWidget(self.settings_btn)
+        header.addWidget(self.hide_btn)
         header.addWidget(self.close_btn)
 
         self._header_widget = QWidget(self)
@@ -1279,8 +1597,14 @@ class UsageWidget(QWidget):
             Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
         )
 
-        self._expand_btn = self._mini_button("+", "Expand")
+        self._expand_btn = self._mini_button("▴", "Switch to full view")
         self._expand_btn.clicked.connect(lambda: self.set_collapsed(False))
+
+        self._collapsed_hide_btn = self._mini_button("—", "Hide to system tray")
+        self._collapsed_hide_btn.clicked.connect(self.hide)
+
+        self._collapsed_close_btn = self._mini_button("✕", "Quit AI Gauge")
+        self._collapsed_close_btn.clicked.connect(self.quit_requested.emit)
 
         self._collapsed_widget = QWidget(self)
         self._collapsed_widget.setSizePolicy(
@@ -1305,6 +1629,8 @@ class UsageWidget(QWidget):
         self._collapsed_age_label.setStyleSheet("color:#6b7280; font-size:10px;")
         collapsed_header.addWidget(self._collapsed_age_label)
         collapsed_header.addWidget(self._expand_btn)
+        collapsed_header.addWidget(self._collapsed_hide_btn)
+        collapsed_header.addWidget(self._collapsed_close_btn)
 
         self._collapsed_summary_layout = QVBoxLayout()
         self._collapsed_summary_layout.setContentsMargins(0, 0, 0, 0)
@@ -1352,14 +1678,22 @@ class UsageWidget(QWidget):
         outer.addWidget(self._tile_scroll)
         outer.setAlignment(Qt.AlignmentFlag.AlignTop)
 
-        # Height is layout-driven (refit on tile/snapshot changes); width is
-        # intentionally fixed because the frameless widget has no resize handle.
-        self.resize(
-            QSize(
-                WINDOW_WIDTH,
-                _clamp_height(config.window.height),
-            )
+        self._resize_footer = QWidget(self)
+        self._resize_footer.setFixedHeight(14)
+        resize_footer_layout = QHBoxLayout(self._resize_footer)
+        resize_footer_layout.setContentsMargins(0, 0, 1, 1)
+        resize_footer_layout.addStretch(1)
+        self._resize_grip = _HorizontalResizeGrip(self, self._resize_footer)
+        self._resize_grip.resize_started.connect(self._on_resize_started)
+        self._resize_grip.resize_finished.connect(self._on_resize_finished)
+        resize_footer_layout.addWidget(self._resize_grip)
+        outer.addWidget(self._resize_footer)
+
+        initial_width = max(
+            WINDOW_WIDTH,
+            min(config.window.width, WINDOW_MAX_WIDTH),
         )
+        self.resize(QSize(initial_width, WINDOW_MIN_HEIGHT))
         if config.window.x is not None and config.window.y is not None:
             self.move(QPoint(config.window.x, config.window.y))
             self._clamp_to_visible_screen()
@@ -1386,7 +1720,12 @@ class UsageWidget(QWidget):
 
     def ensure_tile(self, provider: str, display_name: str) -> _ProviderTile:
         if provider not in self._tiles:
-            tile = _ProviderTile(provider, display_name, self)
+            tile = _ProviderTile(
+                provider,
+                display_name,
+                self._colors_for(provider),
+                self,
+            )
             tile.sign_in_requested.connect(self.sign_in_requested.emit)
             tile.details_requested.connect(self.details_requested.emit)
             tile.ratio_history_requested.connect(self.ratio_history_requested.emit)
@@ -1398,18 +1737,24 @@ class UsageWidget(QWidget):
                 tile.set_expanded(False, emit=False)
             elif provider in (self._config.expanded_tiles or []):
                 tile.set_expanded(True, emit=False)
+            tile.set_available_width(self._available_tile_width())
             self._tiles[provider] = tile
             self._insert_tile_in_provider_order(provider, tile)
             self._refit_height()
         else:
             self._tiles[provider].header.setText(display_name)
+            self._tiles[provider].set_colors(self._colors_for(provider))
+            self._tiles[provider].set_available_width(self._available_tile_width())
         return self._tiles[provider]
+
+    def _colors_for(self, provider: str) -> ColorThresholds:
+        return thresholds_for_provider(self._config, provider)
 
     def _tile_sort_key(self, provider: str) -> tuple[int, int, str]:
         account_ids = [
             account.id
             for account in getattr(self._config, "browser_accounts", [])
-            if account.kind in ("claude", "codex")
+            if account.kind in ("claude", "codex", "opencode_go")
         ]
         if provider in account_ids:
             account = next(
@@ -1491,36 +1836,105 @@ class UsageWidget(QWidget):
         self._do_refit_height()
 
     def _refit_height(self) -> None:
-        """Resize the window vertically to match the layout's preferred height.
-
-        Width stays fixed. Deferred to the next event-loop tick so
-        Qt has flushed any pending tile add/remove or stylesheet updates first.
-        """
+        """Refit automatic height after content or responsive layout changes."""
         QTimer.singleShot(0, self._do_refit_height)
 
+    def _available_tile_width(self) -> int:
+        margins = self._tile_layout.contentsMargins()
+        return max(
+            0,
+            self.width() - margins.left() - margins.right() - 8,
+        )
+
+    def _minimum_expanded_width(self) -> int:
+        gauge_width = max(
+            (
+                tile.minimum_inline_gauge_width()
+                for tile in self._tiles.values()
+            ),
+            default=0,
+        )
+        if gauge_width:
+            margins = self._tile_layout.contentsMargins()
+            gauge_width += margins.left() + margins.right() + 8
+        return min(
+            WINDOW_MAX_WIDTH,
+            max(EXPANDED_MIN_WIDTH, gauge_width),
+        )
+
+    def _apply_responsive_layout(self) -> bool:
+        available_width = self._available_tile_width()
+        changed = False
+        for tile in self._tiles.values():
+            changed = tile.set_available_width(available_width) or changed
+        return changed
+
+    def _available_expanded_height(self) -> int:
+        screen = (
+            QApplication.screenAt(self.frameGeometry().center())
+            or self.screen()
+            or QApplication.primaryScreen()
+        )
+        if screen is None:
+            return WINDOW_MAX_HEIGHT
+        return max(
+            WINDOW_MIN_HEIGHT,
+            min(WINDOW_MAX_HEIGHT, screen.availableGeometry().height() - 8),
+        )
+
     def _do_refit_height(self) -> None:
+        if self._resizing_with_grip:
+            return
         if self._collapsed:
             target_height = max(
                 COLLAPSED_MIN_HEIGHT,
                 min(WINDOW_MAX_HEIGHT, self._collapsed_widget.sizeHint().height()),
             )
-            if self.height() != target_height or self.width() != WINDOW_WIDTH:
-                self.resize(WINDOW_WIDTH, target_height)
+            self.setFixedSize(WINDOW_WIDTH, target_height)
             return
+
+        # Release the collapsed/fitted constraints before measuring this pass.
+        self.setMaximumWidth(WINDOW_MAX_WIDTH)
+        minimum_width = self._minimum_expanded_width()
+        self.setMinimumWidth(minimum_width)
+        target_width = max(
+            minimum_width,
+            min(self.width(), WINDOW_MAX_WIDTH),
+        )
+        if self.width() != target_width:
+            self.resize(target_width, self.height())
+        self._apply_responsive_header()
+        self._apply_responsive_layout()
+
         self._tile_layout.invalidate()
         self._tile_container.updateGeometry()
         self._tile_scroll.updateGeometry()
         self.updateGeometry()
         self.layout().invalidate()
+        self.layout().activate()
         header_height = self._header_widget.sizeHint().height()
+        footer_height = self._resize_footer.sizeHint().height()
         tile_height = self._tile_container.sizeHint().height()
-        max_tile_height = max(40, WINDOW_MAX_HEIGHT - header_height)
-        self._tile_scroll.setFixedHeight(min(tile_height, max_tile_height))
-        target_height = _clamp_height(header_height + self._tile_scroll.height())
-        target_width = WINDOW_WIDTH
-        if target_height != self.height() or target_width != self.width():
-            self.resize(target_width, target_height)
-
+        height_limit = self._available_expanded_height()
+        max_tile_height = max(
+            40,
+            height_limit - header_height - footer_height,
+        )
+        fitted_tile_height = min(tile_height, max_tile_height)
+        fitted_height = max(
+            WINDOW_MIN_HEIGHT,
+            min(
+                height_limit,
+                header_height + fitted_tile_height + footer_height,
+            ),
+        )
+        self._tile_scroll.setFixedHeight(fitted_tile_height)
+        # Height is content-owned. Locking it also turns the corner grip into a
+        # width-only control and prevents both clipping and empty vertical space.
+        self.setFixedHeight(fitted_height)
+        if self.width() != target_width:
+            self.resize(target_width, fitted_height)
+        self._clamp_to_visible_screen()
 
     def set_refreshing(self, refreshing: bool) -> None:
         self.refresh_btn.setEnabled(not refreshing)
@@ -1556,15 +1970,68 @@ class UsageWidget(QWidget):
         self.age_label.setText(text)
         self._collapsed_age_label.setText(text)
 
+    def _apply_responsive_header(self) -> None:
+        self.title_label.setText(f"AI Gauge {__version__}")
+        self.age_label.setVisible(bool(self.age_label.text()))
+        self.cadence_label.setText(self._cadence_full_text)
+        self.cadence_label.setVisible(bool(self._cadence_full_text))
+        header_layout = self._header_widget.layout()
+        header_layout.setContentsMargins(8, 4, 4, 2)
+        header_layout.setSpacing(4)
+        header_layout.invalidate()
+        header_layout.activate()
+
+        # Progressively reduce secondary information only when the measured
+        # header no longer fits. Core controls always remain visible.
+        if (
+            not self.age_label.isHidden()
+            and header_layout.minimumSize().width() > self.width()
+        ):
+            self.age_label.hide()
+            header_layout.invalidate()
+            header_layout.activate()
+        if (
+            not self.cadence_label.isHidden()
+            and self._cadence_short_text
+            and header_layout.minimumSize().width() > self.width()
+        ):
+            self.cadence_label.setText(self._cadence_short_text)
+            header_layout.invalidate()
+            header_layout.activate()
+        if header_layout.minimumSize().width() > self.width():
+            self.title_label.setText("AI Gauge")
+            header_layout.invalidate()
+            header_layout.activate()
+        if (
+            not self.cadence_label.isHidden()
+            and header_layout.minimumSize().width() > self.width()
+        ):
+            self.cadence_label.hide()
+            header_layout.invalidate()
+            header_layout.activate()
+        if header_layout.minimumSize().width() > self.width():
+            header_layout.setContentsMargins(4, 4, 2, 2)
+            header_layout.setSpacing(2)
+            header_layout.invalidate()
+            header_layout.activate()
+        if header_layout.minimumSize().width() > self.width():
+            self.title_label.setText("AI")
+            header_layout.invalidate()
+            header_layout.activate()
+
     def _refresh_cadence_label(self) -> None:
         if self._refresh_mode is None or self._next_refresh_at is None:
+            self._cadence_full_text = ""
+            self._cadence_short_text = ""
             self.cadence_label.setText("")
             self.cadence_label.setToolTip("")
+            self._apply_responsive_header()
             return
         remaining = _format_countdown(self._next_refresh_at)
-        text = f"· {self._refresh_mode} next {remaining}"
-        self.cadence_label.setText(text)
-        self._collapsed_cadence_label.setText(text)
+        self._cadence_full_text = f"· {self._refresh_mode} next {remaining}"
+        self._cadence_short_text = remaining
+        self.cadence_label.setText(self._cadence_full_text)
+        self._collapsed_cadence_label.setText(remaining)
         interval = self._refresh_interval_minutes or 0
         tooltip = (
             f"In {self._refresh_mode} mode — {interval} min cadence. "
@@ -1575,6 +2042,7 @@ class UsageWidget(QWidget):
         color = "#9ca3af" if self._refresh_mode == "active" else "#6b7280"
         self.cadence_label.setStyleSheet(f"color:{color}; font-size:10px;")
         self._collapsed_cadence_label.setStyleSheet(f"color:{color}; font-size:10px;")
+        self._apply_responsive_header()
 
     def _session_summary_for(self, provider: str) -> str:
         display = display_name_for_account(self._config, provider)
@@ -1701,18 +2169,17 @@ class UsageWidget(QWidget):
             kind = "ok"
 
         chip = _SummaryChip()
-        chip.set_state(text, percent, kind, pace)
+        chip.set_state(text, percent, kind, pace, self._colors_for(provider))
         chip.setToolTip(tooltip)
         return chip
 
     def set_collapsed(self, collapsed: bool) -> None:
         if self._collapsed == collapsed:
             return
+        if collapsed:
+            self._save_expanded_width()
         self._collapsed = collapsed
         self._config.window.collapsed = collapsed
-        self._config.window.width = WINDOW_WIDTH
-        if not collapsed:
-            self._config.window.height = _clamp_height(self.height())
         self._config.save()
         self._apply_collapsed_state(save=False)
 
@@ -1721,17 +2188,25 @@ class UsageWidget(QWidget):
         self._header_widget.setVisible(not self._collapsed)
         self._tile_scroll.setVisible(not self._collapsed)
         self._tile_container.setVisible(not self._collapsed)
+        self._resize_footer.setVisible(not self._collapsed)
         self._refresh_collapsed_summary()
         if self._collapsed:
-            self.setFixedWidth(WINDOW_WIDTH)
-            self.setMinimumHeight(COLLAPSED_MIN_HEIGHT)
-            self.setMaximumHeight(WINDOW_MAX_HEIGHT)
             self._do_refit_height()
         else:
-            self.setFixedWidth(WINDOW_WIDTH)
-            self.setMinimumHeight(WINDOW_MIN_HEIGHT)
+            # Release compact mode's fixed size, restore the saved width, and
+            # let visible content determine both the width floor and height.
+            self.setMaximumWidth(WINDOW_MAX_WIDTH)
+            minimum_width = self._minimum_expanded_width()
+            self.setMinimumWidth(minimum_width)
             self.setMaximumHeight(WINDOW_MAX_HEIGHT)
+            self.setMinimumHeight(WINDOW_MIN_HEIGHT)
+            target_width = max(
+                minimum_width,
+                min(self._config.window.width, WINDOW_MAX_WIDTH),
+            )
+            self.resize(target_width, WINDOW_MIN_HEIGHT)
             self._refit_height()
+        self._clamp_to_visible_screen()
         if save:
             self._config.window.collapsed = self._collapsed
             self._config.save()
@@ -1841,6 +2316,34 @@ class UsageWidget(QWidget):
             self._apply_window_opacity()
         super().changeEvent(event)
 
+    def _on_resize_started(self) -> None:
+        self._resizing_with_grip = True
+
+    def _on_resize_finished(self) -> None:
+        # Keep height fixed for the drag, then apply responsive rows once the
+        # final width is known and the pointer no longer needs to follow them.
+        self._resizing_with_grip = False
+        self._do_refit_height()
+        self._save_expanded_width()
+
+    def resizeEvent(self, event):  # noqa: N802
+        super().resizeEvent(event)
+        if hasattr(self, "cadence_label"):
+            self._refresh_cadence_label()
+
+    def _save_expanded_width(self) -> None:
+        if self._collapsed:
+            return
+        self._config.window.width = max(
+            EXPANDED_MIN_WIDTH,
+            min(self.width(), WINDOW_MAX_WIDTH),
+        )
+        # Retain these serialized fields for compatibility with older configs,
+        # but height is no longer user-controlled or restored.
+        self._config.window.height = _clamp_height(self.height())
+        self._config.window.manually_resized = False
+        self._config.save()
+
     def show_as_popover(self, anchor_global_x: int, anchor_global_y: int) -> None:
         """Show the widget below ``(anchor_global_x, anchor_global_y)``.
 
@@ -1893,18 +2396,14 @@ class UsageWidget(QWidget):
         # Persist position
         self._config.window.x = self.x()
         self._config.window.y = self.y()
-        self._config.window.width = WINDOW_WIDTH
         self._config.window.collapsed = self._collapsed
-        if not self._collapsed:
-            self._config.window.height = _clamp_height(self.height())
+        self._save_expanded_width()
         self._config.save()
 
     def closeEvent(self, event):  # noqa: N802
         self._do_refit_height()
-        self._config.window.width = WINDOW_WIDTH
         self._config.window.collapsed = self._collapsed
-        if not self._collapsed:
-            self._config.window.height = _clamp_height(self.height())
+        self._save_expanded_width()
         self._config.save()
         self.closed.emit()
         super().closeEvent(event)

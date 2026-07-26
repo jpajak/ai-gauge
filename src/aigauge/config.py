@@ -16,8 +16,10 @@ KEYRING_GITHUB_PAT = "github-pat"
 KEYRING_OPENROUTER_KEY = "openrouter-key"
 KEYRING_OPENROUTER_MGMT_KEY = "openrouter-mgmt-key"
 WINDOW_WIDTH = 340
+WINDOW_MIN_WIDTH = 280
+WINDOW_MAX_WIDTH = 900
 WINDOW_MIN_HEIGHT = 80
-WINDOW_MAX_HEIGHT = 420
+WINDOW_MAX_HEIGHT = 900
 WINDOW_COLLAPSED_HEIGHT = 58
 
 # Per-provider session cookie names (HttpOnly cookies you can't read via JS).
@@ -49,6 +51,9 @@ COOKIE_DOMAINS = {
     "codex": ".chatgpt.com",
     "opencode_go": ".opencode.ai",
 }
+OPENCODE_GO_USAGE_URL = (
+    "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go"
+)
 
 
 def app_data_dir() -> Path:
@@ -72,8 +77,11 @@ def config_path() -> Path:
 class WindowState(BaseModel):
     x: int | None = None
     y: int | None = None
-    width: int = WINDOW_WIDTH
+    width: int = Field(default=WINDOW_WIDTH, ge=WINDOW_MIN_WIDTH, le=WINDOW_MAX_WIDTH)
+    # Legacy 0.7.0 fields retained for config compatibility. Expanded height is
+    # content-owned; only width is restored or changed by the resize grip.
     height: int = Field(default=220, ge=WINDOW_MIN_HEIGHT, le=WINDOW_MAX_HEIGHT)
+    manually_resized: bool = False
     collapsed: bool = False
     always_on_top: bool = True
     opacity: float = Field(default=0.8, ge=0.3, le=1.0)
@@ -93,27 +101,43 @@ class ProviderToggles(BaseModel):
     opencode_go: bool = False
 
 
+class ColorThresholds(BaseModel):
+    # Inclusive integer bands matching AI Gauge's original severity behavior:
+    # green below 60%, yellow at 60-79%, orange at 80-94%, red at 95%+.
+    green_max: int = Field(default=59, ge=0, le=100)
+    yellow_max: int = Field(default=79, ge=0, le=100)
+    orange_max: int = Field(default=94, ge=0, le=100)
+    green_color: str = "#22c55e"
+    yellow_color: str = "#f59e0b"
+    orange_color: str = "#f97316"
+    red_color: str = "#ef4444"
+
+
 class BrowserAccount(BaseModel):
     id: str
     kind: str
     name: str | None = None
     enabled: bool = True
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
+    usage_url: str | None = None
 
 
 class CopilotConfig(BaseModel):
     username: str | None = None
     billing_org: str | None = None
     monthly_quota: int = Field(default=1500, ge=1)  # AI credits; Pro=1500
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
 class OpenRouterConfig(BaseModel):
     daily_budget: float | None = Field(default=None, ge=0)
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
 class OpenCodeGoConfig(BaseModel):
-    usage_url: str = (
-        "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go"
-    )
+    # Retained for migrating pre-0.7.0 singleton OpenCode configurations.
+    usage_url: str = OPENCODE_GO_USAGE_URL
+    colors: ColorThresholds = Field(default_factory=ColorThresholds)
 
 
 class Config(BaseModel):
@@ -125,8 +149,14 @@ class Config(BaseModel):
         default_factory=lambda: [
             BrowserAccount(id="claude", kind="claude"),
             BrowserAccount(id="codex", kind="codex"),
+            BrowserAccount(
+                id="opencode_go",
+                kind="opencode_go",
+                usage_url=OPENCODE_GO_USAGE_URL,
+            ),
         ]
     )
+    browser_accounts_version: int = 2
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
     opencode_go: OpenCodeGoConfig = Field(default_factory=OpenCodeGoConfig)
@@ -178,36 +208,49 @@ class Config(BaseModel):
                 },
             ]
         elif isinstance(data.get("browser_accounts"), list):
-            accounts = [
+            # An explicit list is authoritative. In particular, do not restore
+            # account rows after a user removes them post-migration.
+            data["browser_accounts"] = [
                 item for item in data["browser_accounts"] if isinstance(item, dict)
             ]
-            ids = {str(item.get("id") or "") for item in accounts}
-            if "claude" not in ids:
-                accounts.insert(
-                    0,
-                    {
-                        "id": "claude",
-                        "kind": "claude",
-                        "name": None,
-                        "enabled": bool(providers.get("claude", True)),
-                    },
+        accounts_version = data.get("browser_accounts_version", 1)
+        if not isinstance(accounts_version, int):
+            accounts_version = 1
+        if accounts_version < 2:
+            accounts = data.get("browser_accounts")
+            if isinstance(accounts, list) and not any(
+                item.get("kind") == "opencode_go"
+                for item in accounts
+                if isinstance(item, dict)
+            ):
+                legacy_opencode = data.get("opencode_go")
+                usage_url = (
+                    legacy_opencode.get("usage_url")
+                    if isinstance(legacy_opencode, dict)
+                    else None
                 )
-            if "codex" not in ids:
-                accounts.append(
-                    {
-                        "id": "codex",
-                        "kind": "codex",
-                        "name": None,
-                        "enabled": bool(providers.get("codex", True)),
-                    }
+                colors = (
+                    legacy_opencode.get("colors")
+                    if isinstance(legacy_opencode, dict)
+                    else None
                 )
-            data["browser_accounts"] = accounts
+                account: dict[str, Any] = {
+                    "id": "opencode_go",
+                    "kind": "opencode_go",
+                    "name": None,
+                    "enabled": True,
+                    "usage_url": usage_url or OPENCODE_GO_USAGE_URL,
+                }
+                if isinstance(colors, dict):
+                    account["colors"] = colors
+                accounts.append(account)
+            data["browser_accounts_version"] = 2
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")
             height = window.get("height")
             if isinstance(width, int):
-                window["width"] = WINDOW_WIDTH
+                window["width"] = max(WINDOW_MIN_WIDTH, min(width, WINDOW_MAX_WIDTH))
             if isinstance(height, int):
                 window["height"] = max(WINDOW_MIN_HEIGHT, min(height, WINDOW_MAX_HEIGHT))
         copilot = data.get("copilot")
@@ -238,7 +281,11 @@ def qt_scale_factor_env(config: Config) -> str | None:
 
 
 def provider_base_name(kind: str) -> str:
-    return {"claude": "Claude", "codex": "Codex"}.get(kind, kind.title())
+    return {
+        "claude": "Claude",
+        "codex": "Codex",
+        "opencode_go": "OpenCode",
+    }.get(kind, kind.title())
 
 
 def account_display_name(account: BrowserAccount) -> str:
@@ -256,7 +303,7 @@ def browser_accounts(
     accounts = [
         account
         for account in getattr(config, "browser_accounts", [])
-        if account.kind in ("claude", "codex")
+        if account.kind in ("claude", "codex", "opencode_go")
     ]
     if kind is not None:
         accounts = [account for account in accounts if account.kind == kind]
@@ -282,7 +329,7 @@ def account_kind(config: Config, account_id: str) -> str | None:
         return "claude"
     if account_id.startswith("codex-"):
         return "codex"
-    if account_id == "opencode_go":
+    if account_id == "opencode_go" or account_id.startswith("opencode_go-"):
         return "opencode_go"
     return None
 

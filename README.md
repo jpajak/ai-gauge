@@ -14,7 +14,7 @@ Compact monitor for **Claude.ai**, **ChatGPT Codex**, **OpenCode**, **GitHub Cop
 
 > **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Windows Task Scheduler / LaunchAgent / `~/.config/autostart`).
 
-Current version: **0.6.5**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
+Current version: **0.7.0**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
 utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
@@ -78,7 +78,7 @@ python3 -m venv .venv
 ./.venv/bin/python -m aigauge
 ```
 
-On first launch the widget appears with enabled provider tiles. Claude, Codex, and OpenCode use a **Sign in** or **Paste cookie** flow; GitHub Copilot and OpenRouter are configured from Settings with API credentials. Open Settings to disable providers you don't use or to add more Claude/Codex accounts.
+On first launch the widget appears with enabled provider tiles. Claude, Codex, and OpenCode use a **Sign in** or **Paste cookie** flow; GitHub Copilot and OpenRouter are configured from Settings with API credentials. Open Settings to disable providers you don't use or to add more Claude, Codex, or OpenCode accounts.
 
 ## First-time setup per provider
 
@@ -86,15 +86,15 @@ On first launch the widget appears with enabled provider tiles. Claude, Codex, a
 | ------------------ | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | **Claude.ai**      | **Sign in (recommended):** opens a real installed Chrome-family browser, supports Google and passkeys, and connects the resulting Claude session automatically. No cookie copying is required. **Paste cookie:** remains available as a recovery fallback. Add extra Claude subscriptions from **Settings → Claude**. |
 | **ChatGPT Codex**  | Same as Claude — **Sign in** opens a real installed browser and automatically connects the ChatGPT session, including Google-linked and passkey accounts. **Paste cookie** remains available only as a fallback. Add extra Codex subscriptions from **Settings → Codex**. |
-| **OpenCode**       | In **Settings → OpenCode**, paste the workspace **Go** usage-page URL, then use **Sign in**. The real-browser flow supports Google and automatically connects the OpenCode session. **Paste cookie** remains available as a recovery fallback. The tile reads Rolling, Weekly, and Monthly usage from that workspace page. |
+| **OpenCode**       | In **Settings → OpenCode**, enter each subscription's name and workspace **Go** usage-page URL, then use **Sign in** on that row. Each subscription has an independent browser session and tile. The real-browser flow supports Google; **Paste cookie** remains available as a recovery fallback. Tiles read Rolling, Weekly, and Monthly usage from their workspace pages. |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal plans, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly AI credit allowance (Pro=1,500, Pro+=7,000, Max=20,000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
 | **OpenRouter**     | Create an inference API key at <https://openrouter.ai/keys> and paste it into Settings. To show account balance and model activity, also create a management key at <https://openrouter.ai/settings/provisioning-keys>. Management keys cannot be used for inference; AI Gauge stores it separately and only uses it for OpenRouter management endpoints. Daily spend budget is optional.                                                    |
 
-### Multiple Claude / Codex accounts
+### Multiple Claude / Codex / OpenCode accounts
 
-Claude and Codex can track more than one subscription at a time. Open **Settings → Claude** or **Settings → Codex**, click **Add another**, give the account a short name, then use **Sign in** or **Paste cookie** for that specific row. The default account displays as `Claude` or `Codex`; named accounts display as `Claude (Work)`, `Codex (Account 2)`, etc.
+Claude, Codex, and OpenCode can track more than one subscription at a time. Open the provider's Settings tab, click **Add another**, give the account a short name, then use **Sign in** or **Paste cookie** for that specific row. OpenCode rows also have their own workspace **Go** usage-page URL. Default accounts display as `Claude`, `Codex`, or `OpenCode`; named accounts display as `Claude (Work)`, `Codex (Account 2)`, `OpenCode (Team)`, etc. Every account keeps separate browser-profile and cookie storage.
 
-The **General** tab controls provider groups. If Claude is checked, all configured Claude accounts appear; if Codex is checked, all configured Codex accounts appear. Secondary accounts can be removed from their provider tab. Each Claude/Codex account uses separate cookie storage, browser profile data, widget tile state, and history records.
+The **General** tab controls provider groups. Enabling Claude, Codex, or OpenCode shows every configured account in that family. Any account can be removed from its provider tab, including the original account; the **Add another** button remains available when no accounts are configured. Each browser-backed account uses separate cookie storage, browser profile data, widget tile state, and history records.
 
 Use **Clear sign-in** beside an account to remove its session from AI Gauge.
 This clears both the OS-protected saved cookie and the account's live embedded
@@ -157,11 +157,12 @@ should work with the normal **Sign in** button.
 
 ## Daily use
 
-- **Windows / Linux:** the widget floats above other windows by default. Drag anywhere to move; close (✕) hides to tray. Right-click the tray icon for Refresh / Settings / Quit. Left-click toggles widget visibility. Tray icon turns yellow ≥75% / red ≥90% based on the highest tile reading.
+- **Windows / Linux:** the widget floats above other windows by default. Drag anywhere to move, or drag the bottom-right corner to resize the full view horizontally; the chosen width is restored on the next launch. The minimum width follows the visible gauge columns and is never less than 280 pixels, so regular percentage rows cannot be clipped or pushed onto multiple lines. Comparable gauges within each provider share aligned label, percentage, and reset-time columns, giving their bars the same length and scale. Other content adapts only when needed: compact account gauges can move to a full-width second line, OpenRouter text can wrap, and secondary header details compact while all controls remain available. Expanded height follows the visible rows automatically, with scrolling only when the content cannot fit on screen. The down/up controls switch between full and compact views, the dash hides the window to the system tray, and the ✕ quits AI Gauge completely. Right-click the tray icon for Refresh / Settings / Quit. Left-click toggles widget visibility. The tray dot uses the configured range and color of the most severe enabled metric.
 - **macOS:** the menu-bar item shows tinted status dots for enabled provider/account tiles. Click it to open the panel as a popover; click outside to dismiss. Right-click for the same Refresh / Settings / Quit menu.
 - **Linux without a system tray** (stock GNOME): the floating widget stays visible and serves the same Show / Refresh / Settings / Quit menu via right-click on the widget.
-- **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view. Enabled provider/account chips wrap onto additional rows when needed, with named secondary Claude/Codex accounts using just the account name to save space.
+- **Collapse / expand:** click the **−** button in the widget header to shrink to the compact pill view. Enabled provider/account chips wrap onto additional rows when needed, with named secondary Claude, Codex, and OpenCode accounts using just the account name to save space.
 - **Hide unused providers:** uncheck Claude / Codex / OpenCode / Copilot / OpenRouter in Settings to remove their group from the widget — useful if you only use one or two of them.
+- **Gauge colors:** each Claude, Codex, and OpenCode account has a **Colors…** button, while Copilot and OpenRouter expose the same controls in their Settings sections. Every account can tune its three cutoffs and all four band colors, with live range labels and a **Reset defaults** action. The same settings drive expanded bars, compact chips, tray status, and macOS menu-bar dots. Supplied defaults preserve the existing behavior: green below 60%, yellow at 60–79%, orange at 80–94%, and red at 95%+.
 - Auto-refresh is adaptive: manual refresh or changed usage enters the active
   cadence, then unchanged results back off toward the configured max interval.
   Defaults are 5 min active and 60 min idle max.

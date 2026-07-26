@@ -1,8 +1,11 @@
 from aigauge.config import (
     BrowserAccount,
+    ColorThresholds,
     Config,
     account_display_name,
+    account_kind,
     app_data_dir,
+    browser_account,
     browser_accounts,
     config_path,
     display_name_for_account,
@@ -17,8 +20,19 @@ def test_defaults():
     assert c.refresh_interval_minutes == 60
     assert c.providers.claude is True
     assert c.providers.codex is True
-    assert [a.id for a in c.browser_accounts] == ["claude", "codex"]
-    assert [a.kind for a in c.browser_accounts] == ["claude", "codex"]
+    assert [a.id for a in c.browser_accounts] == [
+        "claude",
+        "codex",
+        "opencode_go",
+    ]
+    assert [a.kind for a in c.browser_accounts] == [
+        "claude",
+        "codex",
+        "opencode_go",
+    ]
+    assert c.browser_accounts[2].usage_url.startswith(
+        "https://opencode.ai/workspace/"
+    )
     assert c.providers.copilot is True
     assert c.providers.opencode_go is False
     assert c.start_at_login is False
@@ -30,6 +44,9 @@ def test_defaults():
     assert c.window.fade_when_inactive is False
     assert c.window.opacity == 0.8
     assert c.window.ui_scale == 1.0
+    assert c.copilot.colors == ColorThresholds(
+        green_max=59, yellow_max=79, orange_max=94
+    )
 
 
 def test_ui_scale_round_trips_and_maps_to_qt_factor():
@@ -63,7 +80,9 @@ def test_round_trip(tmp_path, monkeypatch):
     c.window.x = 100
     c.window.y = 200
     c.providers.opencode_go = True
-    c.opencode_go.usage_url = "https://opencode.ai/workspace/test/go"
+    browser_account(c, "opencode_go").usage_url = (
+        "https://opencode.ai/workspace/test/go"
+    )
     c.collapsed_tiles = ["claude"]
     c.save()
 
@@ -80,7 +99,10 @@ def test_round_trip(tmp_path, monkeypatch):
     assert loaded.window.x == 100
     assert loaded.window.y == 200
     assert loaded.providers.opencode_go is True
-    assert loaded.opencode_go.usage_url == "https://opencode.ai/workspace/test/go"
+    assert (
+        browser_account(loaded, "opencode_go").usage_url
+        == "https://opencode.ai/workspace/test/go"
+    )
     assert loaded.collapsed_tiles == ["claude"]
 
 def test_load_missing_returns_defaults():
@@ -113,6 +135,7 @@ def test_load_migrates_old_refresh_interval_to_active_rate():
     assert [(a.id, a.kind, a.enabled) for a in c.browser_accounts] == [
         ("claude", "claude", True),
         ("codex", "codex", True),
+        ("opencode_go", "opencode_go", True),
     ]
 
 
@@ -141,7 +164,49 @@ def test_load_migrates_legacy_provider_toggles_to_browser_accounts():
     assert [(a.id, a.kind, a.enabled) for a in c.browser_accounts] == [
         ("claude", "claude", False),
         ("codex", "codex", True),
+        ("opencode_go", "opencode_go", True),
     ]
+
+
+def test_load_adds_opencode_without_restoring_removed_claude_or_codex():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text('{"browser_accounts": []}', encoding="utf-8")
+
+    c = Config.load()
+
+    assert [(a.id, a.kind) for a in c.browser_accounts] == [
+        ("opencode_go", "opencode_go")
+    ]
+
+
+def test_load_preserves_explicitly_removed_accounts_after_v2_migration():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts": [], "browser_accounts_version": 2}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert c.browser_accounts == []
+
+
+def test_load_migrates_single_opencode_settings_to_account():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts": [], "opencode_go": {'
+        '"usage_url": "https://opencode.ai/workspace/legacy/go", '
+        '"colors": {"green_max": 20, "yellow_max": 50, "orange_max": 80}}}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+    account = browser_account(c, "opencode_go")
+
+    assert account is not None
+    assert account.usage_url == "https://opencode.ai/workspace/legacy/go"
+    assert account.colors.green_max == 20
+    assert c.browser_accounts_version == 2
 
 
 def test_browser_account_display_names():
@@ -163,6 +228,21 @@ def test_display_name_for_configured_account():
     ]
 
 
+def test_secondary_opencode_account_resolves_kind_and_display_name():
+    c = Config()
+    c.browser_accounts.append(
+        BrowserAccount(
+            id="opencode_go-work",
+            kind="opencode_go",
+            name="Work",
+            usage_url="https://opencode.ai/workspace/work/go",
+        )
+    )
+
+    assert account_kind(c, "opencode_go-work") == "opencode_go"
+    assert display_name_for_account(c, "opencode_go-work") == "OpenCode (Work)"
+
+
 def test_load_migrates_start_with_windows_to_start_at_login():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
@@ -182,5 +262,5 @@ def test_load_clamps_saved_window_size():
 
     c = Config.load()
 
-    assert c.window.width == 340
+    assert c.window.width == 900
     assert c.window.height == 80

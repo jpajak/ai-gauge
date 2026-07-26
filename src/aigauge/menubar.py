@@ -15,6 +15,12 @@ from typing import Iterable
 from PyQt6.QtCore import Qt
 from PyQt6.QtGui import QColor, QPainter, QPixmap
 
+from .config import Config
+from .gauge import (
+    color_for_percent,
+    provider_max_percent,
+    thresholds_for_provider,
+)
 from .models import SnapshotStatus, UsageSnapshot
 
 # Layout constants in logical (pre-DPR) pixels.
@@ -41,40 +47,31 @@ SETUP_COLOR = "#38bdf8"
 ERROR_COLOR = OK_COLORS["high"]
 
 
-def _color_for_percent(percent: float | None) -> str:
-    if percent is None:
-        return NEUTRAL_COLOR
-    if percent >= 90:
-        return OK_COLORS["high"]
-    if percent >= 75:
-        return OK_COLORS["med"]
-    return OK_COLORS["low"]
+def _provider_label(provider: str) -> str:
+    if provider == "opencode_go" or provider.startswith("opencode_go-"):
+        return PROVIDER_LABELS["opencode_go"]
+    if provider == "claude" or provider.startswith("claude-"):
+        return PROVIDER_LABELS["claude"]
+    if provider == "codex" or provider.startswith("codex-"):
+        return PROVIDER_LABELS["codex"]
+    return PROVIDER_LABELS.get(provider, provider[:2].title())
 
 
-def _provider_max_percent(snapshot: UsageSnapshot | None) -> float | None:
-    if snapshot is None or snapshot.status != SnapshotStatus.OK:
-        return None
-    for metric in snapshot.metrics:
-        if metric.label.lower() == "session" and metric.percent_used is not None:
-            return metric.percent_used
-    best: float | None = None
-    for metric in snapshot.metrics:
-        if metric.percent_used is None:
-            continue
-        if best is None or metric.percent_used > best:
-            best = metric.percent_used
-    return best
-
-
-def _provider_color(snapshot: UsageSnapshot | None) -> str:
+def _provider_color(
+    config: Config | None,
+    provider: str,
+    snapshot: UsageSnapshot | None,
+) -> str:
     if snapshot is None:
         return NEUTRAL_COLOR
     if snapshot.status == SnapshotStatus.AUTH_REQUIRED:
         return SETUP_COLOR
     if snapshot.status == SnapshotStatus.ERROR:
         return ERROR_COLOR
-    percent = _provider_max_percent(snapshot)
-    return _color_for_percent(percent)
+    return color_for_percent(
+        provider_max_percent(snapshot),
+        thresholds_for_provider(config, provider),
+    )
 
 
 def _provider_value(snapshot: UsageSnapshot | None) -> str:
@@ -82,20 +79,21 @@ def _provider_value(snapshot: UsageSnapshot | None) -> str:
         return "..."
     if snapshot.status in (SnapshotStatus.AUTH_REQUIRED, SnapshotStatus.ERROR):
         return "!"
-    percent = _provider_max_percent(snapshot)
+    percent = provider_max_percent(snapshot)
     return "..." if percent is None else f"{percent:.0f}%"
 
 
 def status_items(
     snapshots: dict[str, UsageSnapshot],
     enabled_providers: Iterable[str],
+    config: Config | None = None,
 ) -> list[tuple[str, str, str]]:
     """Return ``(provider_label, value, color)`` items for native menu bars."""
     return [
         (
-            PROVIDER_LABELS.get(provider, provider[:2].title()),
+            _provider_label(provider),
             _provider_value(snapshots.get(provider)),
-            _provider_color(snapshots.get(provider)),
+            _provider_color(config, provider, snapshots.get(provider)),
         )
         for provider in enabled_providers
     ]
@@ -123,6 +121,7 @@ def render_menubar_pixmap(
     snapshots: dict[str, UsageSnapshot],
     enabled_providers: Iterable[str],
     *,
+    config: Config | None = None,
     device_pixel_ratio: float = 2.0,
     is_dark: bool = True,
 ) -> QPixmap:
@@ -147,7 +146,10 @@ def render_menubar_pixmap(
     dot_count = len(providers) if providers else 1
     dot_top = height / 2 - DOT_DIAMETER / 2
     colors = (
-        [_provider_color(snapshots.get(provider)) for provider in providers]
+        [
+            _provider_color(config, provider, snapshots.get(provider))
+            for provider in providers
+        ]
         if providers
         else [NEUTRAL_COLOR]
     )

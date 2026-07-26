@@ -21,7 +21,9 @@ from PyQt6.QtWidgets import (
 
 from . import __version__
 from .config import (
+    BrowserAccount,
     Config,
+    account_display_name,
     account_kind,
     app_data_dir,
     browser_accounts,
@@ -30,6 +32,7 @@ from .config import (
 )
 from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
+from .gauge import highest_indicator
 from .history import HistoryStore
 from .logging_setup import setup_logging
 from .menubar import render_menubar_pixmap
@@ -61,19 +64,12 @@ _HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 _LOG_VALUE_LIMIT = 300
 
 
-def _make_dot_tray_icon(percent: float | None = None) -> QIcon:
+def _make_dot_tray_icon(color: str | None = None) -> QIcon:
     pix = QPixmap(32, 32)
     pix.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pix)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    if percent is None:
-        painter.setBrush(QColor("#6b7280"))
-    elif percent >= 90:
-        painter.setBrush(QColor("#ef4444"))
-    elif percent >= 75:
-        painter.setBrush(QColor("#f59e0b"))
-    else:
-        painter.setBrush(QColor("#22c55e"))
+    painter.setBrush(QColor(color or "#6b7280"))
     painter.setPen(Qt.PenStyle.NoPen)
     painter.drawEllipse(4, 4, 24, 24)
     painter.end()
@@ -81,23 +77,25 @@ def _make_dot_tray_icon(percent: float | None = None) -> QIcon:
 
 
 def _enabled_providers(config: Config) -> tuple[str, ...]:
+    configured_accounts = getattr(config, "browser_accounts", None)
     out: list[str] = [
         account.id
         for account in browser_accounts(config)
         if getattr(config.providers, account.kind, False)
     ]
-    if not out:
-        providers = getattr(config, "providers", None)
-        if getattr(providers, "claude", False):
+    # Compatibility for pre-multi-account config-like objects. An explicit
+    # empty list is authoritative and must not resurrect removed accounts.
+    if configured_accounts is None:
+        if getattr(config.providers, "claude", False):
             out.append("claude")
-        if getattr(providers, "codex", False):
+        if getattr(config.providers, "codex", False):
             out.append("codex")
+        if getattr(config.providers, "opencode_go", False):
+            out.append("opencode_go")
     if config.providers.copilot:
         out.append("copilot")
     if config.providers.openrouter:
         out.append("openrouter")
-    if getattr(config.providers, "opencode_go", False):
-        out.append("opencode_go")
     return tuple(out)
 
 
@@ -255,6 +253,7 @@ class App(QObject):
         self._widget.ratio_history_requested.connect(self.open_ratio_history)
         self._widget.tile_expanded_changed.connect(self._on_tile_expanded_changed)
         self._widget.activated_requested.connect(self._on_widget_activated)
+        self._widget.quit_requested.connect(QApplication.instance().quit)
         self._widget.closed.connect(self._on_widget_closed)
 
         # Pre-populate provider tiles in stable order so they don't pop in.
@@ -284,6 +283,7 @@ class App(QObject):
                 self._native_status.update(
                     self._snapshots,
                     _enabled_providers(self._config),
+                    self._config,
                 )
                 self._native_status.set_tooltip(f"AI Gauge {__version__}")
                 self._tray = None
@@ -423,7 +423,16 @@ class App(QObject):
                     parent=self,
                     account_id=account.id,
                 )
-            self._widget.ensure_tile(account.id, display_name_for_account(self._config, account.id))
+            elif account.kind == "opencode_go":
+                self._providers[account.id] = OpenCodeGoProvider(
+                    self._config,
+                    parent=self,
+                    account_id=account.id,
+                )
+            self._widget.ensure_tile(
+                account.id,
+                display_name_for_account(self._config, account.id),
+            )
         if self._config.providers.copilot:
             self._providers["copilot"] = CopilotProvider(self._config)
             desired_tiles.add("copilot")
@@ -432,10 +441,6 @@ class App(QObject):
             self._providers["openrouter"] = OpenRouterProvider(self._config)
             desired_tiles.add("openrouter")
             self._widget.ensure_tile("openrouter", "OpenRouter")
-        if self._config.providers.opencode_go:
-            self._providers["opencode_go"] = OpenCodeGoProvider(self._config, parent=self)
-            desired_tiles.add("opencode_go")
-            self._widget.ensure_tile("opencode_go", "OpenCode")
         for tile_id in list(self._widget._tiles):  # noqa: SLF001
             if tile_id not in desired_tiles:
                 self._widget.remove_tile(tile_id)
@@ -698,6 +703,7 @@ class App(QObject):
             self._native_status.update(
                 self._snapshots,
                 _enabled_providers(self._config),
+                self._config,
             )
             self._native_status.set_tooltip(tooltip)
             return
@@ -721,30 +727,39 @@ class App(QObject):
     def _render_tray_icon(self) -> QIcon:
         if self._ui_mode == "menubar":
             providers = _enabled_providers(self._config)
-            pixmap = render_menubar_pixmap(self._snapshots, providers)
+            pixmap = render_menubar_pixmap(
+                self._snapshots, providers, config=self._config
+            )
             return QIcon(pixmap)
-        max_pct: float | None = None
-        for snap in self._snapshots.values():
-            if snap.status != SnapshotStatus.OK:
-                continue
-            for m in snap.metrics:
-                if m.percent_used is None:
-                    continue
-                if max_pct is None or m.percent_used > max_pct:
-                    max_pct = m.percent_used
-        return _make_dot_tray_icon(max_pct)
+        providers = _enabled_providers(self._config)
+        indicator = highest_indicator(self._config, self._snapshots, providers)
+        return _make_dot_tray_icon(indicator.color if indicator is not None else None)
 
     # ----- Login / cookie paste -----
 
+    def _draft_browser_account(self, provider: str) -> BrowserAccount | None:
+        dialog = self._settings_dialog
+        get_draft = getattr(dialog, "draft_browser_account", None)
+        return get_draft(provider) if callable(get_draft) else None
+
     def open_login(self, provider: str) -> None:
-        kind = account_kind(self._config, provider)
+        draft = self._draft_browser_account(provider)
+        kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind == "opencode_go":
-            url = opencode_go_usage_url(self._config)
+            url = (
+                draft.usage_url
+                if draft is not None and draft.usage_url
+                else opencode_go_usage_url(self._config, provider)
+            )
         elif kind in LOGIN_URLS:
             url, _title = LOGIN_URLS[kind]
         else:
             return
-        display_name = display_name_for_account(self._config, provider)
+        display_name = (
+            account_display_name(draft)
+            if draft is not None
+            else display_name_for_account(self._config, provider)
+        )
         dlg = LoginWindow(
             kind,
             url,
@@ -762,19 +777,28 @@ class App(QObject):
             self.refresh_provider(provider)
 
     def open_cookie_paste(self, provider: str) -> None:
-        kind = account_kind(self._config, provider)
+        draft = self._draft_browser_account(provider)
+        kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind is None:
             return
+        display_name = (
+            account_display_name(draft)
+            if draft is not None
+            else display_name_for_account(self._config, provider)
+        )
+        verify_url = None
+        if kind == "opencode_go":
+            verify_url = (
+                draft.usage_url
+                if draft is not None and draft.usage_url
+                else opencode_go_usage_url(self._config, provider)
+            )
         try:
             dlg = CookieDialog(
                 kind,
                 account_id=provider,
-                display_name=display_name_for_account(self._config, provider),
-                verify_url=(
-                    opencode_go_usage_url(self._config)
-                    if kind == "opencode_go"
-                    else None
-                ),
+                display_name=display_name,
+                verify_url=verify_url,
             )
         except ValueError:
             return
@@ -790,10 +814,15 @@ class App(QObject):
             QTimer.singleShot(1000, lambda: self.refresh_provider(provider))
 
     def clear_sign_in(self, provider: str) -> None:
-        kind = account_kind(self._config, provider)
+        draft = self._draft_browser_account(provider)
+        kind = draft.kind if draft is not None else account_kind(self._config, provider)
         if kind is None:
             return
-        display_name = display_name_for_account(self._config, provider)
+        display_name = (
+            account_display_name(draft)
+            if draft is not None
+            else display_name_for_account(self._config, provider)
+        )
         parent = self._settings_dialog or self._widget
         answer = QMessageBox.question(
             parent,
@@ -1002,6 +1031,7 @@ class App(QObject):
     def _on_tile_expanded_changed(self, provider: str, expanded: bool) -> None:
         compact_collapsible = (
             provider == "opencode_go"
+            or provider.startswith("opencode_go-")
             or provider == "claude"
             or provider == "codex"
             or provider.startswith("claude-")

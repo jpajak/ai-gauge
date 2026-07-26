@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from PyQt6.QtGui import QColor, QPixmap
 
+from aigauge.config import ColorThresholds, Config
 from aigauge.menubar import (
     DOT_DIAMETER,
     OK_COLORS,
@@ -53,10 +54,12 @@ def test_empty_renders_a_neutral_dot(qtbot):  # qtbot ensures QApplication exist
 
 
 def test_provider_dot_color_matches_threshold_band(qtbot):
+    defaults = ColorThresholds()
     cases = [
-        (10.0, OK_COLORS["low"]),
-        (80.0, OK_COLORS["med"]),
-        (95.0, OK_COLORS["high"]),
+        (10.0, defaults.green_color),
+        (60.0, defaults.yellow_color),
+        (80.0, defaults.orange_color),
+        (95.0, defaults.red_color),
     ]
     for percent, expected in cases:
         pix = render_menubar_pixmap({"claude": _ok_snap("claude", percent)}, ("claude",))
@@ -64,6 +67,25 @@ def test_provider_dot_color_matches_threshold_band(qtbot):
         assert color.name().lower() == expected.lower(), (
             f"percent={percent} expected {expected} got {color.name()}"
         )
+
+
+def test_provider_dot_uses_account_specific_threshold_and_color(qtbot):
+    config = Config()
+    config.browser_accounts[0].colors = ColorThresholds(
+        green_max=10,
+        yellow_max=20,
+        orange_max=30,
+        red_color="#123456",
+    )
+
+    pix = render_menubar_pixmap(
+        {"claude": _ok_snap("claude", 50)},
+        ("claude",),
+        config=config,
+    )
+
+    color = _color_at(pix, SIDE_PADDING + DOT_DIAMETER // 2, PIXMAP_HEIGHT // 2)
+    assert color.name().lower() == "#123456"
 
 
 def test_unknown_provider_renders_neutral(qtbot):

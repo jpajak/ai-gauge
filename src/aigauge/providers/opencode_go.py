@@ -7,14 +7,13 @@ from typing import Any, Callable
 
 from PyQt6.QtCore import QObject
 
-from ..config import Config
+from ..config import OPENCODE_GO_USAGE_URL, Config, browser_account
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from ._common import is_security_verification_page
 from ._scrape_runner import ScrapeRunner
 from .base import Provider
 from .diagnostics import log_page_diagnosis
 
-OPENCODE_GO_USAGE_URL = "https://opencode.ai/workspace/wrk_01KX3HT8MFWCMHR2289KGPZ1RD/go"
 _EXPECTED_ROWS = ("rolling", "weekly", "monthly")
 log = logging.getLogger("aigauge.providers.opencode_go")
 
@@ -61,10 +60,19 @@ EXTRACTOR_JS = r"""
 """
 
 
-def usage_url(config: Config | None = None) -> str:
+def usage_url(
+    config: Config | None = None,
+    account_id: str = "opencode_go",
+) -> str:
     value = ""
     if config is not None:
-        value = str(getattr(getattr(config, "opencode_go", None), "usage_url", "") or "").strip()
+        account = browser_account(config, account_id)
+        if account is not None:
+            value = str(account.usage_url or "").strip()
+        if not value:
+            value = str(
+                getattr(getattr(config, "opencode_go", None), "usage_url", "") or ""
+            ).strip()
     return value or OPENCODE_GO_USAGE_URL
 
 
@@ -141,17 +149,21 @@ def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
     return False
 
 
-def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
+def _build_snapshot(
+    payload: dict[str, Any],
+    *,
+    account_id: str = "opencode_go",
+) -> UsageSnapshot:
     if _is_logged_out_payload(payload):
         log_page_diagnosis(
             log,
-            provider="opencode_go",
+            provider=account_id,
             classification="logged_out",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
         )
         return UsageSnapshot(
-            provider="opencode_go",
+            provider=account_id,
             status=SnapshotStatus.AUTH_REQUIRED,
             error="Not signed in to OpenCode.",
             raw=payload,
@@ -159,13 +171,13 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
     if is_security_verification_page(payload):
         log_page_diagnosis(
             log,
-            provider="opencode_go",
+            provider=account_id,
             classification="security_verification",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
         )
         return UsageSnapshot(
-            provider="opencode_go",
+            provider=account_id,
             status=SnapshotStatus.AUTH_REQUIRED,
             error="OpenCode security verification required. Click Sign in and complete the browser check.",
             raw=payload,
@@ -204,21 +216,21 @@ def _build_snapshot(payload: dict[str, Any]) -> UsageSnapshot:
     if not metrics:
         log_page_diagnosis(
             log,
-            provider="opencode_go",
+            provider=account_id,
             classification="layout_changed",
             payload=payload,
             expected_rows=_EXPECTED_ROWS,
             level=logging.WARNING,
         )
         return UsageSnapshot(
-            provider="opencode_go",
+            provider=account_id,
             status=SnapshotStatus.ERROR,
             error="Could not read OpenCode usage from page (layout may have changed).",
             raw=payload,
         )
 
     return UsageSnapshot(
-        provider="opencode_go",
+        provider=account_id,
         status=SnapshotStatus.OK,
         metrics=metrics,
         raw=payload,
@@ -229,17 +241,26 @@ class OpenCodeGoProvider(Provider):
     name = "opencode_go"
     display_name = "OpenCode"
 
-    def __init__(self, config: Config, parent: QObject | None = None):
+    def __init__(
+        self,
+        config: Config,
+        parent: QObject | None = None,
+        account_id: str = "opencode_go",
+    ):
         self._parent = parent
         self._config = config
+        self._account_id = account_id
         self._runner: ScrapeRunner | None = None
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
+        def _build(payload: dict[str, Any]) -> UsageSnapshot:
+            return _build_snapshot(payload, account_id=self._account_id)
+
         self._runner = ScrapeRunner(
-            account_id="opencode_go",
-            url=usage_url(self._config),
+            account_id=self._account_id,
+            url=usage_url(self._config, self._account_id),
             extractor_js=EXTRACTOR_JS,
-            build=_build_snapshot,
+            build=_build,
             log=log,
             wait_ms=5000,
             transport_max_attempts=1,

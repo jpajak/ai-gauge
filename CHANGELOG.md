@@ -2,6 +2,29 @@
 
 ## Unreleased
 
+## 0.7.0 - 2026-07-25
+
+### Added
+
+- Added support for multiple named OpenCode subscriptions. Each account has its own workspace Go usage URL, browser profile, saved session, gauge colors, tile, snapshot identity, and sign-in controls. Existing single-OpenCode configurations migrate automatically without losing their URL or colors.
+- Added distinct title-bar controls in both full and compact views: down/up switches between full and compact layouts, the dash hides the widget to the system tray, and ✕ quits AI Gauge completely.
+- Added expanded-window horizontal resizing with a dedicated bottom-right grip. The chosen width persists across launches, compact mode retains its fitted size, and expanded height follows visible content automatically.
+- Added per-account gauge customization for Claude, Codex, and OpenCode accounts, plus Copilot and OpenRouter. Users can tune three percentage cutoffs and choose all four band colors, including the final 95%+ band; live range labels and **Reset defaults** keep the controls understandable. Supplied defaults preserve the existing behavior: green below 60%, yellow at 60–79%, orange at 80–94%, and red at 95%+.
+- Added the ability to remove the original Claude, Codex, or OpenCode account as well as secondary accounts. Empty provider sections retain their add-account action, and removed original accounts stay removed after restart.
+
+### Changed
+
+- The expanded widget uses a horizontal-only resize handle and a content-derived minimum width, never below 280 pixels. Comparable gauges within each provider share label, percentage, and reset-time columns so their bars use the same length and scale, and the resize handle stops before those gauge rows would clip or wrap. At measured content limits, compact account gauges can use a full-width second row, OpenRouter text can wrap, and secondary header details compact while core controls remain visible. Automatic height is applied after the resize drag and remains capped to the available screen.
+- The expanded header shows the full refresh cadence at wider sizes and just the countdown below the responsive breakpoint; compact mode also shows only the countdown.
+- Percentage and reset-time columns now size to their actual text instead of reserving fixed blank space between values and day labels.
+- Settings spin boxes and decimal controls now use explicit, high-contrast arrow buttons in the dark theme, including the account-specific gauge-color dialog.
+
+### Fixed
+
+- Copilot usage above 100% now renders a full severity-colored bar while preserving the actual overage label. Previously, passing an above-maximum value to Qt could leave the progress chunk unpainted.
+- The resize grip now occupies its own footer instead of overlaying the last provider row, preventing it from obscuring Copilot and other bottom-most gauges.
+- Gauge color descriptions now update immediately as cutoffs change, and custom ranges/colors apply consistently to expanded bars, compact summary chips, the Windows/Linux tray indicator, and macOS menu-bar status dots.
+
 ## 0.6.5 - 2026-07-18
 
 ### Added

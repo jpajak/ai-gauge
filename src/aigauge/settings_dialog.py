@@ -14,6 +14,7 @@ from PyQt6.QtGui import (
 )
 from PyQt6.QtWidgets import (
     QCheckBox,
+    QColorDialog,
     QComboBox,
     QDialog,
     QDialogButtonBox,
@@ -36,6 +37,7 @@ from PyQt6.QtWidgets import (
 
 from .config import (
     BrowserAccount,
+    ColorThresholds,
     Config,
     account_display_name,
     app_data_dir,
@@ -52,7 +54,7 @@ from .error_dialog import reveal_path
 from .logging_setup import log_path
 from .providers.claude import CLAUDE_USAGE_URL
 from .providers.codex import CODEX_USAGE_URL
-from .providers.opencode_go import OPENCODE_GO_USAGE_URL, usage_url as opencode_go_usage_url
+from .providers.opencode_go import OPENCODE_GO_USAGE_URL
 from .startup import set_start_at_login
 from .webview.cookies import clear_browser_session
 
@@ -119,7 +121,7 @@ QTabBar::tab:selected {
     background: #1f2937;
     color: #f3f4f6;
 }
-QLineEdit, QSpinBox, QComboBox {
+QLineEdit, QSpinBox, QDoubleSpinBox, QComboBox {
     background: #111827;
     color: #f3f4f6;
     border: 1px solid #374151;
@@ -128,7 +130,7 @@ QLineEdit, QSpinBox, QComboBox {
     selection-background-color: #2563eb;
     min-height: 22px;
 }
-QLineEdit:focus, QSpinBox:focus, QComboBox:focus {
+QLineEdit:focus, QSpinBox:focus, QDoubleSpinBox:focus, QComboBox:focus {
     border-color: #3b82f6;
 }
 QComboBox::drop-down {
@@ -150,20 +152,32 @@ QComboBox QAbstractItemView {
     color: #f3f4f6;
     selection-background-color: #2563eb;
 }
-QSpinBox::up-button, QSpinBox::down-button {
+QSpinBox::up-button, QSpinBox::down-button,
+QDoubleSpinBox::up-button, QDoubleSpinBox::down-button {
     width: 18px;
     background: transparent;
     border-left: 1px solid #374151;
 }
-QSpinBox::up-button:hover, QSpinBox::down-button:hover {
+QSpinBox::up-button, QDoubleSpinBox::up-button {
+    subcontrol-origin: border;
+    subcontrol-position: top right;
+    height: 12px;
+}
+QSpinBox::down-button, QDoubleSpinBox::down-button {
+    subcontrol-origin: border;
+    subcontrol-position: bottom right;
+    height: 12px;
+}
+QSpinBox::up-button:hover, QSpinBox::down-button:hover,
+QDoubleSpinBox::up-button:hover, QDoubleSpinBox::down-button:hover {
     background: #374151;
 }
-QSpinBox::up-arrow {
+QSpinBox::up-arrow, QDoubleSpinBox::up-arrow {
     image: url("__UP_ARROW__");
     width: 9px;
     height: 9px;
 }
-QSpinBox::down-arrow {
+QSpinBox::down-arrow, QDoubleSpinBox::down-arrow {
     image: url("__DOWN_ARROW__");
     width: 9px;
     height: 9px;
@@ -284,6 +298,183 @@ def _open_in_browser(url: str) -> None:
     QDesktopServices.openUrl(QUrl(url))
 
 
+class _ColorThresholdEditor(QWidget):
+    def __init__(self, colors: ColorThresholds, parent=None):
+        super().__init__(parent)
+        self.green = QSpinBox()
+        self.yellow = QSpinBox()
+        self.orange = QSpinBox()
+        for spin in (self.green, self.yellow, self.orange):
+            spin.setRange(0, 100)
+            spin.setSuffix("%")
+            spin.setFixedWidth(68)
+        self.green.setValue(colors.green_max)
+        self.yellow.setValue(colors.yellow_max)
+        self.orange.setValue(colors.orange_max)
+        self._colors = {
+            "green": colors.green_color,
+            "yellow": colors.yellow_color,
+            "orange": colors.orange_color,
+            "red": colors.red_color,
+        }
+        self._color_buttons: dict[str, QPushButton] = {}
+        self.green.valueChanged.connect(self._sync_ranges)
+        self.yellow.valueChanged.connect(self._sync_ranges)
+        self.orange.valueChanged.connect(self._sync_ranges)
+
+        limits = QHBoxLayout()
+        limits.setContentsMargins(0, 0, 0, 0)
+        limits.setSpacing(6)
+        for label, spin in (
+            ("First cutoff", self.green),
+            ("Second", self.yellow),
+            ("Third", self.orange),
+        ):
+            text = QLabel(label)
+            text.setStyleSheet("color:#9ca3af; font-size:10px;")
+            limits.addWidget(text)
+            limits.addWidget(spin)
+        limits.addStretch(1)
+
+        bands = QHBoxLayout()
+        bands.setContentsMargins(0, 0, 0, 0)
+        bands.setSpacing(6)
+        for key in ("green", "yellow", "orange", "red"):
+            button = QPushButton()
+            button.setFixedHeight(26)
+            button.clicked.connect(
+                lambda _checked=False, name=key: self._choose_color(name)
+            )
+            self._color_buttons[key] = button
+            bands.addWidget(button, 1)
+        reset = QPushButton("Reset defaults")
+        reset.setToolTip("Restore the supplied green, yellow, orange, and red defaults.")
+        reset.clicked.connect(self.reset_defaults)
+        bands.addWidget(reset)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(6)
+        layout.addLayout(limits)
+        layout.addLayout(bands)
+        self._sync_ranges()
+
+    def _sync_ranges(self) -> None:
+        self.green.setMaximum(max(0, self.yellow.value() - 1))
+        self.yellow.setMinimum(min(100, self.green.value() + 1))
+        self.yellow.setMaximum(max(self.yellow.minimum(), self.orange.value() - 1))
+        self.orange.setMinimum(min(100, self.yellow.value() + 1))
+        self._refresh_band_buttons()
+
+    def _refresh_band_buttons(self) -> None:
+        ranges = {
+            "green": f"0–{self.green.value()}%",
+            "yellow": f"{self.green.value() + 1}–{self.yellow.value()}%",
+            "orange": f"{self.yellow.value() + 1}–{self.orange.value()}%",
+            "red": f"{self.orange.value() + 1}%+",
+        }
+        for key, button in self._color_buttons.items():
+            color = QColor(self._colors[key])
+            foreground = "#111827" if color.lightness() > 150 else "#f9fafb"
+            button.setText(f"{key.title()} · {ranges[key]}")
+            button.setStyleSheet(
+                f"QPushButton {{ background:{color.name()}; color:{foreground}; "
+                "border:1px solid #4b5563; border-radius:4px; padding:3px 6px; }}"
+            )
+
+    def _choose_color(self, key: str) -> None:
+        chosen = QColorDialog.getColor(
+            QColor(self._colors[key]),
+            self,
+            f"Choose {key} gauge color",
+        )
+        if chosen.isValid():
+            self._colors[key] = chosen.name()
+            self._refresh_band_buttons()
+
+    def reset_defaults(self) -> None:
+        defaults = ColorThresholds()
+        # Raise the dependent maxima from the outside in so Qt does not clamp
+        # a restored lower cutoff against the editor's current upper cutoffs.
+        self.orange.setValue(defaults.orange_max)
+        self.yellow.setValue(defaults.yellow_max)
+        self.green.setValue(defaults.green_max)
+        self._colors = {
+            "green": defaults.green_color,
+            "yellow": defaults.yellow_color,
+            "orange": defaults.orange_color,
+            "red": defaults.red_color,
+        }
+        self._sync_ranges()
+
+    def value(self) -> ColorThresholds:
+        return ColorThresholds(
+            green_max=self.green.value(),
+            yellow_max=self.yellow.value(),
+            orange_max=self.orange.value(),
+            green_color=self._colors["green"],
+            yellow_color=self._colors["yellow"],
+            orange_color=self._colors["orange"],
+            red_color=self._colors["red"],
+        )
+
+
+class _ColorThresholdDialog(QDialog):
+    def __init__(self, colors: ColorThresholds, parent=None):
+        super().__init__(parent)
+        self.setWindowTitle("Gauge colors")
+        self.setStyleSheet(_build_stylesheet())
+        self.editor = _ColorThresholdEditor(colors, self)
+        hint = _hint_label(
+            "Adjust the three cutoffs, then click any colored range to choose "
+            "its color. The supplied defaults remain available with Reset defaults."
+        )
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok
+            | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout = QVBoxLayout(self)
+        layout.addWidget(self.editor)
+        layout.addWidget(hint)
+        layout.addWidget(buttons)
+
+
+class _ColorThresholdLauncher(QWidget):
+    def __init__(self, colors: ColorThresholds, parent=None):
+        super().__init__(parent)
+        self.colors = colors.model_copy(deep=True)
+        self.summary = QLabel()
+        self.summary.setStyleSheet("color:#9ca3af; font-size:10px;")
+        button = QPushButton("Customize…")
+        button.setToolTip("Adjust gauge ranges and all four colors.")
+        button.clicked.connect(self._edit)
+        layout = QHBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.addWidget(button)
+        layout.addWidget(self.summary)
+        layout.addStretch(1)
+        self._refresh_summary()
+
+    def _refresh_summary(self) -> None:
+        self.summary.setText(
+            f"0–{self.colors.green_max} / "
+            f"{self.colors.green_max + 1}–{self.colors.yellow_max} / "
+            f"{self.colors.yellow_max + 1}–{self.colors.orange_max} / "
+            f"{self.colors.orange_max + 1}%+"
+        )
+
+    def _edit(self) -> None:
+        dialog = _ColorThresholdDialog(self.colors, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.colors = dialog.editor.value()
+            self._refresh_summary()
+
+    def value(self) -> ColorThresholds:
+        return self.colors.model_copy(deep=True)
+
+
 class _BrowserAccountRow(QWidget):
     sign_in_clicked = pyqtSignal(str)
     paste_cookie_clicked = pyqtSignal(str)
@@ -300,11 +491,14 @@ class _BrowserAccountRow(QWidget):
         super().__init__(parent)
         self.account_id = account.id
         self.kind = account.kind
+        self.colors = account.colors.model_copy(deep=True)
 
         self.name_edit = QLineEdit()
         self.name_edit.setText(account.name or "")
         self.name_edit.setPlaceholderText(
-            "Default account" if account.id in ("claude", "codex") else "Account name"
+            "Default account"
+            if account.id in ("claude", "codex", "opencode_go")
+            else "Account name"
         )
         self.name_edit.setMinimumWidth(120)
 
@@ -328,28 +522,72 @@ class _BrowserAccountRow(QWidget):
         clear.setToolTip("Remove this account's saved sign-in from AI Gauge.")
         clear.clicked.connect(lambda: self.clear_sign_in_clicked.emit(self.account_id))
 
+        colors = QPushButton("Colors…")
+        colors.setFixedWidth(68)
+        colors.setToolTip("Set gauge color thresholds for this account.")
+        colors.clicked.connect(self._edit_colors)
+
         remove = QPushButton("Remove")
         remove.setFixedWidth(72)
         remove.setVisible(removable)
         remove.setToolTip("Remove this account and clear its saved cookie.")
         remove.clicked.connect(lambda: self.remove_clicked.emit(self.account_id))
 
-        layout = QHBoxLayout(self)
+        account_actions = QHBoxLayout()
+        account_actions.setContentsMargins(0, 0, 0, 0)
+        account_actions.setSpacing(6)
+        account_actions.addWidget(self.name_edit, 1)
+        account_actions.addWidget(sign_in)
+        account_actions.addWidget(paste)
+        account_actions.addWidget(clear)
+        account_actions.addWidget(colors)
+        account_actions.addWidget(remove)
+
+        self.usage_url_edit: QLineEdit | None = None
+        layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(6)
-        layout.addWidget(self.name_edit, 1)
-        layout.addWidget(sign_in)
-        layout.addWidget(paste)
-        layout.addWidget(clear)
-        layout.addWidget(remove)
+        layout.setSpacing(4)
+        layout.addLayout(account_actions)
+        if account.kind == "opencode_go":
+            self.usage_url_edit = QLineEdit()
+            self.usage_url_edit.setText(account.usage_url or OPENCODE_GO_USAGE_URL)
+            self.usage_url_edit.setPlaceholderText(OPENCODE_GO_USAGE_URL)
+            self.usage_url_edit.setToolTip(
+                "The workspace Go usage page for this OpenCode subscription."
+            )
+            open_usage = QPushButton("Open usage")
+            open_usage.setObjectName(f"{account.id}_open_usage_btn")
+            open_usage.setFixedWidth(92)
+            open_usage.clicked.connect(
+                lambda _checked=False: _open_in_browser(
+                    self.usage_url_edit.text().strip() or OPENCODE_GO_USAGE_URL
+                )
+            )
+            usage_row = QHBoxLayout()
+            usage_row.setContentsMargins(0, 0, 0, 0)
+            usage_row.setSpacing(6)
+            usage_row.addWidget(QLabel("Usage URL:"))
+            usage_row.addWidget(self.usage_url_edit, 1)
+            usage_row.addWidget(open_usage)
+            layout.addLayout(usage_row)
+
+    def _edit_colors(self) -> None:
+        dialog = _ColorThresholdDialog(self.colors, self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            self.colors = dialog.editor.value()
 
     def to_account(self) -> BrowserAccount:
         name = self.name_edit.text().strip() or None
+        usage_url = None
+        if self.usage_url_edit is not None:
+            usage_url = self.usage_url_edit.text().strip() or OPENCODE_GO_USAGE_URL
         return BrowserAccount(
             id=self.account_id,
             kind=self.kind,
             name=name,
             enabled=True,
+            colors=self.colors.model_copy(deep=True),
+            usage_url=usage_url,
         )
 
 
@@ -474,8 +712,8 @@ class SettingsDialog(QDialog):
         providers_layout.setSpacing(8)
 
         providers_hint = _hint_label(
-            "Show or hide provider groups in the widget. Manage multiple Claude "
-            "or Codex accounts from their tabs."
+            "Show or hide provider groups in the widget. Manage multiple Claude, "
+            "Codex, or OpenCode accounts from their tabs."
         )
         providers_layout.addWidget(providers_hint)
 
@@ -490,7 +728,7 @@ class SettingsDialog(QDialog):
         providers_layout.addWidget(self.codex_cb)
 
         self.opencode_go_cb = QCheckBox("OpenCode")
-        self.opencode_go_cb.setToolTip("Show the OpenCode usage tile in the panel.")
+        self.opencode_go_cb.setToolTip("Show OpenCode accounts in the panel.")
         self.opencode_go_cb.setChecked(config.providers.opencode_go)
         providers_layout.addWidget(self.opencode_go_cb)
 
@@ -555,7 +793,6 @@ class SettingsDialog(QDialog):
         self._codex_accounts_layout = QVBoxLayout()
         self._codex_accounts_layout.setSpacing(6)
         codex_accounts_layout.addLayout(self._codex_accounts_layout)
-        self._rebuild_browser_account_rows()
 
         # ----- Copilot details -----
         copilot = QGroupBox("GitHub Copilot")
@@ -633,6 +870,9 @@ class SettingsDialog(QDialog):
             "AI credit allowance."
         )
         copilot_form.addRow("", quota_hint)
+
+        self.copilot_colors = _ColorThresholdLauncher(config.copilot.colors)
+        copilot_form.addRow("Gauge colors:", self.copilot_colors)
 
         # ----- OpenRouter details -----
         openrouter = QGroupBox("OpenRouter")
@@ -718,68 +958,25 @@ class SettingsDialog(QDialog):
         )
         openrouter_form.addRow("", budget_hint)
 
-        # ----- OpenCode details -----
-        opencode_go = QGroupBox("OpenCode")
-        opencode_go_form = QFormLayout(opencode_go)
-        opencode_go_form.setLabelAlignment(Qt.AlignmentFlag.AlignRight)
-        opencode_go_form.setHorizontalSpacing(12)
-        opencode_go_form.setVerticalSpacing(8)
-        opencode_go_form.setFieldGrowthPolicy(
-            QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
-        )
+        self.openrouter_colors = _ColorThresholdLauncher(config.openrouter.colors)
+        openrouter_form.addRow("Gauge colors:", self.openrouter_colors)
 
-        self.opencode_go_url = QLineEdit()
-        self.opencode_go_url.setText(opencode_go_usage_url(config))
-        self.opencode_go_url.setPlaceholderText(OPENCODE_GO_USAGE_URL)
-        opencode_go_form.addRow("Usage URL:", self.opencode_go_url)
-
-        opencode_go_signin_btn = QPushButton("Sign in")
-        opencode_go_signin_btn.setObjectName("opencode_go_signin_btn")
-        opencode_go_signin_btn.setToolTip(
-            "Sign in with your installed browser; Google and passkeys are supported."
-        )
-        opencode_go_signin_btn.clicked.connect(
-            lambda _checked=False: self.sign_in_clicked.emit("opencode_go")
-        )
-        opencode_go_form.addRow("", opencode_go_signin_btn)
-
-        opencode_go_cookie_btn = QPushButton("Paste cookie")
-        opencode_go_cookie_btn.setObjectName("opencode_go_paste_cookie_btn")
-        opencode_go_cookie_btn.setToolTip(
-            "Paste a Cookie header from your signed-in OpenCode browser session."
-        )
-        opencode_go_cookie_btn.clicked.connect(
-            lambda _checked=False: self.paste_cookie_clicked.emit("opencode_go")
-        )
-        opencode_go_form.addRow("", opencode_go_cookie_btn)
-
-        opencode_go_clear_btn = QPushButton("Clear sign-in")
-        opencode_go_clear_btn.setObjectName("opencode_go_clear_signin_btn")
-        opencode_go_clear_btn.setToolTip(
-            "Remove the saved OpenCode sign-in from AI Gauge."
-        )
-        opencode_go_clear_btn.clicked.connect(
-            lambda _checked=False: self.clear_sign_in_clicked.emit("opencode_go")
-        )
-        opencode_go_form.addRow("", opencode_go_clear_btn)
-
-        opencode_go_usage_btn = QPushButton("Open usage in browser")
-        opencode_go_usage_btn.setObjectName("opencode_go_open_usage_btn")
-        opencode_go_usage_btn.setToolTip("Open the OpenCode usage page in your default browser.")
-        opencode_go_usage_btn.clicked.connect(
-            lambda _checked=False: _open_in_browser(
-                self.opencode_go_url.text().strip() or OPENCODE_GO_USAGE_URL
+        # ----- OpenCode accounts -----
+        opencode_go = QGroupBox("OpenCode Accounts")
+        opencode_go_layout = QVBoxLayout(opencode_go)
+        opencode_go_layout.setSpacing(8)
+        opencode_go_layout.addWidget(
+            _hint_label(
+                "Name each OpenCode subscription and paste its workspace <b>Go</b> "
+                "usage-page URL. Every row has an independent browser session, "
+                "tile, and gauge colors. <b>Sign in</b> opens a real installed "
+                "browser and connects that subscription automatically."
             )
         )
-        opencode_go_form.addRow("", opencode_go_usage_btn)
-
-        opencode_go_help = _hint_label(
-            "Paste the workspace <b>Go</b> usage page URL. The tile reads Rolling, "
-            "Weekly, and Monthly usage from that page. <b>Sign in</b> opens a "
-            "real installed browser and connects the session automatically."
-        )
-        opencode_go_form.addRow("", opencode_go_help)
-
+        self._opencode_go_accounts_layout = QVBoxLayout()
+        self._opencode_go_accounts_layout.setSpacing(8)
+        opencode_go_layout.addLayout(self._opencode_go_accounts_layout)
+        self._rebuild_browser_account_rows()
         general_tab = QWidget()
         general_tab_layout = QVBoxLayout(general_tab)
         general_tab_layout.setContentsMargins(10, 10, 10, 10)
@@ -875,6 +1072,9 @@ class SettingsDialog(QDialog):
                 kind=kind,
                 name=self._next_account_name(kind),
                 enabled=True,
+                usage_url=(
+                    OPENCODE_GO_USAGE_URL if kind == "opencode_go" else None
+                ),
             )
         )
         self._rebuild_browser_account_rows()
@@ -889,7 +1089,11 @@ class SettingsDialog(QDialog):
         self._rebuild_browser_account_rows()
 
     def _rebuild_browser_account_rows(self) -> None:
-        for layout in (self._claude_accounts_layout, self._codex_accounts_layout):
+        for layout in (
+            self._claude_accounts_layout,
+            self._codex_accounts_layout,
+            self._opencode_go_accounts_layout,
+        ):
             while layout.count():
                 item = layout.takeAt(0)
                 widget = item.widget()
@@ -899,11 +1103,12 @@ class SettingsDialog(QDialog):
         for kind, layout in (
             ("claude", self._claude_accounts_layout),
             ("codex", self._codex_accounts_layout),
+            ("opencode_go", self._opencode_go_accounts_layout),
         ):
             for account in [a for a in self._browser_accounts if a.kind == kind]:
                 row = _BrowserAccountRow(
                     account,
-                    removable=account.id not in ("claude", "codex"),
+                    removable=True,
                 )
                 row.sign_in_clicked.connect(self.sign_in_clicked.emit)
                 row.paste_cookie_clicked.connect(self.paste_cookie_clicked.emit)
@@ -920,6 +1125,16 @@ class SettingsDialog(QDialog):
 
     def _current_browser_accounts(self) -> list[BrowserAccount]:
         return [row.to_account() for row in self._browser_account_rows]
+
+    def draft_browser_account(self, account_id: str) -> BrowserAccount | None:
+        return next(
+            (
+                row.to_account()
+                for row in self._browser_account_rows
+                if row.account_id == account_id
+            ),
+            None,
+        )
 
     def _validate_browser_accounts(self) -> bool:
         seen: set[tuple[str, str]] = set()
@@ -1115,11 +1330,21 @@ class SettingsDialog(QDialog):
         config.copilot.monthly_quota = (
             int(selected_quota) if selected_quota is not None else self.gh_quota.value()
         )
+        config.copilot.colors = self.copilot_colors.value()
         budget = self.or_daily_budget.value()
         config.openrouter.daily_budget = budget if budget > 0 else None
-        config.opencode_go.usage_url = (
-            self.opencode_go_url.text().strip() or OPENCODE_GO_USAGE_URL
+        config.openrouter.colors = self.openrouter_colors.value()
+        # Keep the legacy singleton fields synchronized for downgrade safety;
+        # account rows are the source of truth from schema version 2 onward.
+        first_opencode = next(
+            (account for account in accounts if account.kind == "opencode_go"),
+            None,
         )
+        if first_opencode is not None:
+            config.opencode_go.usage_url = (
+                first_opencode.usage_url or OPENCODE_GO_USAGE_URL
+            )
+            config.opencode_go.colors = first_opencode.colors.model_copy(deep=True)
         # Persist all settings first: wiring up OS autostart can fail (e.g. a
         # rejected Task Scheduler entry), and that must neither lose the user's
         # other changes nor crash the app via an exception escaping this slot.

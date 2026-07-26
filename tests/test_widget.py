@@ -1,10 +1,12 @@
 from datetime import datetime, timedelta
 
 import pytest
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import QPoint, Qt
+from PyQt6.QtTest import QTest
 from PyQt6.QtWidgets import QApplication
 
-from aigauge.config import BrowserAccount, Config
+from aigauge import __version__
+from aigauge.config import BrowserAccount, ColorThresholds, Config
 from aigauge.models import SnapshotStatus, UsageMetric, UsageSnapshot
 from aigauge.ratio import RatioEstimate
 from aigauge.widget import (
@@ -81,6 +83,32 @@ def test_offscreen_saved_position_is_clamped_on_screen(qtbot):
     assert widget.y() + widget.height() <= geo.bottom() + 1
 
 
+def test_title_bars_offer_distinct_view_and_hide_controls(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    assert widget.collapse_btn.text() == "▾"
+    assert widget.collapse_btn.toolTip() == "Switch to compact view"
+    assert widget.hide_btn.text() == "—"
+    assert widget.hide_btn.toolTip() == "Hide to system tray"
+    assert widget.close_btn.text() == "✕"
+    assert widget.close_btn.toolTip() == "Quit AI Gauge"
+
+    widget.set_collapsed(True)
+    assert widget._expand_btn.text() == "▴"  # noqa: SLF001
+    assert widget._collapsed_hide_btn.toolTip() == "Hide to system tray"  # noqa: SLF001
+    assert widget._collapsed_close_btn.text() == "✕"  # noqa: SLF001
+    assert widget._collapsed_close_btn.toolTip() == "Quit AI Gauge"  # noqa: SLF001
+
+    with qtbot.waitSignal(widget.quit_requested):
+        widget._collapsed_close_btn.click()  # noqa: SLF001
+
+    widget.show()
+    qtbot.waitUntil(widget.isVisible)
+    widget._collapsed_hide_btn.click()  # noqa: SLF001
+    assert widget.isHidden()
+
+
 def test_reenabled_provider_returns_to_canonical_order(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
@@ -102,6 +130,14 @@ def test_browser_account_tiles_group_by_provider_kind(qtbot):
     config.browser_accounts.append(
         BrowserAccount(id="codex-work", kind="codex", name="Work")
     )
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="opencode_go-work",
+            kind="opencode_go",
+            name="Work",
+            usage_url="https://opencode.ai/workspace/work/go",
+        )
+    )
     widget = UsageWidget(config)
     qtbot.addWidget(widget)
 
@@ -109,6 +145,8 @@ def test_browser_account_tiles_group_by_provider_kind(qtbot):
     widget.ensure_tile("claude-team", "Claude (Team)")
     widget.ensure_tile("codex", "Codex")
     widget.ensure_tile("claude", "Claude")
+    widget.ensure_tile("opencode_go-work", "OpenCode (Work)")
+    widget.ensure_tile("opencode_go", "OpenCode")
     widget.ensure_tile("copilot", "Copilot")
 
     assert _tile_order(widget) == [
@@ -116,6 +154,8 @@ def test_browser_account_tiles_group_by_provider_kind(qtbot):
         "claude-team",
         "codex",
         "codex-work",
+        "opencode_go",
+        "opencode_go-work",
         "copilot",
     ]
 
@@ -337,6 +377,7 @@ def test_secondary_browser_account_auth_tile_uses_sign_in_button(qtbot):
     config.browser_accounts.append(
         BrowserAccount(id="codex-work", kind="codex", name="Work")
     )
+
     widget = UsageWidget(config)
     qtbot.addWidget(widget)
 
@@ -469,14 +510,23 @@ def test_configured_collapsed_browser_tile_starts_compact(qtbot):
     assert not tile._compact_summary.isHidden()  # noqa: SLF001
 
 
-def test_opencode_go_collapsed_tile_shows_rolling_and_monthly_inline_metrics(qtbot):
-    widget = UsageWidget(Config())
+def test_secondary_opencode_collapsed_tile_shows_rolling_and_monthly(qtbot):
+    config = Config()
+    config.browser_accounts.append(
+        BrowserAccount(
+            id="opencode_go-work",
+            kind="opencode_go",
+            name="Work",
+            usage_url="https://opencode.ai/workspace/work/go",
+        )
+    )
+    widget = UsageWidget(config)
     qtbot.addWidget(widget)
     reset_at = datetime.now() + timedelta(hours=4)
 
     widget.update_snapshot(
         UsageSnapshot(
-            provider="opencode_go",
+            provider="opencode_go-work",
             status=SnapshotStatus.OK,
             metrics=[
                 UsageMetric("Rolling", 13.0, reset_at),
@@ -484,16 +534,17 @@ def test_opencode_go_collapsed_tile_shows_rolling_and_monthly_inline_metrics(qtb
                 UsageMetric("Monthly", 7.0, reset_at + timedelta(days=30)),
             ],
         ),
-        "OpenCode",
+        "OpenCode (Work)",
     )
 
-    tile = widget._tiles["opencode_go"]  # noqa: SLF001
+    tile = widget._tiles["opencode_go-work"]  # noqa: SLF001
     tile.set_expanded(False)
 
     assert [item.code.text() for item in tile._compact_metrics] == ["R", "M"]  # noqa: SLF001
     assert [item.pct.text() for item in tile._compact_metrics] == ["13%", "7%"]  # noqa: SLF001
 
-def test_refresh_state_shows_next_refresh_countdown(qtbot):
+
+def test_expanded_refresh_state_includes_next_refresh_countdown(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -503,11 +554,11 @@ def test_refresh_state_shows_next_refresh_countdown(qtbot):
         next_at=datetime.now() + timedelta(minutes=3, seconds=5),
     )
 
-    assert widget.cadence_label.text() == "· active next 4m"
+    assert widget.cadence_label.text().endswith("4m")
     assert "5 min cadence" in widget.cadence_label.toolTip()
 
 
-def test_refresh_state_shows_now_when_next_refresh_is_due(qtbot):
+def test_expanded_refresh_state_includes_now_when_refresh_is_due(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -517,29 +568,314 @@ def test_refresh_state_shows_now_when_next_refresh_is_due(qtbot):
         next_at=datetime.now() - timedelta(seconds=1),
     )
 
-    assert widget.cadence_label.text() == "· idle next now"
+    assert widget.cadence_label.text().endswith("now")
 
 
-def test_widget_uses_fixed_width_despite_extreme_saved_size(qtbot):
+def test_widget_clamps_saved_width_and_ignores_saved_height(qtbot):
     config = Config()
     config.window.width = 5000
-    config.window.height = 2
+    config.window.height = 700
+    config.window.manually_resized = True
 
     widget = UsageWidget(config)
     qtbot.addWidget(widget)
-
-    assert widget.width() == 340
-    assert widget.height() >= 80
-
-
-def test_refit_restores_fixed_width_after_dpi_resize_glitch(qtbot):
-    widget = UsageWidget(Config())
-    qtbot.addWidget(widget)
-    widget.resize(5000, 120)
-
     widget._do_refit_height()  # noqa: SLF001
 
+    assert widget.width() == 900
+    assert widget.height() != 700
+    assert widget.minimumHeight() == widget.maximumHeight() == widget.height()
+
+
+def test_expanded_widget_resizes_width_only_and_persists_width(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget._do_refit_height()  # noqa: SLF001
+    fitted_height = widget.height()
+
+    widget.resize(520, fitted_height + 300)
+    widget._save_expanded_width()  # noqa: SLF001
+
+    assert widget.width() == 520
+    assert widget.height() == fitted_height
+    assert widget._config.window.width == 520  # noqa: SLF001
+    assert widget._config.window.manually_resized is False  # noqa: SLF001
+
+    widget.set_collapsed(True)
     assert widget.width() == 340
+    widget.set_collapsed(False)
+    widget._do_refit_height()  # noqa: SLF001
+    assert widget.width() == 520
+    assert widget.height() == fitted_height
+
+
+def test_resize_grip_stops_before_standard_gauge_rows_would_wrap(qtbot):
+    config = Config()
+    config.window.width = 620
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="copilot",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric(
+                    "Monthly credits",
+                    52.0,
+                    reset_label="123d 12h",
+                )
+            ],
+        ),
+        "Copilot",
+    )
+    gauge_row = widget._tiles["copilot"]._rows[0]  # noqa: SLF001
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="opencode_go-gmail",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Rolling", 13.0, reset_label="2h 13m"),
+                UsageMetric("Weekly", 5.0, reset_label="23h 58m"),
+                UsageMetric("Monthly", 97.0, reset_label="30.9d"),
+            ],
+        ),
+        "OpenCode (Gmail)",
+    )
+    compact_tile = widget._tiles["opencode_go-gmail"]  # noqa: SLF001
+    compact_tile.set_expanded(False)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="openrouter",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric(
+                    "Balance $51.39 left · Spend today $0.00 / month $95.11"
+                )
+            ],
+        ),
+        "OpenRouter",
+    )
+    openrouter_row = widget._tiles["openrouter"]._rows[0]  # noqa: SLF001
+    widget.set_refresh_state(
+        active=True,
+        minutes=5,
+        next_at=datetime.now() + timedelta(minutes=4),
+    )
+    widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
+    widget._refresh_header_labels()  # noqa: SLF001
+    widget.show()
+    widget.resize(620, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    wide_height = widget.height()
+    minimum_width = widget.minimumWidth()
+
+    assert minimum_width > 280
+    assert compact_tile._compact_below_header is False  # noqa: SLF001
+    assert openrouter_row._reset_stacked is False  # noqa: SLF001
+
+    grip = widget._resize_grip  # noqa: SLF001
+    start = grip.rect().center()
+    QTest.mousePress(
+        grip,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        start,
+    )
+    assert widget._resizing_with_grip is True  # noqa: SLF001
+    last_pos = start
+    for delta in (-120, -180, -220, -260, -320, -400):
+        last_pos = QPoint(start.x() + delta, start.y())
+        QTest.mouseMove(grip, last_pos)
+        QApplication.processEvents()
+
+    # The live minimum clamps the drag before the normal gauge can clip or
+    # move onto a second line. Height and layout remain stable during drag.
+    assert widget.width() == minimum_width
+    assert widget.height() == wide_height
+    assert gauge_row.bar.y() < gauge_row.label.geometry().bottom()
+    assert gauge_row.bar.geometry().right() < gauge_row.pct.x()
+    assert gauge_row.reset.geometry().right() <= gauge_row.rect().right()
+
+    QTest.mouseRelease(
+        grip,
+        Qt.MouseButton.LeftButton,
+        Qt.KeyboardModifier.NoModifier,
+        last_pos,
+    )
+    QApplication.processEvents()
+
+    assert widget._resizing_with_grip is False  # noqa: SLF001
+    assert widget.width() == minimum_width
+    assert gauge_row.bar.y() < gauge_row.label.geometry().bottom()
+    assert gauge_row.reset.geometry().right() <= gauge_row.rect().right()
+    assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
+    assert widget.refresh_btn.isVisible()
+    assert widget.settings_btn.isVisible()
+    assert widget.close_btn.isVisible()
+
+    widget.resize(620, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    assert compact_tile._compact_below_header is False  # noqa: SLF001
+    assert openrouter_row._reset_stacked is False  # noqa: SLF001
+    assert widget.title_label.text() == f"AI Gauge {__version__}"
+
+def test_expanded_height_caps_and_scrolls_when_content_exceeds_screen(
+    qtbot,
+    monkeypatch,
+):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    for index in range(20):
+        provider = f"provider-{index}"
+        widget.update_snapshot(
+            UsageSnapshot(
+                provider=provider,
+                status=SnapshotStatus.OK,
+                metrics=[UsageMetric("Usage", 25.0)],
+            ),
+            f"Provider {index}",
+        )
+    monkeypatch.setattr(widget, "_available_expanded_height", lambda: 180)
+    widget.show()
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+
+    assert widget.height() == 180
+    assert widget._tile_scroll.verticalScrollBar().maximum() > 0  # noqa: SLF001
+
+
+def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.ensure_tile("copilot", "Copilot")
+    widget.update_snapshot(_ok_snapshot("copilot"), "Copilot")
+    widget.show()
+    widget._do_refit_height()  # noqa: SLF001
+
+    assert widget._resize_footer.y() >= (  # noqa: SLF001
+        widget._tile_scroll.y() + widget._tile_scroll.height()  # noqa: SLF001
+    )
+
+
+def test_expanded_header_compacts_progressively_at_280(qtbot, monkeypatch):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    # A hidden parent makes Qt report effective visibility as false even when
+    # these labels are logically enabled. Compaction must use hidden state.
+    monkeypatch.setattr(widget.age_label, "isVisible", lambda: False)
+    monkeypatch.setattr(widget.cadence_label, "isVisible", lambda: False)
+    next_at = datetime.now() + timedelta(minutes=4)
+    widget.set_refresh_state(True, 5, next_at)
+    widget._last_fetch_at = datetime.now() - timedelta(minutes=1)  # noqa: SLF001
+    widget._refresh_header_labels()  # noqa: SLF001
+
+    widget.resize(620, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.title_label.text() == f"AI Gauge {__version__}"
+    assert not widget.age_label.isHidden()
+    assert "active next" in widget.cadence_label.text()
+
+    widget.resize(360, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.width() == 360
+    assert widget.cadence_label.text().endswith("4m")
+    assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
+
+    widget.resize(280, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.width() == 280
+    assert not widget.title_label.isHidden()
+    assert not widget.refresh_btn.isHidden()
+    assert not widget.settings_btn.isHidden()
+    assert not widget.close_btn.isHidden()
+    assert widget.age_label.isHidden()
+    assert widget._header_widget.minimumSizeHint().width() <= widget.width()  # noqa: SLF001
+
+    widget.resize(200, widget.height())
+    assert widget.width() == 280
+
+    widget.resize(620, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
+    assert widget.title_label.text() == f"AI Gauge {__version__}"
+    assert not widget.age_label.isHidden()
+    assert "active next" in widget.cadence_label.text()
+
+
+def test_metric_row_clamps_overage_fill_and_uses_account_threshold_color(qtbot):
+    colors = ColorThresholds(
+        green_max=30,
+        yellow_max=60,
+        orange_max=90,
+        red_color="#123456",
+    )
+    row = _MetricRow(colors=colors)
+    qtbot.addWidget(row)
+
+    row.set_metric("Credits", 110.0, datetime.now() + timedelta(days=4))
+
+    assert row.bar._bar.value() == 100  # noqa: SLF001
+    assert "#123456" in row.bar._bar.styleSheet()  # noqa: SLF001
+    assert row.pct.text() == "110%"
+
+
+def test_metric_row_percent_and_reset_columns_fit_their_text(qtbot):
+    row = _MetricRow()
+    qtbot.addWidget(row)
+    row.set_metric("Weekly", 8.0, datetime.now() + timedelta(days=4))
+
+    assert row.pct.width() <= row.pct.fontMetrics().horizontalAdvance("8%") + 2
+    assert row.reset.width() <= (
+        row.reset.fontMetrics().horizontalAdvance(row.reset.text()) + 2
+    )
+
+
+def test_provider_gauges_share_normalized_columns_at_minimum_width(qtbot):
+    config = Config()
+    config.window.width = 620
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="opencode_go-work",
+            status=SnapshotStatus.OK,
+            metrics=[
+                UsageMetric("Rolling", 26.0, reset_label="57m"),
+                UsageMetric("Weekly", 100.0, reset_label="23h 06m"),
+                UsageMetric("Monthly", 5.0, reset_label="30.9d"),
+            ],
+        ),
+        "OpenCode (Work)",
+    )
+    widget.show()
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    rows = widget._tiles["opencode_go-work"]._rows  # noqa: SLF001
+
+    def assert_columns_aligned():
+        assert len({row.label.width() for row in rows}) == 1
+        assert len({row.bar.x() for row in rows}) == 1
+        assert len({row.bar.width() for row in rows}) == 1
+        assert len({row.pct.x() for row in rows}) == 1
+        assert len({row.reset.x() for row in rows}) == 1
+        assert len({row.reset.width() for row in rows}) == 1
+
+    assert_columns_aligned()
+    minimum_width = widget.minimumWidth()
+    assert minimum_width > 280
+
+    widget.resize(280, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    assert widget.width() == minimum_width
+    assert all(row.bar.y() < row.label.geometry().bottom() for row in rows)
+    assert all(row.reset.geometry().right() <= row.rect().right() for row in rows)
+    assert_columns_aligned()
+
+    widget.resize(620, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    assert_columns_aligned()
 
 
 def test_collapsed_mode_shows_session_summary(qtbot):
@@ -819,7 +1155,12 @@ def test_metric_row_right_aligns_split_note_metric(qtbot):
 
     assert row.label.text() == "Balance $11.50 left"
     assert row.reset.text() == "Spend today $0.00 / month $0.00"
-    assert row.reset.width() > 92
+    assert row.reset.width() >= (
+        row.reset.fontMetrics().horizontalAdvance(row.reset.text()) + 4
+    )
+    assert row.label.minimumWidth() >= (
+        row.label.fontMetrics().horizontalAdvance(row.label.text()) + 4
+    )
     assert row.reset.toolTip() == ""
     assert "#d1d5db" in row.reset.styleSheet()
     assert row.bar.isHidden()

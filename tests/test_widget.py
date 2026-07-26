@@ -541,7 +541,7 @@ def test_secondary_opencode_collapsed_tile_shows_rolling_and_monthly(qtbot):
     assert [item.code.text() for item in tile._compact_metrics] == ["R", "M"]  # noqa: SLF001
     assert [item.pct.text() for item in tile._compact_metrics] == ["13%", "7%"]  # noqa: SLF001
 
-def test_expanded_refresh_state_shows_full_next_refresh_status(qtbot):
+def test_narrow_expanded_refresh_state_shows_next_refresh_countdown(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -551,11 +551,11 @@ def test_expanded_refresh_state_shows_full_next_refresh_status(qtbot):
         next_at=datetime.now() + timedelta(minutes=3, seconds=5),
     )
 
-    assert widget.cadence_label.text() == "· active next 4m"
+    assert widget.cadence_label.text() == "4m"
     assert "5 min cadence" in widget.cadence_label.toolTip()
 
 
-def test_expanded_refresh_state_shows_full_status_when_refresh_is_due(qtbot):
+def test_narrow_expanded_refresh_state_shows_now_when_refresh_is_due(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -565,7 +565,7 @@ def test_expanded_refresh_state_shows_full_status_when_refresh_is_due(qtbot):
         next_at=datetime.now() - timedelta(seconds=1),
     )
 
-    assert widget.cadence_label.text() == "· idle next now"
+    assert widget.cadence_label.text() == "now"
 
 
 def test_widget_clamps_saved_width_and_ignores_saved_height(qtbot):
@@ -605,7 +605,7 @@ def test_expanded_widget_resizes_width_only_and_persists_width(qtbot):
     assert widget.height() == fitted_height
 
 
-def test_expanded_widget_stops_at_visible_content_width(qtbot):
+def test_expanded_widget_wraps_long_summaries_at_400_pixels(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
     widget.update_snapshot(
@@ -618,8 +618,10 @@ def test_expanded_widget_stops_at_visible_content_width(qtbot):
                 UsageMetric("Monthly", 2.0, reset_label="30.9d"),
             ],
         ),
-        "OpenCode",
+        "OpenCode (AloeDesk)",
     )
+    compact_tile = widget._tiles["opencode_go"]  # noqa: SLF001
+    compact_tile.set_expanded(False)
     widget.update_snapshot(
         UsageSnapshot(
             provider="openrouter",
@@ -632,14 +634,43 @@ def test_expanded_widget_stops_at_visible_content_width(qtbot):
         ),
         "OpenRouter",
     )
-    widget._do_refit_height()  # noqa: SLF001
-    content_width = widget.minimumWidth()
-    fitted_height = widget.height()
+    openrouter_tile = widget._tiles["openrouter"]  # noqa: SLF001
+    openrouter_row = openrouter_tile._rows[0]  # noqa: SLF001
+    widget.show()
 
-    assert content_width >= 400
-    widget.resize(100, fitted_height + 300)
-    assert widget.width() == content_width
-    assert widget.height() == fitted_height
+    widget.resize(620, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    wide_height = widget.height()
+    assert widget.minimumWidth() == 400
+    assert compact_tile._narrow_layout is False  # noqa: SLF001
+    assert openrouter_row._reset_stacked is False  # noqa: SLF001
+    assert (
+        abs(compact_tile._compact_summary.y() - compact_tile.header.y()) <= 2  # noqa: SLF001
+    )
+    assert openrouter_row.reset.y() == openrouter_row.label.y()
+
+    widget.resize(400, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    assert widget.width() == 400
+    assert widget.height() > wide_height
+    assert compact_tile._narrow_layout is True  # noqa: SLF001
+    assert openrouter_row._reset_stacked is True  # noqa: SLF001
+    assert compact_tile._compact_summary.y() > compact_tile.header.y()  # noqa: SLF001
+    assert openrouter_row.reset.y() > openrouter_row.label.y()
+    assert compact_tile.sizeHint().width() <= 400
+    assert openrouter_tile.sizeHint().width() <= 400
+
+    widget.resize(320, widget.height())
+    assert widget.width() == 400
+
+    widget.resize(620, widget.height())
+    widget._do_refit_height()  # noqa: SLF001
+    QApplication.processEvents()
+    assert widget.height() == wide_height
+    assert compact_tile._narrow_layout is False  # noqa: SLF001
+    assert openrouter_row._reset_stacked is False  # noqa: SLF001
 
 
 def test_expanded_height_caps_and_scrolls_when_content_exceeds_screen(
@@ -679,7 +710,7 @@ def test_resize_grip_has_its_own_footer_below_provider_content(qtbot):
     )
 
 
-def test_expanded_header_cannot_shrink_below_readable_width(qtbot):
+def test_expanded_header_shortens_cadence_at_responsive_minimum(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
     next_at = datetime.now() + timedelta(minutes=4)
@@ -689,7 +720,12 @@ def test_expanded_header_cannot_shrink_below_readable_width(qtbot):
     widget.resize(320, widget.height())
     widget._refresh_cadence_label()  # noqa: SLF001
 
-    assert widget.width() >= 400
+    assert widget.width() == 400
+    assert widget.cadence_label.text() == "4m"
+    assert widget._header_widget.sizeHint().width() <= widget.width()  # noqa: SLF001
+
+    widget.resize(620, widget.height())
+    widget._refresh_cadence_label()  # noqa: SLF001
     assert "active next" in widget.cadence_label.text()
 
 

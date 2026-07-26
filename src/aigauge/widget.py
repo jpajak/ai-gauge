@@ -70,6 +70,7 @@ CHIP_NOTCH_HALF_WIDTH = 3.5
 PROVIDER_ORDER = ("claude", "codex", "opencode_go", "copilot", "openrouter")
 COLLAPSED_MIN_HEIGHT = WINDOW_COLLAPSED_HEIGHT
 EXPANDED_MIN_WIDTH = 400
+NARROW_LAYOUT_BREAKPOINT = 600
 
 
 def _clamp_height(value: int) -> int:
@@ -588,13 +589,51 @@ class _MetricRow(QWidget):
             Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
         )
 
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 1, 0, 1)
-        layout.setSpacing(6)
-        layout.addWidget(self.label)
-        layout.addWidget(self.bar, 1)
-        layout.addWidget(self.pct)
-        layout.addWidget(self.reset)
+        self._layout = QVBoxLayout(self)
+        self._layout.setContentsMargins(0, 1, 0, 1)
+        self._layout.setSpacing(1)
+        self._main_layout = QHBoxLayout()
+        self._main_layout.setContentsMargins(0, 0, 0, 0)
+        self._main_layout.setSpacing(6)
+        self._main_layout.addWidget(self.label)
+        self._main_layout.addWidget(self.bar, 1)
+        self._main_layout.addWidget(self.pct)
+        self._main_layout.addWidget(self.reset)
+        self._layout.addLayout(self._main_layout)
+        self._split_note = False
+        self._narrow_layout = False
+        self._reset_stacked = False
+
+    def set_narrow_layout(self, narrow: bool) -> bool:
+        if self._narrow_layout == narrow:
+            return False
+        self._narrow_layout = narrow
+        return self._sync_responsive_layout()
+
+    def _sync_responsive_layout(self) -> bool:
+        should_stack = self._split_note and self._narrow_layout
+        if should_stack == self._reset_stacked:
+            return False
+        self._main_layout.removeWidget(self.reset)
+        self._layout.removeWidget(self.reset)
+        if should_stack:
+            self.reset.setAlignment(
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter
+            )
+            self._layout.addWidget(
+                self.reset,
+                0,
+                Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignVCenter,
+            )
+        else:
+            self.reset.setAlignment(
+                Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter
+            )
+            self._main_layout.addWidget(self.reset)
+        self._reset_stacked = should_stack
+        self._layout.invalidate()
+        self.updateGeometry()
+        return True
 
     def set_metric(
         self,
@@ -615,6 +654,8 @@ class _MetricRow(QWidget):
             and reset_label is None
             and " · " in label
         )
+        self._split_note = split_note
+        self._sync_responsive_layout()
         if split_note:
             left, right = label.split(" · ", 1)
             self.label.setText(left)
@@ -688,6 +729,8 @@ class _MetricRow(QWidget):
         Qt animates a stripe inside the chunk when ``range == (0, 0)``; the
         bar still respects the QSS chunk color, so we get a muted shimmer.
         """
+        self._split_note = False
+        self._sync_responsive_layout()
         self.label.setText(label)
         label_width = self.label.fontMetrics().horizontalAdvance(label) + 4
         self.label.setMinimumWidth(max(70, label_width))
@@ -846,10 +889,10 @@ class _ProviderTile(QFrame):
         self.expand_btn.setToolTip("Show top models")
         self.expand_btn.clicked.connect(self._on_expand_clicked)
 
-        header_row = QHBoxLayout()
-        header_row.setContentsMargins(0, 0, 0, 0)
-        header_row.addWidget(self.expand_btn)
-        header_row.addWidget(self.header)
+        self._header_row = QHBoxLayout()
+        self._header_row.setContentsMargins(0, 0, 0, 0)
+        self._header_row.addWidget(self.expand_btn)
+        self._header_row.addWidget(self.header)
 
         self._compact_metrics: list[_CompactMetric] = []
         self._compact_summary = QWidget(self)
@@ -859,11 +902,11 @@ class _ProviderTile(QFrame):
         self._compact_layout.setContentsMargins(4, 0, 0, 0)
         self._compact_layout.setSpacing(6)
         self._compact_layout.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
-        header_row.addStretch(1)
-        header_row.addWidget(self._compact_summary)
-        header_row.addWidget(self.action_btn)
-        header_row.addWidget(self.ratio_label)
-        header_row.addWidget(self.status)
+        self._header_row.addStretch(1)
+        self._header_row.addWidget(self._compact_summary)
+        self._header_row.addWidget(self.action_btn)
+        self._header_row.addWidget(self.ratio_label)
+        self._header_row.addWidget(self.status)
 
         self._rows: list[_MetricRow] = []
         self._expanded = self._supports_compact_collapse()
@@ -875,7 +918,8 @@ class _ProviderTile(QFrame):
         self._layout = QVBoxLayout(self)
         self._layout.setContentsMargins(6, 4, 6, 4)
         self._layout.setSpacing(2)
-        self._layout.addLayout(header_row)
+        self._layout.addLayout(self._header_row)
+        self._narrow_layout = False
 
         # Refresh-in-progress dim. Animates between 1.0 and 0.55 so the user
         # sees a brief breath when refresh starts/completes instead of a snap.
@@ -889,6 +933,29 @@ class _ProviderTile(QFrame):
 
         # Show skeleton state immediately so first launch isn't a blank tile.
         self.set_snapshot(None)
+
+    def set_narrow_layout(self, narrow: bool) -> bool:
+        layout_changed = self._narrow_layout != narrow
+        if layout_changed:
+            self._header_row.removeWidget(self._compact_summary)
+            self._layout.removeWidget(self._compact_summary)
+            if narrow:
+                self._layout.insertWidget(
+                    1,
+                    self._compact_summary,
+                    0,
+                    Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter,
+                )
+            else:
+                self._header_row.insertWidget(3, self._compact_summary)
+            self._narrow_layout = narrow
+        rows_changed = False
+        for row in self._rows:
+            rows_changed = row.set_narrow_layout(narrow) or rows_changed
+        if layout_changed or rows_changed:
+            self._layout.invalidate()
+            self.updateGeometry()
+        return layout_changed or rows_changed
 
     def set_colors(self, colors: ColorThresholds) -> None:
         if self._colors == colors:
@@ -1164,6 +1231,7 @@ class _ProviderTile(QFrame):
         # Grow / shrink the row pool to match
         while len(self._rows) < len(rows):
             r = _MetricRow(self, self._colors)
+            r.set_narrow_layout(self._narrow_layout)
             self._rows.append(r)
             self._layout.addWidget(r)
         while len(self._rows) > len(rows):
@@ -1195,6 +1263,7 @@ class _ProviderTile(QFrame):
     def _set_skeleton(self, labels: list[str]) -> None:
         while len(self._rows) < len(labels):
             r = _MetricRow(self, self._colors)
+            r.set_narrow_layout(self._narrow_layout)
             self._rows.append(r)
             self._layout.addWidget(r)
         while len(self._rows) > len(labels):
@@ -1448,6 +1517,7 @@ class UsageWidget(QWidget):
                 tile.set_expanded(False, emit=False)
             elif provider in (self._config.expanded_tiles or []):
                 tile.set_expanded(True, emit=False)
+            tile.set_narrow_layout(self.width() < NARROW_LAYOUT_BREAKPOINT)
             self._tiles[provider] = tile
             self._insert_tile_in_provider_order(provider, tile)
             self._refit_height()
@@ -1545,31 +1615,15 @@ class UsageWidget(QWidget):
         self._do_refit_height()
 
     def _refit_height(self) -> None:
-        """Refit automatic height and refresh the visible-content width floor."""
+        """Refit automatic height after content or responsive layout changes."""
         QTimer.singleShot(0, self._do_refit_height)
 
-    def _expanded_content_min_width(self) -> int:
-        """Smallest expanded width that keeps every visible value readable."""
-        # Expanded mode keeps all columns visible; compact mode is the
-        # deliberately narrow presentation.
-        preferred_width = EXPANDED_MIN_WIDTH
-        container_margins = self._tile_layout.contentsMargins()
-        container_padding = container_margins.left() + container_margins.right()
+    def _apply_responsive_layout(self) -> bool:
+        narrow = self.width() < NARROW_LAYOUT_BREAKPOINT
+        changed = False
         for tile in self._tiles.values():
-            for row in tile._rows:
-                row.layout().invalidate()
-                row.layout().activate()
-                row.updateGeometry()
-            tile.layout().invalidate()
-            tile.layout().activate()
-            tile.updateGeometry()
-            preferred_width = max(
-                preferred_width,
-                tile.sizeHint().width() + container_padding + 8,
-            )
-        # The scroll area has no horizontal scrollbar; the final eight pixels
-        # reserve its viewport edge and styled vertical scrollbar when needed.
-        return min(preferred_width, WINDOW_MAX_WIDTH)
+            changed = tile.set_narrow_layout(narrow) or changed
+        return changed
 
     def _available_expanded_height(self) -> int:
         screen = (
@@ -1595,12 +1649,14 @@ class UsageWidget(QWidget):
 
         # Release the collapsed/fitted constraints before measuring this pass.
         self.setMaximumWidth(WINDOW_MAX_WIDTH)
-        self.setMinimumWidth(WINDOW_WIDTH)
-        content_min_width = self._expanded_content_min_width()
-        self.setMinimumWidth(content_min_width)
-        target_width = max(content_min_width, min(self.width(), WINDOW_MAX_WIDTH))
+        self.setMinimumWidth(EXPANDED_MIN_WIDTH)
+        target_width = max(
+            EXPANDED_MIN_WIDTH,
+            min(self.width(), WINDOW_MAX_WIDTH),
+        )
         if self.width() != target_width:
             self.resize(target_width, self.height())
+        self._apply_responsive_layout()
 
         self._tile_layout.invalidate()
         self._tile_container.updateGeometry()
@@ -1630,6 +1686,7 @@ class UsageWidget(QWidget):
         self.setFixedHeight(fitted_height)
         if self.width() != target_width:
             self.resize(target_width, fitted_height)
+        self._clamp_to_visible_screen()
 
     def set_refreshing(self, refreshing: bool) -> None:
         self.refresh_btn.setEnabled(not refreshing)
@@ -1671,7 +1728,11 @@ class UsageWidget(QWidget):
             self.cadence_label.setToolTip("")
             return
         remaining = _format_countdown(self._next_refresh_at)
-        text = f"· {self._refresh_mode} next {remaining}"
+        text = (
+            f"· {self._refresh_mode} next {remaining}"
+            if self.width() >= NARROW_LAYOUT_BREAKPOINT
+            else remaining
+        )
         self.cadence_label.setText(text)
         self._collapsed_cadence_label.setText(remaining)
         interval = self._refresh_interval_minutes or 0
@@ -1837,15 +1898,16 @@ class UsageWidget(QWidget):
             # Release compact mode's fixed size, restore the saved width, and
             # let visible content determine both the width floor and height.
             self.setMaximumWidth(WINDOW_MAX_WIDTH)
-            self.setMinimumWidth(WINDOW_WIDTH)
+            self.setMinimumWidth(EXPANDED_MIN_WIDTH)
             self.setMaximumHeight(WINDOW_MAX_HEIGHT)
             self.setMinimumHeight(WINDOW_MIN_HEIGHT)
             target_width = max(
-                WINDOW_WIDTH,
+                EXPANDED_MIN_WIDTH,
                 min(self._config.window.width, WINDOW_MAX_WIDTH),
             )
             self.resize(target_width, WINDOW_MIN_HEIGHT)
             self._refit_height()
+        self._clamp_to_visible_screen()
         if save:
             self._config.window.collapsed = self._collapsed
             self._config.save()
@@ -1965,12 +2027,14 @@ class UsageWidget(QWidget):
         super().resizeEvent(event)
         if hasattr(self, "cadence_label"):
             self._refresh_cadence_label()
+        if hasattr(self, "_tiles") and self._apply_responsive_layout():
+            self._refit_height()
 
     def _save_expanded_width(self) -> None:
         if self._collapsed:
             return
         self._config.window.width = max(
-            WINDOW_WIDTH,
+            EXPANDED_MIN_WIDTH,
             min(self.width(), WINDOW_MAX_WIDTH),
         )
         # Retain these serialized fields for compatibility with older configs,

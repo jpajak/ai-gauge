@@ -14,8 +14,8 @@
 
 ### Changed
 
-- The expanded widget can grow without clipping its normal content layout. Its height follows the currently rendered provider rows and is capped to the available screen with vertical scrolling when necessary. Its minimum width now preserves complete metric labels, gauges, percentages, reset times, and summary values instead of permitting clipped text.
-- The expanded header shows the full refresh cadence, while compact mode shows only the countdown.
+- The expanded widget can narrow to 400 pixels without clipping. Below 600 pixels, collapsed account metrics move beneath the account name and OpenRouter balance/spending values stack; height follows the additional rows automatically and remains capped to the available screen with vertical scrolling when necessary.
+- The expanded header shows the full refresh cadence at wider sizes and just the countdown below the responsive breakpoint; compact mode also shows only the countdown.
 - Percentage and reset-time columns now size to their actual text instead of reserving fixed blank space between values and day labels.
 - Settings spin boxes and decimal controls now use explicit, high-contrast arrow buttons in the dark theme, including the account-specific gauge-color dialog.
 

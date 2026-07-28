@@ -87,6 +87,8 @@ def test_title_bars_offer_distinct_view_and_hide_controls(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
+    assert not widget.title_icon.pixmap().isNull()
+    assert not widget._collapsed_title_icon.pixmap().isNull()  # noqa: SLF001
     assert widget.collapse_btn.text() == "▾"
     assert widget.collapse_btn.toolTip() == "Switch to compact view"
     assert widget.hide_btn.text() == "—"
@@ -1070,19 +1072,38 @@ def test_collapsed_mode_persists_and_expands(qtbot):
     assert not widget._tile_container.isHidden()  # noqa: SLF001
 
 
-def test_always_on_top_suspension_is_reference_counted(qtbot):
+def test_always_on_top_suspension_is_reference_counted(qtbot, monkeypatch):
     config = Config()
     config.window.always_on_top = True
     widget = UsageWidget(config)
     qtbot.addWidget(widget)
 
-    assert widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    native_changes = []
+    monkeypatch.setattr(
+        widget,
+        "_set_native_topmost",
+        lambda on: native_changes.append(on) or True,
+    )
 
     widget.suspend_always_on_top()
     widget.suspend_always_on_top()
-    assert not widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
+    assert native_changes == [False]
 
     widget.restore_always_on_top()
+    assert native_changes == [False]
+
+    widget.restore_always_on_top()
+    assert native_changes == [False, True]
+
+
+def test_always_on_top_suspension_falls_back_to_qt_flags(qtbot, monkeypatch):
+    config = Config()
+    config.window.always_on_top = True
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+    monkeypatch.setattr(widget, "_set_native_topmost", lambda _on: False)
+
+    widget.suspend_always_on_top()
     assert not widget.windowFlags() & Qt.WindowType.WindowStaysOnTopHint
 
     widget.restore_always_on_top()

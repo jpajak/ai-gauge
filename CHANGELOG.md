@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+## 0.7.1 - 2026-07-28
+
+### Added
+
+- Added the AI Gauge logo as the global runtime window/dialog icon and as the embedded Windows, macOS, and Linux packaging icon. AI Gauge had carefully measured every percentage, then somehow forgot 100% of its own branding and arrived dressed as Python.
+- Added packaged PNG, ICO, and ICNS icon assets generated from the canonical application artwork.
+- Replaced the Windows/Linux severity dot in the system tray with the AI Gauge logo. Detailed usage remains visible in the tray tooltip and widget, while the tray now consistently represents the application itself.
+- Added the logo directly to the full and compact custom widget headers. The frameless main window has no native title-bar icon slot, so it now renders its own instead of relying on the global window icon.
+
+### Fixed
+
+- Prevented the main widget from flashing when Settings opens by leaving its topmost state intact for the app-owned dialog. External connection dialogs change topmost state without recreating the window.
+
 ## 0.7.0 - 2026-07-25
 
 ### Added

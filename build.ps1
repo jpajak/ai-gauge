@@ -21,6 +21,7 @@ if (-not (Test-Path $venvPython)) {
 
 $versionInfo = Join-Path $PSScriptRoot "build\pyinstaller-version-info.txt"
 & $venvPython (Join-Path $PSScriptRoot "tools\write_pyinstaller_version_info.py") $versionInfo
+$appIcon = Join-Path $PSScriptRoot "src\aigauge\assets\aigaugeicon.ico"
 
 if ($OneFile) {
     $targetExe = Join-Path $PSScriptRoot "dist\ai-gauge.exe"
@@ -41,7 +42,9 @@ $args = @(
     "--noupx",
     "--name", "ai-gauge",
     "--version-file", $versionInfo,
+    "--icon", $appIcon,
     "--paths", "src",
+    "--collect-data", "aigauge",
     "--collect-all", "PyQt6.QtWebEngineWidgets",
     "--collect-all", "PyQt6.QtWebEngineCore",
     "pyinstaller_entry.py"

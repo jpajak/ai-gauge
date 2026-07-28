@@ -32,8 +32,8 @@ from .config import (
 )
 from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
-from .gauge import highest_indicator
 from .history import HistoryStore
+from .icons import app_icon
 from .logging_setup import setup_logging
 from .menubar import render_menubar_pixmap
 from .models import SnapshotStatus, UsageSnapshot
@@ -731,9 +731,7 @@ class App(QObject):
                 self._snapshots, providers, config=self._config
             )
             return QIcon(pixmap)
-        providers = _enabled_providers(self._config)
-        indicator = highest_indicator(self._config, self._snapshots, providers)
-        return _make_dot_tray_icon(indicator.color if indicator is not None else None)
+        return app_icon()
 
     # ----- Login / cookie paste -----
 
@@ -948,7 +946,6 @@ class App(QObject):
         )
         self._settings_dialog = dlg
         self._settings_old_copilot_quota = old_copilot_quota
-        self._widget.suspend_always_on_top()
         dlg.show()
         self._raise_settings_dialog()
 
@@ -974,7 +971,6 @@ class App(QObject):
             return
         self._settings_dialog = None
         self._settings_old_copilot_quota = None
-        self._widget.restore_always_on_top()
         accepted = result == QDialog.DialogCode.Accepted.value
         if accepted:
             dlg.apply_to(self._config)
@@ -1202,6 +1198,7 @@ def main() -> int:
     qt_app.setApplicationName("ai-gauge")
     qt_app.setOrganizationName("ai-gauge")
     qt_app.setApplicationVersion(__version__)
+    qt_app.setWindowIcon(app_icon())
     _app = App()  # noqa: F841 - keeps refs alive
     _app.set_instance_lock(instance_lock)
     return qt_app.exec()

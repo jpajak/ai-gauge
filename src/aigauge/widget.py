@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import ctypes
 import math
 import re
+import sys
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import (
@@ -54,6 +56,7 @@ from .config import (
     display_name_for_account,
 )
 from .gauge import color_for_percent, thresholds_for_provider
+from .icons import app_icon
 from .models import SnapshotStatus, UsageSnapshot
 from .ratio import (
     MIN_SAMPLES,
@@ -1537,6 +1540,11 @@ class UsageWidget(QWidget):
         self._always_on_top_suspensions = 0
 
         # Header bar
+        self.title_icon = QLabel()
+        self.title_icon.setPixmap(app_icon().pixmap(16, 16))
+        self.title_icon.setFixedSize(16, 16)
+        self.title_icon.setToolTip("AI Gauge")
+
         self.title_label = QLabel(f"AI Gauge {__version__}")
         self.title_label.setToolTip(f"ai-gauge {__version__}")
         self.title_label.setStyleSheet(
@@ -1572,6 +1580,7 @@ class UsageWidget(QWidget):
         header = QHBoxLayout()
         header.setContentsMargins(8, 4, 4, 2)
         header.setSpacing(4)
+        header.addWidget(self.title_icon)
         header.addWidget(self.title_label)
         header.addWidget(self.cadence_label)
         header.addStretch(1)
@@ -1620,6 +1629,11 @@ class UsageWidget(QWidget):
         collapsed_header.setSpacing(4)
         collapsed_title = QLabel(f"AI Gauge {__version__}")
         collapsed_title.setStyleSheet("color:#9ca3af; font-size:10px; font-weight:600;")
+        self._collapsed_title_icon = QLabel()
+        self._collapsed_title_icon.setPixmap(app_icon().pixmap(14, 14))
+        self._collapsed_title_icon.setFixedSize(14, 14)
+        self._collapsed_title_icon.setToolTip("AI Gauge")
+        collapsed_header.addWidget(self._collapsed_title_icon)
         collapsed_header.addWidget(collapsed_title)
         self._collapsed_cadence_label = QLabel("")
         self._collapsed_cadence_label.setStyleSheet("color:#6b7280; font-size:10px;")
@@ -2213,11 +2227,46 @@ class UsageWidget(QWidget):
 
     def _apply_always_on_top(self, on: bool) -> None:
         flags = self.windowFlags()
+        updated_flags = flags
         if on:
-            flags |= Qt.WindowType.WindowStaysOnTopHint
+            updated_flags |= Qt.WindowType.WindowStaysOnTopHint
         else:
-            flags &= ~Qt.WindowType.WindowStaysOnTopHint
-        self.setWindowFlags(flags)
+            updated_flags &= ~Qt.WindowType.WindowStaysOnTopHint
+        if updated_flags != flags:
+            self.setWindowFlags(updated_flags)
+
+    def _set_native_topmost(self, on: bool) -> bool:
+        """Toggle Windows topmost state without recreating the Qt window."""
+        if sys.platform != "win32" or not self.isVisible():
+            return False
+        try:
+            hwnd_topmost = -1
+            hwnd_notopmost = -2
+            swp_no_move = 0x0002
+            swp_no_size = 0x0001
+            swp_no_activate = 0x0010
+            return bool(
+                ctypes.windll.user32.SetWindowPos(
+                    int(self.winId()),
+                    hwnd_topmost if on else hwnd_notopmost,
+                    0,
+                    0,
+                    0,
+                    0,
+                    swp_no_move | swp_no_size | swp_no_activate,
+                )
+            )
+        except (AttributeError, OSError):
+            return False
+
+    def _set_suspended_topmost(self, on: bool) -> None:
+        """Change temporary topmost state, avoiding a visible-window flash."""
+        if self._set_native_topmost(on):
+            return
+        was_visible = self.isVisible()
+        self._apply_always_on_top(on)
+        if was_visible:
+            self.show()
 
     def suspend_always_on_top(self) -> None:
         """Drop always-on-top so a spawned browser window can come forward.
@@ -2227,20 +2276,15 @@ class UsageWidget(QWidget):
         and an always-on-top widget would sit over it.
         """
         self._always_on_top_suspensions += 1
-        was_visible = self.isVisible()
-        self._apply_always_on_top(False)
-        if was_visible:
-            self.show()
+        if self._always_on_top_suspensions == 1:
+            self._set_suspended_topmost(False)
 
     def restore_always_on_top(self) -> None:
         """Re-apply the configured always-on-top setting after a dialog closes."""
         self._always_on_top_suspensions = max(0, self._always_on_top_suspensions - 1)
         if self._always_on_top_suspensions:
             return
-        was_visible = self.isVisible()
-        self._apply_always_on_top(self._config.window.always_on_top)
-        if was_visible:
-            self.show()
+        self._set_suspended_topmost(self._config.window.always_on_top)
 
     def _target_window_opacity(self) -> float:
         if not self._config.window.fade_when_inactive:

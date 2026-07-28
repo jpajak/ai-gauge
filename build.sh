@@ -38,6 +38,7 @@ PYINSTALLER_ARGS=(
     --noupx
     --name ai-gauge
     --paths src
+    --collect-data aigauge
     --collect-all PyQt6.QtWebEngineWidgets
     --collect-all PyQt6.QtWebEngineCore
     pyinstaller_entry.py
@@ -46,6 +47,9 @@ PYINSTALLER_ARGS=(
 if [ "$(uname -s)" = "Darwin" ]; then
     # Reverse-DNS bundle id; keeps Info.plist + LaunchServices happy.
     PYINSTALLER_ARGS+=(--osx-bundle-identifier org.aigauge.ai-gauge)
+    PYINSTALLER_ARGS+=(--icon src/aigauge/assets/aigaugeicon.icns)
+else
+    PYINSTALLER_ARGS+=(--icon src/aigauge/assets/aigaugeicon.png)
 fi
 
 if [ "$ONEFILE" -eq 1 ]; then

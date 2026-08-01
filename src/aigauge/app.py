@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import QObject, QLockFile, QPoint, Qt, QTimer
-from PyQt6.QtGui import QAction, QColor, QCursor, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QAction, QCursor, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -62,18 +62,6 @@ _ACTIVE_MODE_MINUTES = 30
 _STALE_ERROR_RETRY_MINUTES = 1
 _HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 _LOG_VALUE_LIMIT = 300
-
-
-def _make_dot_tray_icon(color: str | None = None) -> QIcon:
-    pix = QPixmap(32, 32)
-    pix.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pix)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(color or "#6b7280"))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(4, 4, 24, 24)
-    painter.end()
-    return QIcon(pix)
 
 
 def _enabled_providers(config: Config) -> tuple[str, ...]:

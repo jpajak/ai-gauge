@@ -342,6 +342,48 @@ def test_widget_activation_raises_open_settings_dialog():
     assert dialog.calls == ["show", "raise", "activate"]
 
 
+def test_settings_leaves_widget_topmost_state_unchanged(monkeypatch):
+    lifecycle = []
+
+    class _Signal:
+        def connect(self, callback):
+            self.callback = callback
+
+    class _SettingsDialog(_Dialog):
+        def __init__(self, config, parent=None):
+            super().__init__()
+            self.sign_in_clicked = _Signal()
+            self.paste_cookie_clicked = _Signal()
+            self.clear_sign_in_clicked = _Signal()
+            self.finished = _Signal()
+
+        def setModal(self, modal):
+            pass
+
+        def setWindowModality(self, modality):
+            pass
+
+        def deleteLater(self):
+            pass
+
+    monkeypatch.setattr(app_module, "SettingsDialog", _SettingsDialog)
+    app = App.__new__(App)
+    app._config = Config()  # noqa: SLF001
+    app._settings_dialog = None  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        suspend_always_on_top=lambda: lifecycle.append("suspend"),
+        restore_always_on_top=lambda: lifecycle.append("restore"),
+    )
+
+    app.open_settings()
+
+    assert lifecycle == []
+    dialog = app._settings_dialog  # noqa: SLF001
+    dialog.finished.callback(0)
+    assert lifecycle == []
+    assert app._settings_dialog is None  # noqa: SLF001
+
+
 def test_clear_sign_in_clears_session_and_updates_tile(monkeypatch):
     cleared = []
     rendered = []

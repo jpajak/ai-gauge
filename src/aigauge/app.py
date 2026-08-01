@@ -10,7 +10,7 @@ from dataclasses import replace
 from datetime import datetime, timedelta
 
 from PyQt6.QtCore import QObject, QLockFile, QPoint, Qt, QTimer
-from PyQt6.QtGui import QAction, QColor, QCursor, QIcon, QPainter, QPixmap
+from PyQt6.QtGui import QAction, QCursor, QIcon
 from PyQt6.QtWidgets import (
     QApplication,
     QDialog,
@@ -32,8 +32,8 @@ from .config import (
 )
 from .cookie_dialog import CookieDialog
 from .error_dialog import ErrorDetailsDialog
-from .gauge import highest_indicator
 from .history import HistoryStore
+from .icons import app_icon
 from .logging_setup import setup_logging
 from .menubar import render_menubar_pixmap
 from .models import SnapshotStatus, UsageSnapshot
@@ -62,18 +62,6 @@ _ACTIVE_MODE_MINUTES = 30
 _STALE_ERROR_RETRY_MINUTES = 1
 _HEARTBEAT_INTERVAL_MS = 5 * 60 * 1000
 _LOG_VALUE_LIMIT = 300
-
-
-def _make_dot_tray_icon(color: str | None = None) -> QIcon:
-    pix = QPixmap(32, 32)
-    pix.fill(Qt.GlobalColor.transparent)
-    painter = QPainter(pix)
-    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setBrush(QColor(color or "#6b7280"))
-    painter.setPen(Qt.PenStyle.NoPen)
-    painter.drawEllipse(4, 4, 24, 24)
-    painter.end()
-    return QIcon(pix)
 
 
 def _enabled_providers(config: Config) -> tuple[str, ...]:
@@ -731,9 +719,7 @@ class App(QObject):
                 self._snapshots, providers, config=self._config
             )
             return QIcon(pixmap)
-        providers = _enabled_providers(self._config)
-        indicator = highest_indicator(self._config, self._snapshots, providers)
-        return _make_dot_tray_icon(indicator.color if indicator is not None else None)
+        return app_icon()
 
     # ----- Login / cookie paste -----
 
@@ -948,7 +934,6 @@ class App(QObject):
         )
         self._settings_dialog = dlg
         self._settings_old_copilot_quota = old_copilot_quota
-        self._widget.suspend_always_on_top()
         dlg.show()
         self._raise_settings_dialog()
 
@@ -974,7 +959,6 @@ class App(QObject):
             return
         self._settings_dialog = None
         self._settings_old_copilot_quota = None
-        self._widget.restore_always_on_top()
         accepted = result == QDialog.DialogCode.Accepted.value
         if accepted:
             dlg.apply_to(self._config)
@@ -1202,6 +1186,7 @@ def main() -> int:
     qt_app.setApplicationName("ai-gauge")
     qt_app.setOrganizationName("ai-gauge")
     qt_app.setApplicationVersion(__version__)
+    qt_app.setWindowIcon(app_icon())
     _app = App()  # noqa: F841 - keeps refs alive
     _app.set_instance_lock(instance_lock)
     return qt_app.exec()

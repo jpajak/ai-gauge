@@ -544,10 +544,26 @@ class _BrowserAccountRow(QWidget):
         account_actions.addWidget(remove)
 
         self.usage_url_edit: QLineEdit | None = None
+        self.fable_cb: QCheckBox | None = None
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(4)
         layout.addLayout(account_actions)
+        if account.kind == "claude":
+            self.fable_cb = QCheckBox("Show weekly Fable limit")
+            self.fable_cb.setObjectName(f"{account.id}_fable_cb")
+            self.fable_cb.setChecked(account.show_fable)
+            self.fable_cb.setToolTip(
+                "Add this account's separate weekly Fable limit as its own "
+                "gauge. Only Max plans publish that limit; enabling it on "
+                "another plan has no effect."
+            )
+            fable_row = QHBoxLayout()
+            fable_row.setContentsMargins(12, 0, 0, 0)
+            fable_row.setSpacing(6)
+            fable_row.addWidget(self.fable_cb)
+            fable_row.addStretch(1)
+            layout.addLayout(fable_row)
         if account.kind == "opencode_go":
             self.usage_url_edit = QLineEdit()
             self.usage_url_edit.setText(account.usage_url or OPENCODE_GO_USAGE_URL)
@@ -588,6 +604,7 @@ class _BrowserAccountRow(QWidget):
             enabled=True,
             colors=self.colors.model_copy(deep=True),
             usage_url=usage_url,
+            show_fable=self.fable_cb is not None and self.fable_cb.isChecked(),
         )
 
 

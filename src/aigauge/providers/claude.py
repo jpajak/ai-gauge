@@ -39,11 +39,35 @@ EXTRACTOR_JS = r"""
   const ROW_LABELS = [
     'Current session',
     'All models',
+    'Fable',
     'Daily included routine runs'
   ];
 
   function norm(el) {
     return (el.textContent || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // A label only counts when it actually heads a usage row — i.e. it is
+  // followed by the reset text or the percentage. Claude's usage page also
+  // mentions model names in prose banners ("Fable 5 is still included with
+  // your Max plan"), and a container holding such a banner plus a *different*
+  // row would otherwise be read as that model's row, reporting the neighbour's
+  // percentage. Every occurrence is checked, so a wrapper holding both the
+  // banner and the real row still qualifies.
+  function headsARow(text, label) {
+    const lower = text.toLowerCase();
+    const needle = label.toLowerCase();
+    let i = lower.indexOf(needle);
+    while (i !== -1) {
+      // An optional version number absorbs a row renamed to "Fable 5"; the
+      // banner ("Fable 5 is still included…") still fails the tail test.
+      const after = text.slice(i + needle.length).trim();
+      if (/^(?:\d+(?:\.\d+)?\s+)?(?:resets?\b|\d+(?:\.\d+)?\s*%|used\b|remaining\b|$)/i.test(after)) {
+        return true;
+      }
+      i = lower.indexOf(needle, i + 1);
+    }
+    return false;
   }
 
   function findRowByLabel(label) {
@@ -54,6 +78,7 @@ EXTRACTOR_JS = r"""
       const t = norm(el);
       if (!t.toLowerCase().includes(label.toLowerCase())) continue;
       if (!/%/.test(t)) continue;
+      if (!headsARow(t, label)) continue;
       let score = t.length;
       for (const other of ROW_LABELS) {
         if (other !== label && t.toLowerCase().includes(other.toLowerCase())) {
@@ -79,7 +104,7 @@ EXTRACTOR_JS = r"""
     const pctMatch = pctMatches[pctMatches.length - 1];
     const remaining = /remaining/i.test(text);
     const used = /used/i.test(text);
-    const resetMatch = text.match(/Resets?\s+(?:in\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current|Claude|You)\b|\s*\d+%)/i);
+    const resetMatch = text.match(/Resets?\s+(?:in\s+)?(.+?)(?=\s*$|\s+(?:Daily|Weekly|All|Current|Claude|Fable|You)\b|\s*\d+%)/i);
     return {
       raw: text.slice(0, 400),
       percent: pctMatch ? parseFloat(pctMatch[1]) : null,
@@ -95,6 +120,9 @@ EXTRACTOR_JS = r"""
 
   const session = readRow('Current session');
   const weeklyAll = readRow('All models');
+  // Max-plan accounts only. Never gate readiness on this row — Pro/Free
+  // accounts have no Fable row and would retry until timeout.
+  const weeklyFable = readRow('Fable');
 
   function onUsageRoute() {
     return /\/settings\/usage/.test(location.pathname) ||
@@ -117,6 +145,7 @@ EXTRACTOR_JS = r"""
       logged_out: false,
       session: null,
       weekly_all: null,
+      weekly_fable: null,
       url: location.href,
       title: document.title,
       body_text: bodyText.slice(0, 8000),
@@ -139,6 +168,7 @@ EXTRACTOR_JS = r"""
       logged_out: false,
       session: null,
       weekly_all: null,
+      weekly_fable: null,
       url: location.href,
       title: document.title,
       body_text: bodyText.slice(0, 8000),
@@ -149,6 +179,7 @@ EXTRACTOR_JS = r"""
     logged_out: isLoggedOut,
     session: session,
     weekly_all: weeklyAll,
+    weekly_fable: weeklyFable,
     url: location.href,
     title: document.title,
     body_text: bodyText.slice(0, 8000),
@@ -203,6 +234,7 @@ def _build_snapshot(
     payload: dict[str, Any],
     *,
     account_id: str = "claude",
+    show_fable: bool = False,
 ) -> UsageSnapshot:
     if _is_logged_out_payload(payload):
         log_page_diagnosis(
@@ -252,6 +284,11 @@ def _build_snapshot(
         ("session", "Session", timedelta(hours=5)),
         ("weekly_all", "Weekly", timedelta(days=7)),
     )
+    # Max plans expose a separate weekly Fable limit. Other plans have no such
+    # row, and the loop below skips missing cards, so an enabled toggle on a
+    # Pro account is a no-op rather than an error.
+    if show_fable:
+        rows += (("weekly_fable", "Fable", timedelta(days=7)),)
     metrics: list[UsageMetric] = []
     for key, label, reset_window in rows:
         card = payload.get(key)
@@ -319,14 +356,20 @@ class ClaudeProvider(Provider):
         self,
         parent: QObject | None = None,
         account_id: str = "claude",
+        show_fable: bool = False,
     ):
         self._parent = parent
         self._account_id = account_id
+        self._show_fable = show_fable
         self._runner: ScrapeRunner | None = None  # held to prevent GC
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         def _build(payload: dict[str, Any]) -> UsageSnapshot:
-            return _build_snapshot(payload, account_id=self._account_id)
+            return _build_snapshot(
+                payload,
+                account_id=self._account_id,
+                show_fable=self._show_fable,
+            )
 
         self._runner = ScrapeRunner(
             account_id=self._account_id,

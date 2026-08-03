@@ -120,6 +120,13 @@ class BrowserAccount(BaseModel):
     enabled: bool = True
     colors: ColorThresholds = Field(default_factory=ColorThresholds)
     usage_url: str | None = None
+    # Claude Max plans expose a separate weekly Fable limit. This is per
+    # account rather than per provider: plan tier belongs to the subscription,
+    # and one signed-in account may be Max while another is not. On by default
+    # — plans without the limit report no such row, so the gauge simply does
+    # not appear rather than showing a wrong value. Only Claude accounts read
+    # this; it is inert on other kinds.
+    show_fable: bool = True
 
 
 class CopilotConfig(BaseModel):

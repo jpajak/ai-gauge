@@ -292,6 +292,40 @@ def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
     ]
 
 
+def test_build_providers_passes_per_account_fable_toggle(monkeypatch):
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="claude", kind="claude", show_fable=True),
+            BrowserAccount(id="claude-b", kind="claude", name="B", show_fable=False),
+        ]
+    )
+    config.providers.claude = True
+    config.providers.codex = False
+    config.providers.copilot = False
+    config.providers.openrouter = False
+    config.providers.opencode_go = False
+    created = []
+
+    def fake_claude_provider(parent=None, account_id="claude", show_fable=False):
+        created.append((account_id, show_fable))
+        return SimpleNamespace(account_id=account_id)
+
+    monkeypatch.setattr(app_module, "ClaudeProvider", fake_claude_provider)
+    app = App.__new__(App)
+    app._config = config  # noqa: SLF001
+    app._providers = {}  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        _tiles={},
+        ensure_tile=lambda account_id, name: None,
+        remove_tile=lambda account_id: None,
+    )
+
+    app._build_providers()  # noqa: SLF001
+
+    assert created == [("claude", True), ("claude-b", False)]
+
+
 def test_open_login_uses_unsaved_opencode_account_url(monkeypatch):
     draft = BrowserAccount(
         id="opencode_go-work",

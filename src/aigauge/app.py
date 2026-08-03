@@ -405,6 +405,7 @@ class App(QObject):
                 self._providers[account.id] = ClaudeProvider(
                     parent=self,
                     account_id=account.id,
+                    show_fable=account.show_fable,
                 )
             elif account.kind == "codex":
                 self._providers[account.id] = CodexProvider(

@@ -20,6 +20,7 @@ def test_defaults():
     assert c.refresh_interval_minutes == 60
     assert c.providers.claude is True
     assert c.providers.codex is True
+    assert c.browser_accounts[0].show_fable is True
     assert [a.id for a in c.browser_accounts] == [
         "claude",
         "codex",
@@ -73,6 +74,7 @@ def test_round_trip(tmp_path, monkeypatch):
     c.refresh_interval_minutes = 10
     c.start_at_login = True
     c.providers.codex = False
+    c.browser_accounts[0].show_fable = False
     c.browser_accounts[1].enabled = False
     c.copilot.username = "octocat"
     c.copilot.billing_org = "my-org"
@@ -93,6 +95,7 @@ def test_round_trip(tmp_path, monkeypatch):
     assert loaded.providers.codex is False
     assert loaded.browser_accounts[1].enabled is False
     assert loaded.providers.claude is True
+    assert loaded.browser_accounts[0].show_fable is False
     assert loaded.copilot.username == "octocat"
     assert loaded.copilot.billing_org == "my-org"
     assert loaded.copilot.monthly_quota == 1500
@@ -166,6 +169,39 @@ def test_load_migrates_legacy_provider_toggles_to_browser_accounts():
         ("codex", "codex", True),
         ("opencode_go", "opencode_go", True),
     ]
+
+
+def test_upgraded_config_without_fable_key_shows_the_limit():
+    """Configs written before the setting existed opt in to the gauge."""
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"providers": {"claude": true},'
+        ' "browser_accounts_version": 2,'
+        ' "browser_accounts": ['
+        '{"id": "claude", "kind": "claude"},'
+        '{"id": "claude-work", "kind": "claude"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [a.show_fable for a in c.browser_accounts] == [True, True]
+
+
+def test_explicitly_disabled_fable_account_stays_disabled():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"providers": {"claude": true},'
+        ' "browser_accounts_version": 2,'
+        ' "browser_accounts": ['
+        '{"id": "claude", "kind": "claude", "show_fable": false},'
+        '{"id": "claude-work", "kind": "claude"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [a.show_fable for a in c.browser_accounts] == [False, True]
 
 
 def test_load_adds_opencode_without_restoring_removed_claude_or_codex():

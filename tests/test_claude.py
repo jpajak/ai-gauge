@@ -1,3 +1,5 @@
+from datetime import timedelta
+
 from aigauge.models import SnapshotStatus
 from aigauge.providers.claude import CLAUDE_USAGE_URL, _build_snapshot
 
@@ -213,3 +215,52 @@ def test_claude_zero_weekly_usage_keeps_weekday_reset():
     assert weekly.percent_used == 0
     assert weekly.resets_at is not None
     assert weekly.reset_label is None
+
+
+def _max_plan_payload() -> dict:
+    return {
+        "logged_out": False,
+        "session": {"percent": 18, "kind": "used", "reset_text": "3 hr 10 min"},
+        "weekly_all": {"percent": 2, "kind": "used", "reset_text": "22 hr 0 min"},
+        "weekly_fable": {"percent": 4, "kind": "used", "reset_text": "22 hr 0 min"},
+        "title": "Claude",
+        "url": CLAUDE_USAGE_URL,
+        "body_text": (
+            "Plan usage limits Max (5x) Current session 18% used "
+            "Weekly limits All models 2% used Fable 4% used"
+        ),
+    }
+
+
+def test_claude_fable_row_is_read_when_enabled():
+    snapshot = _build_snapshot(_max_plan_payload(), show_fable=True)
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == [
+        "Session",
+        "Weekly",
+        "Fable",
+    ]
+    fable = snapshot.metrics[2]
+    assert fable.percent_used == 4
+    assert fable.window == timedelta(days=7)
+
+
+def test_claude_fable_row_is_ignored_when_disabled():
+    snapshot = _build_snapshot(_max_plan_payload())
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly"]
+
+
+def test_claude_fable_enabled_on_plan_without_the_row_is_not_an_error():
+    payload = _max_plan_payload()
+    payload["weekly_fable"] = None
+    payload["body_text"] = (
+        "Plan usage limits Current session 18% used All models 2% used"
+    )
+
+    snapshot = _build_snapshot(payload, show_fable=True)
+
+    assert snapshot.status == SnapshotStatus.OK
+    assert [metric.label for metric in snapshot.metrics] == ["Session", "Weekly"]

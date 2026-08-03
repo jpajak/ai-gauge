@@ -1,6 +1,15 @@
 # Changelog
 
-## Unreleased
+## 0.7.2 - 2026-08-02
+
+### Added
+
+- Added a **Show weekly Fable limit** setting for each Claude account, on the Claude tab, surfacing Claude's separate weekly Fable limit as its own gauge alongside Session and Weekly. Plan tier belongs to a subscription rather than to the provider, so the toggle sits per account: one signed-in account can be Max while another is not. It is on by default, including for existing configurations — plans that do not publish the limit report no such row, so those accounts are unchanged rather than showing an empty or wrong gauge. AI Gauge had been quietly watching two thirds of a Max subscription.
+- Added Node-backed tests that run the injected Claude usage extractor against a mocked usage dialog. The script only ever ran inside the webview before, so row-matching regressions could not be caught by the test suite. These tests skip when Node is unavailable.
+
+### Fixed
+
+- Usage rows are now matched only where a label actually heads a row, instead of anywhere the label text appears. Claude's usage dialog describes models in prose banners, and a container holding such a banner next to a different row could otherwise be read as that model's row, reporting its neighbour's percentage.
 
 ## 0.7.1 - 2026-07-28
 

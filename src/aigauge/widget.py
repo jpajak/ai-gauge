@@ -806,6 +806,7 @@ def _compact_metric_code(label: str) -> str:
     return {
         "session": "S",
         "weekly": "W",
+        "fable": "F",
         "rolling": "R",
         "monthly": "M",
     }.get(key, (label.strip()[:1] or "?").upper())

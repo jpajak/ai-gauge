@@ -1,7 +1,7 @@
 from PyQt6.QtWidgets import QPushButton
 
 from aigauge import settings_dialog
-from aigauge.config import ColorThresholds, Config
+from aigauge.config import BrowserAccount, ColorThresholds, Config
 from aigauge.settings_dialog import SettingsDialog
 
 
@@ -286,6 +286,44 @@ def test_fade_when_inactive_setting_applies(qtbot, monkeypatch):
 
     assert config.window.fade_when_inactive is True
     assert config.window.opacity == 0.62
+
+def test_fable_toggle_is_per_claude_account(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="claude", kind="claude"),
+            BrowserAccount(id="claude-work", kind="claude", name="Work"),
+            BrowserAccount(id="codex", kind="codex"),
+        ]
+    )
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    rows = {row.account_id: row for row in dialog._browser_account_rows}  # noqa: SLF001
+    assert rows["codex"].fable_cb is None, "only Claude accounts offer the toggle"
+    assert rows["claude"].fable_cb.isChecked(), "on by default"
+
+    rows["claude-work"].fable_cb.setChecked(False)
+    dialog.apply_to(config)
+
+    saved = {a.id: a.show_fable for a in config.browser_accounts}
+    assert saved["claude"] is True
+    assert saved["claude-work"] is False, "each account is independent"
+
+
+def test_fable_toggle_reflects_saved_account_state(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="claude", kind="claude", show_fable=False),
+        ]
+    )
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    row = dialog._browser_account_rows[0]  # noqa: SLF001
+    assert not row.fable_cb.isChecked()
+
 
 def test_clear_saved_pat_checkbox_removes_existing_pat(qtbot, monkeypatch):
     calls = []

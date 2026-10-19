@@ -17,7 +17,8 @@ import requests
 import websocket
 from PyQt6.QtCore import QThread, pyqtSignal
 
-from ..config import COOKIE_DOMAINS, COOKIE_NAME_ALIASES, app_data_dir
+from ..config import COOKIE_DOMAINS, app_data_dir
+from ..providers.registry import has_auth_cookie, provider_spec
 
 log = logging.getLogger("aigauge.webview.external_login")
 
@@ -130,11 +131,7 @@ def _provider_cookies(provider: str, cookies: list[dict]) -> list[dict]:
 
 
 def _has_auth_cookie(provider: str, cookies: list[dict]) -> bool:
-    names = {str(cookie.get("name", "")) for cookie in cookies}
-    aliases = set(COOKIE_NAME_ALIASES.get(provider, ()))
-    if provider == "codex":
-        return bool(names & aliases) or "__Secure-oai-is" in names
-    return bool(names & aliases)
+    return has_auth_cookie(provider, (str(cookie.get("name", "")) for cookie in cookies))
 
 
 def _is_loopback_websocket_url(value: object, port: int) -> bool:
@@ -246,10 +243,10 @@ class ExternalLoginWorker(QThread):
             self._cleanup_profile()
 
     def _provider_name(self) -> str:
-        return {
-            "claude": "Claude",
-            "codex": "ChatGPT",
-        }.get(self._provider, self._provider)
+        spec = provider_spec(self._provider)
+        if spec is None or spec.login is None:
+            return self._provider
+        return spec.login.prompt_name
 
     def _poll_for_session(self) -> None:
         startup_deadline = time.monotonic() + 20

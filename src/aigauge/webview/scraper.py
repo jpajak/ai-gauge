@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urlunparse
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
+from ..providers.registry import account_family
 from .page import QuietWebEnginePage
 from .profile import get_profile
 
@@ -50,7 +51,7 @@ def _claude_auth_redirect(
     value: Any, provider: str, title: str = ""
 ) -> dict[str, Any] | None:
     """Classify Claude's auth redirect even when the page load/JS failed."""
-    if provider != "claude" and not provider.startswith("claude-"):
+    if account_family(provider) != "claude":
         return None
     url = _safe_url(value)
     parsed = urlparse(url)

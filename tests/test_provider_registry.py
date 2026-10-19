@@ -652,3 +652,13 @@ def test_settings_builds_one_account_page_per_multi_account_spec(qtbot, monkeypa
             assert (row.api_key_edit is not None) == (spec.auth == "api_key")
             signin = page.findChild(QPushButton, f"{row.account_id}_signin_btn")
             assert (signin is not None) == (spec.auth == "browser_session")
+
+
+def test_claude_auth_redirect_applies_to_every_claude_account_only():
+    from aigauge.webview.scraper import _claude_auth_redirect
+
+    url = "https://claude.ai/login"
+    for provider in ("claude", "claude-1a2b"):
+        assert _claude_auth_redirect(url, provider) == {"logged_out": True, "url": url}
+    for provider in ("codex", "claudex", "opencode_go", "copilot"):
+        assert _claude_auth_redirect(url, provider) is None

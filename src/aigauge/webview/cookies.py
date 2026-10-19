@@ -16,6 +16,7 @@ from ..config import (
     set_provider_cookie,
     webview_profile_dir,
 )
+from ..providers.registry import browser_session_kinds, has_auth_cookie
 
 log = logging.getLogger("aigauge.webview.cookies")
 
@@ -94,11 +95,7 @@ def _parse_name_value_pairs(cookie_text: str) -> list[tuple[str, str]]:
 
 
 def _has_auth_cookie(provider: str, pairs: list[tuple[str, str]]) -> bool:
-    names = {name for name, _ in pairs}
-    aliases = set(COOKIE_NAME_ALIASES.get(provider, ()))
-    if provider == "codex":
-        return bool(names & aliases) or "__Secure-oai-is" in names
-    return bool(names & aliases)
+    return has_auth_cookie(provider, (name for name, _ in pairs))
 
 
 def _parse_cookie_pairs(provider: str, pasted: str) -> list[tuple[str, str]]:
@@ -320,7 +317,7 @@ def hydrate_all_from_keyring(config: Config | None = None) -> list[str]:
         account_specs = [
             (account.kind, account.id)
             for account in browser_accounts(config)
-            if account.kind in ("claude", "codex")
+            if account.kind in browser_session_kinds()
         ]
     else:
         account_specs = [(provider, provider) for provider in COOKIE_NAMES]

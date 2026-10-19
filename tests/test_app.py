@@ -359,7 +359,9 @@ def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
         created.append((config, parent, account_id))
         return SimpleNamespace(account_id=account_id)
 
-    monkeypatch.setattr(app_module, "OpenCodeGoProvider", fake_opencode_provider)
+    monkeypatch.setattr(
+        "aigauge.providers.opencode_go.OpenCodeGoProvider", fake_opencode_provider
+    )
     app = App.__new__(App)
     app._config = config  # noqa: SLF001
     app._providers = {}  # noqa: SLF001
@@ -399,7 +401,9 @@ def test_build_providers_passes_per_account_fable_toggle(monkeypatch):
         created.append((account_id, show_fable))
         return SimpleNamespace(account_id=account_id)
 
-    monkeypatch.setattr(app_module, "ClaudeProvider", fake_claude_provider)
+    monkeypatch.setattr(
+        "aigauge.providers.claude.ClaudeProvider", fake_claude_provider
+    )
     app = App.__new__(App)
     app._config = config  # noqa: SLF001
     app._providers = {}  # noqa: SLF001

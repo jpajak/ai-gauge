@@ -17,6 +17,7 @@ except ModuleNotFoundError as exc:
     FastMCP = None
 
 from .config import Config, browser_accounts, display_name_for_account
+from .providers.registry import single_specs
 from .usage_cache import CACHE_SCHEMA_VERSION, read_usage_cache
 
 INSTRUCTIONS = """
@@ -53,12 +54,11 @@ def _configured_account_ids(config: Config) -> set[str]:
         for account in browser_accounts(config, enabled_only=True)
         if getattr(config.providers, account.kind, False)
     }
-    if config.providers.copilot:
-        account_ids.add("copilot")
-    if config.providers.openrouter:
-        account_ids.add("openrouter")
-    if config.providers.antigravity:
-        account_ids.add("antigravity")
+    account_ids.update(
+        spec.id
+        for spec in single_specs()
+        if getattr(config.providers, spec.id, False)
+    )
     return account_ids
 
 

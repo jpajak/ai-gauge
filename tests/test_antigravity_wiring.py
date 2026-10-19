@@ -67,7 +67,9 @@ def test_app_builds_antigravity_provider_with_config_and_tile(monkeypatch):
         created.append(kwargs)
         return object()
 
-    monkeypatch.setattr(app_module, "AntigravityProvider", fake_provider)
+    monkeypatch.setattr(
+        "aigauge.providers.antigravity.AntigravityProvider", fake_provider
+    )
     app = App.__new__(App)
     app._config = config
     app._providers = {}
@@ -281,13 +283,17 @@ def test_disabled_antigravity_builds_no_provider_and_never_touches_agy(monkeypat
         antigravity.shutil, "which", lambda *a, **k: pytest.fail("looked up agy")
     )
     monkeypatch.setattr(
-        app_module,
-        "AntigravityProvider",
+        "aigauge.providers.antigravity.AntigravityProvider",
         lambda **kwargs: pytest.fail("provider built while disabled"),
     )
-    for name in ("ClaudeProvider", "CodexProvider", "OpenCodeGoProvider",
-                 "CopilotProvider", "OpenRouterProvider"):
-        monkeypatch.setattr(app_module, name, lambda *a, **k: object())
+    for target in (
+        "aigauge.providers.claude.ClaudeProvider",
+        "aigauge.providers.codex.CodexProvider",
+        "aigauge.providers.opencode_go.OpenCodeGoProvider",
+        "aigauge.providers.copilot.CopilotProvider",
+        "aigauge.providers.openrouter.OpenRouterProvider",
+    ):
+        monkeypatch.setattr(target, lambda *a, **k: object())
     app = App.__new__(App)
     app._config = config
     app._providers = {}

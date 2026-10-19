@@ -521,3 +521,101 @@ def test_registry_lookup_reads_the_live_table(monkeypatch):
     )
     monkeypatch.setitem(registry._SPECS_BY_ID, "test_only", extra)  # noqa: SLF001
     assert provider_spec("test_only") is extra
+
+
+# ----- Call sites that moved to the registry ---------------------------------
+
+COMPACT_COLLAPSIBLE_IDS = (
+    "claude",
+    "claude-1a2b",
+    "codex",
+    "codex-1a2b",
+    "opencode_go",
+    "opencode_go-work",
+)
+NOT_COMPACT_COLLAPSIBLE_IDS = ("copilot", "openrouter", "antigravity", "mystery")
+
+
+def test_app_compact_collapse_memory_by_tile_id(monkeypatch):
+    from aigauge.app import App
+
+    monkeypatch.setattr(Config, "save", lambda self: None)
+    app = App.__new__(App)
+    app._config = Config()  # noqa: SLF001
+    for provider in (*COMPACT_COLLAPSIBLE_IDS, *NOT_COMPACT_COLLAPSIBLE_IDS):
+        app._on_tile_expanded_changed(provider, False)  # noqa: SLF001
+    assert app._config.collapsed_tiles == list(COMPACT_COLLAPSIBLE_IDS)  # noqa: SLF001
+
+
+def test_widget_tiles_by_kind(qtbot):
+    from aigauge.widget import _ProviderTile, _is_api_key_tile
+
+    assert [p for p in COMPACT_COLLAPSIBLE_IDS if _is_api_key_tile(p)] == [
+        "opencode_go",
+        "opencode_go-work",
+    ]
+    for provider in COMPACT_COLLAPSIBLE_IDS:
+        tile = _ProviderTile.__new__(_ProviderTile)
+        tile.provider = provider
+        assert tile._supports_compact_collapse(), provider  # noqa: SLF001
+    for provider in NOT_COMPACT_COLLAPSIBLE_IDS:
+        tile = _ProviderTile.__new__(_ProviderTile)
+        tile.provider = provider
+        assert not tile._supports_compact_collapse(), provider  # noqa: SLF001
+
+
+def test_enabled_and_mcp_account_ids_include_enabled_single_providers():
+    from aigauge.app import _enabled_providers
+    from aigauge.mcp_server import _configured_account_ids
+
+    config = Config(browser_accounts=[])
+    for kind in EXPECTED_SINGLE_KINDS:
+        setattr(config.providers, kind, True)
+    assert _enabled_providers(config) == EXPECTED_SINGLE_KINDS
+    assert _configured_account_ids(config) == set(EXPECTED_SINGLE_KINDS)
+    config.providers.openrouter = False
+    assert _enabled_providers(config) == ("copilot", "antigravity")
+    assert _configured_account_ids(config) == {"copilot", "antigravity"}
+
+
+def test_enabled_providers_without_account_list_uses_one_account_per_kind():
+    from aigauge.app import _enabled_providers
+
+    config = SimpleNamespace(
+        providers=SimpleNamespace(
+            claude=True, codex=False, opencode_go=True, copilot=False
+        ),
+    )
+    assert _enabled_providers(config) == ("claude", "opencode_go")
+
+
+def test_cookie_paste_is_offered_only_for_paste_cookie_kinds(monkeypatch):
+    from aigauge import app as app_module
+    from aigauge.app import App
+
+    opened = []
+
+    class FakeCookieDialog:
+        def __init__(self, kind, **kwargs):
+            opened.append(kind)
+
+        def exec(self):
+            return 0
+
+    monkeypatch.setattr(app_module, "CookieDialog", FakeCookieDialog)
+    app = App.__new__(App)
+    app._config = Config(  # noqa: SLF001
+        browser_accounts=[
+            BrowserAccount(id="claude", kind="claude"),
+            BrowserAccount(id="codex-x", kind="codex"),
+            BrowserAccount(id="opencode_go", kind="opencode_go"),
+        ]
+    )
+    app._settings_dialog = None  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        suspend_always_on_top=lambda: None,
+        restore_always_on_top=lambda: None,
+    )
+    for provider in ("claude", "codex-x", "opencode_go", "copilot", "nobody"):
+        app.open_cookie_paste(provider)
+    assert opened == ["claude", "codex"]

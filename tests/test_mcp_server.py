@@ -403,3 +403,22 @@ def test_usage_cache_retries_windows_sharing_violation(tmp_path, monkeypatch):
     assert attempts == 3
     assert read_usage_cache()["accounts"]["codex"]["status"] == "ok"
     assert list(tmp_path.glob("*.tmp")) == []
+
+
+def test_minimax_account_is_configured_only_when_enabled():
+    config = _config()
+
+    assert "minimax" not in mcp_server._configured_account_ids(config)  # noqa: SLF001
+    config.providers.minimax = True
+    assert "minimax" in mcp_server._configured_account_ids(config)  # noqa: SLF001
+
+
+def test_minimax_account_can_be_guarded(monkeypatch):
+    config = _config(minimax=90)
+    config.providers.minimax = True
+    _patch_context(monkeypatch, config, _cache(95, account_id="minimax"))
+
+    result = check_usage_guard("minimax")
+
+    assert result["allowed"] is False
+    assert result["reason_code"] != "account_unavailable"

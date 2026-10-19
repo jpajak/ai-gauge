@@ -148,3 +148,20 @@ def test_status_items_use_compact_provider_labels():
         ("Cx", "57%", OK_COLORS["low"]),
         ("Cp", "...", NEUTRAL_COLOR),
     ]
+
+
+def test_minimax_is_labelled_mm_even_with_an_unlimited_weekly_row():
+    snapshot = UsageSnapshot(
+        provider="minimax",
+        status=SnapshotStatus.OK,
+        metrics=[
+            UsageMetric("5h", 34.0),
+            UsageMetric("Weekly", None, reset_label="Unlimited"),
+        ],
+    )
+
+    items = status_items({"minimax": snapshot}, ("minimax", "minimax-work"))
+
+    assert [label for label, _text, _color in items] == ["Mm", "Mm"]
+    assert items[0][1] == "34%"
+    assert items[1][1] == "..."

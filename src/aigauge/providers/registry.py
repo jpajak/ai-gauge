@@ -115,6 +115,12 @@ def _make_opencode_go(config, account, parent):
     return OpenCodeGoProvider(config, parent=parent, account_id=account.id)
 
 
+def _make_minimax(config, account, parent):
+    from .minimax import MiniMaxProvider
+
+    return MiniMaxProvider(config, parent=parent, account_id=account.id)
+
+
 def _make_copilot(config, account, parent):
     from .copilot import CopilotProvider
 
@@ -234,6 +240,31 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         api_key_placeholder="oc_sk_...",
     ),
     ProviderSpec(
+        id="minimax",
+        display_name="MiniMax",
+        settings_label="MiniMax",
+        short_label="Mm",
+        auth="api_key",
+        multi_account=True,
+        default_enabled=False,
+        default_order=3,
+        make=_make_minimax,
+        usage_url="https://platform.minimax.io/console/usage",
+        settings_hint=(
+            "Name each MiniMax Coding Plan subscription and enter its API "
+            "key. Copy the key from the plan page of the "
+            "<a style='color:#60a5fa;' "
+            "href='https://platform.minimax.io/console/plan'>MiniMax "
+            "console</a>, or from platform.minimax.cn for a China account. "
+            "Keys usually start with <b>sk-cp-</b>. Every row has an "
+            "independent key, tile, and gauge colors; keys are stored in "
+            "your system keychain. API credit balance is not tracked."
+        ),
+        compact_collapse=True,
+        api_key_entry="minimax-key-{account_id}",
+        api_key_placeholder="sk-cp-...",
+    ),
+    ProviderSpec(
         id="copilot",
         display_name="Copilot",
         settings_label="GitHub Copilot",
@@ -241,7 +272,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="single",
         multi_account=False,
         default_enabled=True,
-        default_order=3,
+        default_order=4,
         make=_make_copilot,
     ),
     ProviderSpec(
@@ -252,7 +283,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="single",
         multi_account=False,
         default_enabled=False,
-        default_order=4,
+        default_order=5,
         make=_make_openrouter,
     ),
     ProviderSpec(
@@ -263,7 +294,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="single",
         multi_account=False,
         default_enabled=False,
-        default_order=5,
+        default_order=6,
         make=_make_antigravity,
     ),
 )

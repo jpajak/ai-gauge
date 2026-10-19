@@ -58,6 +58,7 @@ EXPECTED_DEFAULT_PROVIDER_ORDER = (
     "claude",
     "codex",
     "opencode_go",
+    "minimax",
     "copilot",
     "openrouter",
     "antigravity",
@@ -69,11 +70,13 @@ EXPECTED_TOGGLE_DEFAULTS = {
     "openrouter": False,
     "antigravity": False,
     "opencode_go": False,
+    "minimax": False,
 }
 EXPECTED_DEFAULT_ACCOUNTS = [
     ("claude", "claude"),
     ("codex", "codex"),
     ("opencode_go", "opencode_go"),
+    ("minimax", "minimax"),
 ]
 EXPECTED_LOGIN_URLS = {
     "claude": ("https://claude.ai/login", "Sign in to Claude"),
@@ -83,6 +86,7 @@ EXPECTED_MENUBAR_LABELS = {
     "claude": "Cl",
     "codex": "Cx",
     "opencode_go": "Go",
+    "minimax": "Mm",
     "copilot": "Cp",
     "openrouter": "OR",
     "antigravity": "Ag",
@@ -93,6 +97,7 @@ EXPECTED_NAV_ENTRIES = (
     ("claude", "Claude"),
     ("codex", "Codex"),
     ("opencode_go", "OpenCode"),
+    ("minimax", "MiniMax"),
     ("copilot", "GitHub Copilot"),
     ("openrouter", "OpenRouter"),
     ("antigravity", "Antigravity"),
@@ -101,13 +106,22 @@ EXPECTED_NAV_ENTRIES = (
     ("local_usage", "Local usage"),
 )
 EXPECTED_PROVIDER_PAGE_KEYS = frozenset(
-    {"claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"}
+    {
+        "claude",
+        "codex",
+        "opencode_go",
+        "minimax",
+        "copilot",
+        "openrouter",
+        "antigravity",
+    }
 )
 # provider_base_name's explicit map; any other kind falls back to kind.title().
 EXPECTED_BASE_NAMES = {
     "claude": "Claude",
     "codex": "Codex",
     "opencode_go": "OpenCode",
+    "minimax": "MiniMax",
     "antigravity": "Antigravity",
 }
 # display_name_for_account's fallback for ids that are not configured accounts.
@@ -118,10 +132,11 @@ EXPECTED_DISPLAY_NAMES = {
     "openrouter": "OpenRouter",
     "antigravity": "Antigravity",
     "opencode_go": "OpenCode",
+    "minimax": "MiniMax",
 }
-EXPECTED_ACCOUNT_KINDS = ("claude", "codex", "opencode_go")
+EXPECTED_ACCOUNT_KINDS = ("claude", "codex", "opencode_go", "minimax")
 EXPECTED_BROWSER_SESSION_KINDS = ("claude", "codex")
-EXPECTED_API_KEY_KINDS = ("opencode_go",)
+EXPECTED_API_KEY_KINDS = ("opencode_go", "minimax")
 EXPECTED_SINGLE_KINDS = ("copilot", "openrouter", "antigravity")
 EXPECTED_AUTH_HOST_ALLOWLIST = (
     "claude.ai",
@@ -216,6 +231,9 @@ def test_usage_urls_match_the_provider_modules():
     assert provider_spec("claude").usage_url == CLAUDE_USAGE_URL
     assert provider_spec("codex").usage_url == CODEX_USAGE_URL
     assert provider_spec("opencode_go").usage_url is None
+    from aigauge.providers.minimax import MINIMAX_USAGE_URL
+
+    assert provider_spec("minimax").usage_url == MINIMAX_USAGE_URL
 
 
 def test_registry_is_a_leaf_module():
@@ -301,6 +319,7 @@ def test_menubar_labels():
     assert _provider_label("claude-1a2b") == "Cl"
     assert _provider_label("codex-1a2b") == "Cx"
     assert _provider_label("opencode_go-work") == "Go"
+    assert _provider_label("minimax-work") == "Mm"
     assert _provider_label("copilot") == "Cp"
     assert _provider_label("antigravity") == "Ag"
     assert _provider_label("mystery") == "My"
@@ -369,6 +388,8 @@ def test_account_kind_and_family_by_id_shape():
         "codex-1a2b": "codex",
         "opencode_go": "opencode_go",
         "opencode_go-work": "opencode_go",
+        "minimax": "minimax",
+        "minimax-work": "minimax",
         "copilot": None,
         "openrouter": None,
         "antigravity": None,
@@ -386,6 +407,7 @@ def test_widget_provider_family():
     assert _provider_family("claude-1a2b") == "claude"
     assert _provider_family("codex") == "codex"
     assert _provider_family("opencode_go-work") == "opencode_go"
+    assert _provider_family("minimax-work") == "minimax"
     assert _provider_family("copilot") == "copilot"
     assert _provider_family("mystery") == "mystery"
 
@@ -402,6 +424,7 @@ def test_auth_cookie_names():
         ("codex", ["sessionKey"], False),
         ("claude", ["__Secure-oai-is"], False),
         ("opencode_go", ["sessionKey"], False),
+        ("minimax", ["sessionKey"], False),
         ("copilot", ["sessionKey"], False),
     ]
     for kind, names, expected in cases:
@@ -441,6 +464,19 @@ def test_opencode_keyring_entry_is_unchanged():
     assert spec.api_key_entry.format(account_id="opencode_go-work") == (
         "opencode-go-key-opencode_go-work"
     )
+
+
+def test_minimax_keyring_entry_is_distinct_from_opencode():
+    spec = provider_spec("minimax")
+    assert spec.api_key_entry == "minimax-key-{account_id}"
+    assert spec.api_key_entry.format(account_id="minimax-work") == (
+        "minimax-key-minimax-work"
+    )
+    assert spec.api_key_placeholder == "sk-cp-..."
+    entries = {
+        other.api_key_entry for other in PROVIDER_SPECS if other.api_key_entry
+    }
+    assert len(entries) == len(api_key_kinds())
 
 
 @pytest.mark.parametrize("spec", PROVIDER_SPECS, ids=lambda spec: spec.id)
@@ -532,6 +568,8 @@ COMPACT_COLLAPSIBLE_IDS = (
     "codex-1a2b",
     "opencode_go",
     "opencode_go-work",
+    "minimax",
+    "minimax-work",
 )
 NOT_COMPACT_COLLAPSIBLE_IDS = ("copilot", "openrouter", "antigravity", "mystery")
 
@@ -553,6 +591,8 @@ def test_widget_tiles_by_kind(qtbot):
     assert [p for p in COMPACT_COLLAPSIBLE_IDS if _is_api_key_tile(p)] == [
         "opencode_go",
         "opencode_go-work",
+        "minimax",
+        "minimax-work",
     ]
     for provider in COMPACT_COLLAPSIBLE_IDS:
         tile = _ProviderTile.__new__(_ProviderTile)
@@ -609,6 +649,7 @@ def test_cookie_paste_is_offered_only_for_paste_cookie_kinds(monkeypatch):
             BrowserAccount(id="claude", kind="claude"),
             BrowserAccount(id="codex-x", kind="codex"),
             BrowserAccount(id="opencode_go", kind="opencode_go"),
+            BrowserAccount(id="minimax", kind="minimax"),
         ]
     )
     app._settings_dialog = None  # noqa: SLF001
@@ -616,7 +657,14 @@ def test_cookie_paste_is_offered_only_for_paste_cookie_kinds(monkeypatch):
         suspend_always_on_top=lambda: None,
         restore_always_on_top=lambda: None,
     )
-    for provider in ("claude", "codex-x", "opencode_go", "copilot", "nobody"):
+    for provider in (
+        "claude",
+        "codex-x",
+        "opencode_go",
+        "minimax",
+        "copilot",
+        "nobody",
+    ):
         app.open_cookie_paste(provider)
     assert opened == ["claude", "codex"]
 
@@ -636,7 +684,7 @@ def test_settings_builds_one_account_page_per_multi_account_spec(qtbot, monkeypa
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
 
-    assert reads == [("opencode_go", "opencode_go")]
+    assert reads == [("opencode_go", "opencode_go"), ("minimax", "minimax")]
     for spec in PROVIDER_SPECS:
         page = dialog.page_widget(spec.id)
         assert page.isAncestorOf(getattr(dialog, f"{spec.id}_cb")), spec.id
@@ -660,5 +708,5 @@ def test_claude_auth_redirect_applies_to_every_claude_account_only():
     url = "https://claude.ai/login"
     for provider in ("claude", "claude-1a2b"):
         assert _claude_auth_redirect(url, provider) == {"logged_out": True, "url": url}
-    for provider in ("codex", "claudex", "opencode_go", "copilot"):
+    for provider in ("codex", "claudex", "opencode_go", "minimax", "copilot"):
         assert _claude_auth_redirect(url, provider) is None

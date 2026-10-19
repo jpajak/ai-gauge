@@ -1948,3 +1948,63 @@ def test_summary_chip_stores_pace(qtbot):
     chip.set_state("Claude 37%", 37.0, "ok", pace=37)
 
     assert chip._pace_pct == 37  # noqa: SLF001
+
+
+def _minimax_unlimited_snapshot(provider: str = "minimax") -> UsageSnapshot:
+    return UsageSnapshot(
+        provider=provider,
+        status=SnapshotStatus.OK,
+        metrics=[
+            UsageMetric(
+                "5h",
+                12.0,
+                datetime.now() + timedelta(hours=3),
+                window=timedelta(hours=5),
+            ),
+            UsageMetric("Weekly", None, reset_label="Unlimited"),
+        ],
+    )
+
+
+def test_minimax_auth_tile_says_api_key_needed_with_add_key_button(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="minimax",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Add a MiniMax Coding Plan API key in Settings.",
+        ),
+        "MiniMax",
+    )
+
+    tile = widget._tiles["minimax"]  # noqa: SLF001
+    assert tile.action_btn.text() == "Add key"
+    assert not tile.action_btn.isHidden()
+    assert tile.status.text() == "API key needed"
+
+
+def test_minimax_unlimited_weekly_row_renders_in_normal_and_compact_tiles(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(_minimax_unlimited_snapshot(), "MiniMax")
+    tile = widget._tiles["minimax"]  # noqa: SLF001
+    assert tile._supports_compact_collapse()  # noqa: SLF001
+
+    tile.set_expanded(True)
+    assert [row.label.text() for row in tile._rows] == ["5h", "Weekly"]  # noqa: SLF001
+    weekly = tile._rows[1]  # noqa: SLF001
+    assert weekly.pct.isHidden()
+    assert weekly.reset.text() == "Unlimited"
+
+    tile.set_expanded(False)
+    # Compact mode shows only readings that have a percentage.
+    assert [item.code.text() for item in tile._compact_metrics] == ["5"]  # noqa: SLF001
+    assert [item.pct.text() for item in tile._compact_metrics] == ["12%"]  # noqa: SLF001
+
+    # A second refresh and the window's own compact view also go through.
+    widget.update_snapshot(_minimax_unlimited_snapshot(), "MiniMax")
+    widget.set_collapsed(True)
+    widget.set_collapsed(False)

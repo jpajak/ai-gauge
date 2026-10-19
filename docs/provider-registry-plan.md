@@ -215,3 +215,80 @@ requests are expected and there was usage to spend.
 Five or six commits: registry and characterisation tests; config
 derivations; app, widget, menu bar, MCP; settings family page; webview maps
 and predicate verification; docs and changelog.
+
+## As built (2026-10-19)
+
+Seven commits, no provider added. Where the build differs from the sketch
+above:
+
+- **No `VerifySpec`.** Verification JS stays in `webview/targets.py` as
+  decided; the spec carries `session_proof: "cookie" | "page"` instead, and
+  `ExternalLoginWorker._session_is_ready` branches on it. Every shipped spec
+  is `"cookie"`.
+- **Spec fields added beyond the sketch:** `settings_label` (Settings nav
+  and checkbox, "GitHub Copilot" where `display_name` is "Copilot"),
+  `LoginSpec.prompt_name` ("ChatGPT" for Codex), `CookieSpec.extra_auth_names`
+  (Codex's `__Secure-oai-is`), `api_key_entry` and `api_key_placeholder`.
+- **`PROVIDER_SPECS` is sorted by `default_order`,** so every derived table
+  is in default order.
+- **Provider classes are no longer imported by `app.py`.** Tests that
+  substitute a provider class patch it on its own module
+  (`aigauge.providers.claude.ClaudeProvider`), which the factory imports at
+  call time.
+
+## Adding a provider
+
+Everything else (Settings nav row and page, enable checkbox, MCP account
+ids and pause-policy rows, menu-bar label, provider order slot, tile family,
+compact collapse, "Sign in" or "Add key" wording, default account in fresh
+configs) is derived from the spec. `tests/test_provider_registry.py` fails
+if a step below is missed where it can check.
+
+### API key, several accounts (OpenCode, MiniMax)
+
+1. A `ProviderSpec` in `providers/registry.py` with `auth="api_key"`,
+   `multi_account=True`, a free `default_order`, `settings_hint`,
+   `api_key_entry` (a keyring name not used by any other kind, containing
+   `{account_id}`), `api_key_placeholder`, and a factory that returns
+   `Cls(config, parent=parent, account_id=account.id)`.
+2. A `ProviderToggles` field in `config.py` named after the spec id, with
+   the spec's `default_enabled` as its default.
+3. A provider module in `providers/` whose class takes
+   `(config, parent=None, account_id=...)` and reads its key with
+   `get_account_api_key("<id>", account_id)`.
+4. A default-account migration in `Config._migrate`: bump
+   `browser_accounts_version` and append `{"id": "<id>", "kind": "<id>"}`
+   to an explicit account list that has no account of the kind, as the
+   version-2 OpenCode step does.
+
+### Browser session, several accounts (Claude, Codex, Langdock)
+
+Steps 1 to 4 as above, with these differences in the spec and module:
+
+1. The spec has `auth="browser_session"`, a `LoginSpec` (URL, window
+   title, prompt name, the provider's own sign-in hosts), a `CookieSpec`
+   (domain, and cookie names if stable), `usage_url`, `paste_cookie`, and
+   `session_proof="page"` when there is no stable auth-cookie name. Its
+   factory returns `Cls(parent=parent, account_id=account.id)`.
+3. The provider module scrapes the usage page.
+
+And two keyed tables:
+
+5. A `VERIFY_TARGETS` entry in `webview/targets.py`: the signed-in page
+   URL and its predicate.
+6. A paste-cookie hint in `cookie_dialog.INSTRUCTIONS`.
+
+If the sign-in flow uses an identity provider not yet allowed, add its host
+to `_IDENTITY_PROVIDER_HOSTS` in `webview/login_window.py`.
+
+### Single instance (Copilot, OpenRouter, Antigravity)
+
+1. A spec with `auth="single"`, `multi_account=False` and a factory.
+2. A `ProviderToggles` field.
+3. A provider module.
+4. A bespoke Settings page, built in `SettingsDialog.__init__` and added to
+   `provider_pages` under the spec id. Settings fails to open without one.
+5. Its own config section and credential helpers, and its colours in
+   `gauge.thresholds_for_provider`.
+
+No migration: a single-instance provider has no account rows.

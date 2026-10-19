@@ -3,6 +3,7 @@ from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton
 
 from aigauge import settings_dialog
+from aigauge.providers import registry
 from aigauge.config import BrowserAccount, ColorThresholds, Config
 from aigauge.settings_dialog import SettingsDialog
 
@@ -43,6 +44,32 @@ def test_paste_cookie_button_emits_paste_cookie_signal(qtbot):
         _button(dialog, "codex_paste_cookie_btn").click()
 
     assert signal.args == ["codex"]
+
+
+def test_paste_cookie_button_follows_the_spec_flag(qtbot, monkeypatch):
+    spec = registry.ProviderSpec(
+        id="no_paste",
+        display_name="No Paste",
+        settings_label="No Paste",
+        short_label="Np",
+        auth="browser_session",
+        multi_account=True,
+        default_enabled=False,
+        default_order=99,
+        make=lambda config, account, parent: None,
+        paste_cookie=False,
+    )
+    monkeypatch.setitem(registry._SPECS_BY_ID, "no_paste", spec)  # noqa: SLF001
+
+    row = settings_dialog._BrowserAccountRow(  # noqa: SLF001
+        BrowserAccount(id="no_paste", kind="no_paste"), removable=False
+    )
+    qtbot.addWidget(row)
+
+    assert row.findChild(QPushButton, "no_paste_paste_cookie_btn") is None
+    # The other browser-session buttons are unaffected.
+    assert row.findChild(QPushButton, "no_paste_signin_btn") is not None
+    assert row.findChild(QPushButton, "no_paste_clear_signin_btn") is not None
 
 
 def test_clear_sign_in_button_emits_account_signal(qtbot):

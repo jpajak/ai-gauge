@@ -585,14 +585,15 @@ class _BrowserAccountRow(QWidget):
             )
             account_actions.addWidget(sign_in)
 
-            paste = QPushButton("Paste cookie")
-            paste.setObjectName(f"{account.id}_paste_cookie_btn")
-            paste.setFixedWidth(92)
-            paste.setToolTip("Paste a session cookie for this account.")
-            paste.clicked.connect(
-                lambda: self.paste_cookie_clicked.emit(self.account_id)
-            )
-            account_actions.addWidget(paste)
+            if spec is not None and spec.paste_cookie:
+                paste = QPushButton("Paste cookie")
+                paste.setObjectName(f"{account.id}_paste_cookie_btn")
+                paste.setFixedWidth(92)
+                paste.setToolTip("Paste a session cookie for this account.")
+                paste.clicked.connect(
+                    lambda: self.paste_cookie_clicked.emit(self.account_id)
+                )
+                account_actions.addWidget(paste)
 
             clear = QPushButton("Clear sign-in")
             clear.setObjectName(f"{account.id}_clear_signin_btn")

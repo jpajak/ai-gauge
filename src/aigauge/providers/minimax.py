@@ -117,14 +117,21 @@ def _status(row: dict[str, Any], key: str) -> int | None:
     return int(number) if number is not None else None
 
 
+# Below this an epoch value is seconds (1e12 ms is September 2001; 1e12 s is
+# year 33658), above it milliseconds. The API documents milliseconds; seconds
+# are accepted as openclaw's MiniMax fetcher does.
+_SECONDS_BELOW = 1e12
+
+
 def _epoch_ms_to_local(value: object) -> datetime | None:
     number = _number(value)
     if number is None or number <= 0:
         return None
+    seconds = number if number < _SECONDS_BELOW else number / 1000
     try:
         # fromtimestamp returns local, timezone-naive time, which is the model
         # the rest of AI Gauge uses (see opencode_go._parse_reset_at).
-        return datetime.fromtimestamp(number / 1000)
+        return datetime.fromtimestamp(seconds)
     except (OverflowError, OSError, ValueError):
         return None
 

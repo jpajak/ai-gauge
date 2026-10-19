@@ -85,10 +85,10 @@ Accept: application/json
 | `current_interval_remaining_percent` | 5-hour remaining, 0 to 100; `percent_used = 100 - value` |
 | `current_interval_usage_count` | 5-hour **remaining** count, despite the name |
 | `current_interval_total_count` | 5-hour total count; with the field above, the fallback when the percent field is absent: `percent_used = 100 - usage_count / total * 100` |
-| `end_time` | 5-hour window end, epoch milliseconds |
+| `end_time` | 5-hour window end, epoch milliseconds; seconds accepted |
 | `current_interval_status` | 1 limited, 2 exhausted (show 100%), 3 unlimited |
 | `current_weekly_remaining_percent`, `current_weekly_usage_count`, `current_weekly_total_count` | weekly equivalents, same semantics |
-| `weekly_end_time` | weekly window end, epoch milliseconds |
+| `weekly_end_time` | weekly window end, epoch milliseconds; seconds accepted |
 | `current_weekly_status` | same codes; 3 is the **Unlimited** weekly row PR #14 saw |
 | `weekly_boost_permille` | the console shows weekly remaining as `base × boost / 1000`, up to 150% on boosted plans. The bar uses the base percent; when boost is above 1000 the row note says "Weekly allowance boosted to 150%." |
 

@@ -129,6 +129,20 @@ def _local(ms: int) -> datetime:
     return datetime.fromtimestamp(ms / 1000)
 
 
+def test_reset_time_accepts_seconds_or_milliseconds():
+    seconds = END_5H_MS // 1000
+    from_ms = _build_snapshot(_payload(_row(end_time=END_5H_MS))).metrics[0]
+    from_s = _build_snapshot(_payload(_row(end_time=seconds))).metrics[0]
+    assert from_s.resets_at == from_ms.resets_at == _local(END_5H_MS)
+    weekly_ms = _build_snapshot(
+        _payload(_row(weekly_end_time=END_WEEK_MS))
+    ).metrics[1]
+    weekly_s = _build_snapshot(
+        _payload(_row(weekly_end_time=END_WEEK_MS // 1000))
+    ).metrics[1]
+    assert weekly_s.resets_at == weekly_ms.resets_at == _local(END_WEEK_MS)
+
+
 def test_contract_constants():
     assert MINIMAX_USAGE_URL == "https://platform.minimax.io/console/usage"
     assert MINIMAX_API_HOSTS == (

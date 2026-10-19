@@ -448,6 +448,65 @@ def test_factories_are_callable(spec):
     assert callable(spec.make)
 
 
+# ----- Generic API-key helpers -----------------------------------------------
+
+
+def _fake_keyring(monkeypatch) -> dict:
+    secrets: dict = {}
+    monkeypatch.setattr(
+        config_module.keyring,
+        "get_password",
+        lambda service, key: secrets.get((service, key)),
+    )
+    monkeypatch.setattr(
+        config_module.keyring,
+        "set_password",
+        lambda service, key, value: secrets.__setitem__((service, key), value),
+    )
+    monkeypatch.setattr(
+        config_module.keyring,
+        "delete_password",
+        lambda service, key: secrets.pop((service, key), None),
+    )
+    return secrets
+
+
+def test_account_api_key_uses_the_spec_keyring_entry(monkeypatch):
+    secrets = _fake_keyring(monkeypatch)
+
+    config_module.set_account_api_key("opencode_go", "opencode_go-work", "k1")
+
+    assert secrets == {("ai-gauge", "opencode-go-key-opencode_go-work"): "k1"}
+    assert config_module.get_account_api_key("opencode_go", "opencode_go-work") == "k1"
+    # The OpenCode wrappers read and write the same entry.
+    assert config_module.get_opencode_go_key("opencode_go-work") == "k1"
+    config_module.set_opencode_go_key("opencode_go", "k0")
+    assert config_module.get_account_api_key("opencode_go", "opencode_go") == "k0"
+    config_module.set_account_api_key("opencode_go", "opencode_go-work", None)
+    assert config_module.get_account_api_key("opencode_go", "opencode_go-work") is None
+    config_module.set_account_api_key("opencode_go", "opencode_go", "")
+    assert secrets == {}
+
+
+def test_account_api_key_rejects_kinds_without_an_entry(monkeypatch):
+    _fake_keyring(monkeypatch)
+    for kind in ("claude", "copilot", "unknown"):
+        with pytest.raises(ValueError):
+            config_module.get_account_api_key(kind, kind)
+        with pytest.raises(ValueError):
+            config_module.set_account_api_key(kind, kind, "x")
+
+
+def test_account_api_key_read_tolerates_keyring_errors(monkeypatch):
+    def broken(service, key):
+        raise config_module.keyring.errors.KeyringError("locked")
+
+    monkeypatch.setattr(config_module.keyring, "get_password", broken)
+    monkeypatch.setattr(config_module.keyring, "delete_password", broken)
+    assert config_module.get_account_api_key("opencode_go", "opencode_go") is None
+    config_module.set_account_api_key("opencode_go", "opencode_go", None)
+
+
 def test_registry_lookup_reads_the_live_table(monkeypatch):
     extra = registry.ProviderSpec(
         id="test_only",

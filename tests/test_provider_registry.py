@@ -619,3 +619,36 @@ def test_cookie_paste_is_offered_only_for_paste_cookie_kinds(monkeypatch):
     for provider in ("claude", "codex-x", "opencode_go", "copilot", "nobody"):
         app.open_cookie_paste(provider)
     assert opened == ["claude", "codex"]
+
+
+def test_settings_builds_one_account_page_per_multi_account_spec(qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QGroupBox, QPushButton
+
+    from aigauge import settings_dialog
+    from aigauge.settings_dialog import SettingsDialog
+
+    reads = []
+    monkeypatch.setattr(
+        settings_dialog,
+        "get_account_api_key",
+        lambda kind, account_id: reads.append((kind, account_id)),
+    )
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    assert reads == [("opencode_go", "opencode_go")]
+    for spec in PROVIDER_SPECS:
+        page = dialog.page_widget(spec.id)
+        assert page.isAncestorOf(getattr(dialog, f"{spec.id}_cb")), spec.id
+        if not spec.multi_account:
+            continue
+        titles = [box.title() for box in page.findChildren(QGroupBox)]
+        assert titles == [f"{spec.display_name} Accounts"], spec.id
+        usage = page.findChild(QPushButton, f"{spec.id}_open_usage_btn")
+        assert (usage is not None) == (spec.usage_url is not None), spec.id
+        rows = [r for r in dialog._browser_account_rows if r.kind == spec.id]  # noqa: SLF001
+        assert rows, spec.id
+        for row in rows:
+            assert (row.api_key_edit is not None) == (spec.auth == "api_key")
+            signin = page.findChild(QPushButton, f"{row.account_id}_signin_btn")
+            assert (signin is not None) == (spec.auth == "browser_session")

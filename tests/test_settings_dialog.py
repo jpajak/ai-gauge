@@ -105,7 +105,9 @@ def test_mcp_integration_defaults_off_and_gates_policies(qtbot, monkeypatch):
 def test_opencode_go_uses_masked_api_key_field_instead_of_browser_buttons(
     qtbot, monkeypatch
 ):
-    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
 
@@ -124,13 +126,13 @@ def test_opencode_go_accept_saves_key_to_account_secret(qtbot, monkeypatch):
     secrets = {}
     monkeypatch.setattr(
         settings_dialog,
-        "get_opencode_go_key",
-        lambda account_id: secrets.get(account_id),
+        "get_account_api_key",
+        lambda kind, account_id: secrets.get(account_id),
     )
     monkeypatch.setattr(
         settings_dialog,
-        "set_opencode_go_key",
-        lambda account_id, value: (
+        "set_account_api_key",
+        lambda kind, account_id, value: (
             secrets.__setitem__(account_id, value)
             if value
             else secrets.pop(account_id, None)
@@ -154,13 +156,13 @@ def test_opencode_go_existing_key_can_be_cleared(qtbot, monkeypatch):
     secrets = {"opencode_go": "saved-key"}
     monkeypatch.setattr(
         settings_dialog,
-        "get_opencode_go_key",
-        lambda account_id: secrets.get(account_id),
+        "get_account_api_key",
+        lambda kind, account_id: secrets.get(account_id),
     )
     monkeypatch.setattr(
         settings_dialog,
-        "set_opencode_go_key",
-        lambda account_id, value: (
+        "set_account_api_key",
+        lambda kind, account_id, value: (
             secrets.__setitem__(account_id, value)
             if value
             else secrets.pop(account_id, None)
@@ -183,7 +185,9 @@ def test_opencode_go_existing_key_can_be_cleared(qtbot, monkeypatch):
 
 
 def test_opencode_go_key_draft_survives_adding_an_account(qtbot, monkeypatch):
-    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
     first_row = next(
@@ -207,13 +211,13 @@ def test_removing_opencode_account_clears_its_key_on_accept(qtbot, monkeypatch):
     secrets = {"opencode_go": "saved-key"}
     monkeypatch.setattr(
         settings_dialog,
-        "get_opencode_go_key",
-        lambda account_id: secrets.get(account_id),
+        "get_account_api_key",
+        lambda kind, account_id: secrets.get(account_id),
     )
     monkeypatch.setattr(
         settings_dialog,
-        "set_opencode_go_key",
-        lambda account_id, value: (
+        "set_account_api_key",
+        lambda kind, account_id, value: (
             secrets.__setitem__(account_id, value)
             if value
             else secrets.pop(account_id, None)
@@ -230,7 +234,9 @@ def test_removing_opencode_account_clears_its_key_on_accept(qtbot, monkeypatch):
 
 def test_opencode_go_settings_apply_multiple_accounts(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
-    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
     config = Config()
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)

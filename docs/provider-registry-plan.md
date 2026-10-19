@@ -161,6 +161,15 @@ What the spec needs that only a Langdock user can supply:
 The requester ticked "not willing to send a PR". Asking for the three items
 above is the next step on the issue; without them there is nothing to build.
 
+One decision waits for Langdock, as the first `session_proof="page"` provider.
+After an external sign-in, `import_browser_cookies` saves every provider-domain
+cookie as an encrypted header (`webview/cookies.py:256`), and
+`hydrate_all_from_keyring` (`webview/cookies.py:305`) re-injects it on start.
+PR #14 skipped that fallback for MiniMax: with no stable auth-cookie name, the
+saved header cannot be told apart from stale or unrelated cookies, so it relied
+on the persistent web profile alone. Decide per provider when Langdock is
+built, most simply with a `CookieSpec` flag that turns the fallback off.
+
 ## Status
 
 Started 2026-10-19 at John's call, ahead of the trigger first proposed (a

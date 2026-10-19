@@ -299,8 +299,8 @@ class MiniMaxProvider(Provider):
     def _load_key(self) -> str | None:
         if self._key_loader is not None:
             return self._key_loader(self._account_id)
-        # Imported here: the generic key helper lands with the provider
-        # registry, and tests always inject key_loader.
+        # Imported here so tests, which always inject key_loader, never touch
+        # the system keychain.
         from ..config import get_account_api_key
 
         return get_account_api_key("minimax", self._account_id)

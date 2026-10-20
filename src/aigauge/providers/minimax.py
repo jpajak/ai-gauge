@@ -312,36 +312,72 @@ class MiniMaxProvider(Provider):
         return list(MINIMAX_API_HOSTS)
 
     def _fetch_any_host(self, api_key: str) -> tuple[str, dict[str, Any]]:
-        """Try each host, advancing only on base_resp 2049 or HTTP 404."""
+        """Try each host until one answers with a quota payload.
+
+        A host's outcome is one of:
+        - success: remember the host and return.
+        - wrong host (HTTP 404, base_resp 2049), rejected key (HTTP 401, 403,
+          base_resp 1004) or unreachable (connection error, timeout): try the
+          next host, because a key is only valid on its own region's host and
+          the first host may simply be unreachable from here.
+        - anything else (base_resp 2062, another base_resp code, another HTTP
+          status): raise at once, since more hosts will not change the answer.
+
+        When every host fails with a move-on outcome, raise the most specific:
+        the first rejected-key error, else _HostsExhausted (wrong host), else
+        the first connection or timeout error.
+        """
         last_host = MINIMAX_API_HOSTS[0]
+        rejected: Exception | None = None
+        wrong_host = False
+        unreachable: Exception | None = None
         for host in self._hosts():
             last_host = host
             try:
                 payload = _fetch_usage(host, api_key)
                 _check_base_resp(payload)
             except requests.HTTPError as exc:
-                if exc.response is not None and exc.response.status_code == 404:
-                    log.info(
-                        "provider api diagnosis provider=%s "
-                        "classification=host_not_found host=%s",
-                        self._account_id,
-                        host,
-                    )
+                status = exc.response.status_code if exc.response is not None else 0
+                if status == 404:
+                    self._log_host(host, "host_not_found")
+                    wrong_host = True
+                    continue
+                if status in (401, 403):
+                    self._log_host(host, "rejected_key", f"status={status}")
+                    rejected = rejected or exc
                     continue
                 raise
             except _ApiError as exc:
                 if exc.code == _CODE_WRONG_HOST:
-                    log.info(
-                        "provider api diagnosis provider=%s "
-                        "classification=wrong_host host=%s",
-                        self._account_id,
-                        host,
-                    )
+                    self._log_host(host, "wrong_host")
+                    wrong_host = True
+                    continue
+                if exc.code == _CODE_BAD_KEY:
+                    self._log_host(host, "rejected_key", f"code={exc.code}")
+                    rejected = rejected or exc
                     continue
                 raise
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                self._log_host(host, "unreachable", f"error={type(exc).__name__}")
+                unreachable = unreachable or exc
+                continue
             self._host = host
             return host, payload
-        raise _HostsExhausted(last_host)
+        if rejected is not None:
+            raise rejected
+        if wrong_host:
+            raise _HostsExhausted(last_host)
+        assert unreachable is not None
+        raise unreachable
+
+    def _log_host(self, host: str, classification: str, extra: str = "") -> None:
+        log.info(
+            "provider api diagnosis provider=%s classification=%s host=%s%s",
+            self._account_id,
+            classification,
+            host,
+            f" {extra}" if extra else "",
+        )
 
     def _error(self, status: SnapshotStatus, message: str) -> UsageSnapshot:
         return UsageSnapshot(
@@ -391,7 +427,8 @@ class MiniMaxProvider(Provider):
                 if exc.code == _CODE_BAD_KEY:
                     return self._error(
                         SnapshotStatus.AUTH_REQUIRED,
-                        "MiniMax rejected the API key. Update it in Settings.",
+                        "MiniMax rejected the API key on every regional host. "
+                        "Update it in Settings.",
                     )
                 if exc.code == _CODE_NO_PLAN:
                     return self._error(
@@ -414,7 +451,8 @@ class MiniMaxProvider(Provider):
                 if status == 401:
                     return self._error(
                         SnapshotStatus.AUTH_REQUIRED,
-                        "MiniMax rejected the API key. Update it in Settings.",
+                        "MiniMax rejected the API key on every regional host. "
+                        "Update it in Settings.",
                     )
                 if status == 403:
                     return self._error(

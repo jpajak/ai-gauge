@@ -126,9 +126,12 @@ the page predicate otherwise. The CDP evaluation is already written in the PR
 and can be lifted as-is once it keys on the spec rather than on
 `self._provider == "minimax"`.
 
-Built in this pass, as the last commit, with no provider using it yet. Its
-unit tests come from PR #14's `tests/test_external_login.py` cases, keyed on
-a test-only spec. Langdock is the expected first user.
+Built in this pass, then parked after review: MiniMax moved to an API key, so
+no shipped provider uses it. It waits on branch `feature/page-session-proof`
+(commit d3c98d1, co-authored by InnoScout) and lands with Langdock, its first
+user. Its unit tests come from PR #14's `tests/test_external_login.py` cases,
+keyed on a test-only spec. Its one unrelated line, dropping the DevTools port
+from the "external sign-in started" log, was re-applied on its own.
 
 ## First consumers
 
@@ -161,7 +164,8 @@ What the spec needs that only a Langdock user can supply:
 The requester ticked "not willing to send a PR". Asking for the three items
 above is the next step on the issue; without them there is nothing to build.
 
-One decision waits for Langdock, as the first `session_proof="page"` provider.
+One decision waits for Langdock, as the first `session_proof="page"` provider
+(the field arrives with the parked page-proof commit).
 After an external sign-in, `import_browser_cookies` saves every provider-domain
 cookie as an encrypted header (`webview/cookies.py:256`), and
 `hydrate_all_from_keyring` (`webview/cookies.py:305`) re-injects it on start.
@@ -227,13 +231,14 @@ and predicate verification; docs and changelog.
 
 ## As built (2026-10-19)
 
-Seven commits, no provider added. Where the build differs from the sketch
-above:
+Six commits, no provider added. A seventh, page proof, was built and parked;
+see "Sign-in verification by page, not cookie name". Where the build differs
+from the sketch above:
 
 - **No `VerifySpec`.** Verification JS stays in `webview/targets.py` as
-  decided; the spec carries `session_proof: "cookie" | "page"` instead, and
-  `ExternalLoginWorker._session_is_ready` branches on it. Every shipped spec
-  is `"cookie"`.
+  decided. The parked page-proof commit gives the spec
+  `session_proof: "cookie" | "page"` instead, and
+  `ExternalLoginWorker._session_is_ready` branches on it.
 - **Spec fields added beyond the sketch:** `settings_label` (Settings nav
   and checkbox, "GitHub Copilot" where `display_name` is "Copilot"),
   `LoginSpec.prompt_name` ("ChatGPT" for Codex), `CookieSpec.extra_auth_names`
@@ -277,8 +282,8 @@ Steps 1 to 4 as above, with these differences in the spec and module:
 1. The spec has `auth="browser_session"`, a `LoginSpec` (URL, window
    title, prompt name, the provider's own sign-in hosts), a `CookieSpec`
    (domain, and cookie names if stable), `usage_url`, `paste_cookie`, and
-   `session_proof="page"` when there is no stable auth-cookie name. Its
-   factory returns `Cls(parent=parent, account_id=account.id)`.
+   `session_proof="page"` when there is no stable auth-cookie name (once the
+   parked page-proof commit has landed). Its factory returns `Cls(parent=parent, account_id=account.id)`.
 3. The provider module scrapes the usage page.
 
 And two keyed tables:

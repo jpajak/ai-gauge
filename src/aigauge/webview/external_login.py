@@ -225,10 +225,9 @@ class ExternalLoginWorker(QThread):
             return
 
         log.info(
-            "external sign-in started provider=%s browser=%s port=%s",
+            "external sign-in started provider=%s browser=%s",
             self._account_id,
             browser.name,
-            self._debug_port,
         )
         self.status_changed.emit(
             f"Finish signing in to {self._provider_name()} in "

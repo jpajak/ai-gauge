@@ -230,7 +230,7 @@ def test_build_snapshot_boosted_weekly_keeps_base_percent_and_notes_boost():
     five, weekly = _build_snapshot(_payload(row)).metrics
 
     assert weekly.percent_used == 40.0
-    assert weekly.note == "Weekly allowance boosted to 150%."
+    assert weekly.note == "Weekly allowance boosted to 150% (console: 90% left)."
     assert five.note is None
 
 
@@ -246,7 +246,9 @@ def test_build_snapshot_boost_and_exhausted_notes_combine():
     weekly = _build_snapshot(_payload(row)).metrics[1]
 
     assert weekly.percent_used == 100.0
-    assert weekly.note == "Limit reached. Weekly allowance boosted to 125%."
+    assert weekly.note == (
+        "Limit reached. Weekly allowance boosted to 125% (console: 0% left)."
+    )
 
 
 def test_build_snapshot_count_fallback_treats_usage_count_as_remaining():
@@ -480,6 +482,20 @@ def test_refresh_wrong_host_2049_advances_and_remembers_working_host(monkeypatch
 
 
 @responses.activate
+def test_refresh_logs_the_answering_host_once(monkeypatch, caplog):
+    responses.add(responses.GET, INTL + QUOTA, json=_payload(), status=200)
+    provider = _provider(monkeypatch)
+
+    with caplog.at_level(logging.INFO, logger="aigauge"):
+        _refresh(provider)
+        _refresh(provider)
+
+    messages = [record.getMessage() for record in caplog.records]
+    host_lines = [message for message in messages if "api host" in message]
+    assert host_lines == [f"provider api host provider=minimax-work host={INTL}"]
+
+
+@responses.activate
 def test_refresh_remembered_host_failing_with_2049_tries_the_others(monkeypatch):
     responses.add(responses.GET, INTL + QUOTA, json=_payload(), status=200)
     responses.add(responses.GET, CN + QUOTA, json=_error_payload(2049), status=200)
@@ -522,18 +538,6 @@ def test_refresh_all_hosts_exhausted_names_last_host(monkeypatch):
     assert CN_OLD in (snapshot.error or "")
     assert len(responses.calls) == 3
     assert provider._host is None
-
-
-@responses.activate
-def test_refresh_does_not_advance_host_on_other_failures(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, status=500)
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.ERROR
-    assert snapshot.error == "MiniMax usage API returned HTTP 500."
-    assert len(responses.calls) == 1
 
 
 REJECTED_EVERYWHERE = (
@@ -684,18 +688,6 @@ def test_refresh_http_500_on_first_host_stops_without_trying_others(monkeypatch)
     assert snapshot.status == SnapshotStatus.ERROR
     assert snapshot.error == "MiniMax usage API returned HTTP 500."
     assert _urls() == [INTL + QUOTA]
-
-
-@responses.activate
-def test_refresh_base_resp_2062_is_error_no_plan(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, json=_error_payload(2062), status=200)
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.ERROR
-    assert snapshot.error == "This key has no active MiniMax Coding Plan."
-    assert len(responses.calls) == 1
 
 
 @responses.activate

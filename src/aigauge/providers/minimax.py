@@ -260,7 +260,13 @@ def _build_snapshot(
     if weekly is not None:
         boost = _number(row.get("weekly_boost_permille"))
         if boost is not None and boost > 1000 and weekly.percent_used is not None:
-            boosted = f"Weekly allowance boosted to {boost / 10:g}%."
+            # The console shows remaining against the base allowance, so it
+            # can pass 100%; give its figure so the two can be reconciled.
+            console_left = (100 - weekly.percent_used) * boost / 1000
+            boosted = (
+                f"Weekly allowance boosted to {boost / 10:g}% "
+                f"(console: {console_left:.0f}% left)."
+            )
             weekly.note = f"{weekly.note} {boosted}" if weekly.note else boosted
         metrics.append(weekly)
 
@@ -361,14 +367,20 @@ class MiniMaxProvider(Provider):
                 self._log_host(host, "unreachable", f"error={type(exc).__name__}")
                 unreachable = unreachable or exc
                 continue
+            if host != self._host:
+                # Once per session (and on a switch): which region answered.
+                log.info(
+                    "provider api host provider=%s host=%s",
+                    self._account_id,
+                    host,
+                )
             self._host = host
             return host, payload
         if rejected is not None:
             raise rejected
-        if wrong_host:
-            raise _HostsExhausted(last_host)
-        assert unreachable is not None
-        raise unreachable
+        if unreachable is not None and not wrong_host:
+            raise unreachable
+        raise _HostsExhausted(last_host)
 
     def _log_host(self, host: str, classification: str, extra: str = "") -> None:
         log.info(

@@ -64,9 +64,15 @@ Accept: application/json
 - Hosts, in order: `api.minimax.io` (international), `api.minimax.cn`
   (China, the official CLI's `REGIONS.cn` in `src/config/schema.ts`), then
   `api.minimaxi.com` (older China host, still recognised by the CLI's error
-  module). Advance to the next host only on `base_resp.status_code == 2049`
-  (wrong host) or HTTP 404, and remember the working host per account for the
-  session. No region setting unless that fails in practice.
+  module). Advance to the next host on a wrong host (`base_resp.status_code
+  == 2049`, HTTP 404), a rejected key (1004, HTTP 401 or 403) or an
+  unreachable host (connection error, timeout): a key from one region may be
+  rejected outright by the other, and the international host may be
+  unreachable from mainland China. Stop at the first success, at 2062 (no
+  plan), or at any other error. If every host fails, report the most specific
+  failure: rejected key, then wrong host, then unreachable. Remember the
+  working host per account for the session, so a healthy refresh is one
+  request. No region setting unless that fails in practice.
 - MiniMax can answer HTTP 200 with the error in the body. Treat
   `base_resp.status_code != 0` as the result: 1004 means no or bad key
   (`AUTH_REQUIRED`), 2049 wrong host (retry), 2062 no active plan
@@ -90,7 +96,7 @@ Accept: application/json
 | `current_weekly_remaining_percent`, `current_weekly_usage_count`, `current_weekly_total_count` | weekly equivalents, same semantics |
 | `weekly_end_time` | weekly window end, epoch milliseconds; seconds accepted |
 | `current_weekly_status` | same codes; 3 is the **Unlimited** weekly row PR #14 saw |
-| `weekly_boost_permille` | the console shows weekly remaining as `base × boost / 1000`, up to 150% on boosted plans. The bar uses the base percent; when boost is above 1000 the row note says "Weekly allowance boosted to 150%." |
+| `weekly_boost_permille` | the console shows weekly remaining as `base × boost / 1000`, up to 150% on boosted plans. The bar uses the base percent, which is the share of the boosted allowance spent and reaches 100% when the console reaches 0%. When boost is above 1000 the row note gives the console's figure so the two reconcile: "Weekly allowance boosted to 150% (console: 90% left)." |
 
 The remaining reading of `*_usage_count` is the official CLI's: its quota
 table passes `current_interval_usage_count` as the `remaining` argument of
@@ -164,7 +170,8 @@ The generic per-kind key helpers (`get_account_api_key`,
   closed on an unknown shape, and fixture tests built from the CLI's own
   fixtures.
 - Host selection by error code may not cover every account type. Mitigated by
-  the one-retry rule and a clear error naming the host tried.
+  trying every host before reporting a failure, and by the live check below
+  recording which host the contributor's key landed on.
 - Nobody on the project has a Coding Plan key. innoscoutpro has a subscribed
   account and offered to test; the live pass criterion below is theirs to
   run unless John buys a plan.
@@ -181,8 +188,17 @@ The generic per-kind key helpers (`get_account_api_key`,
   `tests/test_settings_dialog.py`.
 - Config: migration v2 to v3 appends once; a removed MiniMax account is not
   restored.
-- Live, by the contributor: two refreshes across a 5-hour reset match the
-  console's Plan usage card within one percent, on one international account.
+- Live, by the contributor, on one international account:
+  - The 5-hour row matches the console's Plan usage card within one percent,
+    on two refreshes across a 5-hour reset.
+  - The weekly row is checked by relation, not equality. A boosted row
+    (`weekly_boost_permille` above 1000) shows remaining on the console as
+    `base × boost / 1000`, which can pass 100%, so the tile's weekly used
+    percent should equal `100 − console remaining × 1000 / boost`. Example:
+    60% base remaining with a 150% boost, console shows 90% left, tile shows
+    40% used and its note names the console's 90%.
+  - Report which host answered (the `provider api host` line in the
+    diagnostic log) and whether the weekly row was boosted.
 - Run with `.venv\Scripts\python.exe -m pytest tests -q` and
   `QT_QPA_PLATFORM=offscreen`.
 

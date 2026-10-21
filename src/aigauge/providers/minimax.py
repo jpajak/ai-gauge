@@ -12,7 +12,12 @@ from ..config import Config
 from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from .base import Provider
 
-MINIMAX_USAGE_URL = "https://platform.minimax.io/console/usage"
+# Each region's console usage page, for the Settings "Open usage" button.
+MINIMAX_USAGE_URLS = {
+    "international": "https://platform.minimax.io/console/usage",
+    "china": "https://platform.minimax.cn/console/usage",
+}
+MINIMAX_USAGE_URL = MINIMAX_USAGE_URLS["international"]
 # MiniMax serves each region from its own API host, and a key is only valid on
 # its own region's host. The account picks the region (Settings), and the key is
 # sent only to that region's host: it is never tried against another one.

@@ -79,6 +79,7 @@ from .logging_setup import log_path
 # callers and tests that name the provider constants.
 from .providers.claude import CLAUDE_USAGE_URL  # noqa: F401
 from .providers.codex import CODEX_USAGE_URL  # noqa: F401
+from .providers.minimax import MINIMAX_USAGE_URLS
 from .providers.registry import (
     PROVIDER_SPECS,
     ProviderSpec,
@@ -1513,6 +1514,22 @@ class SettingsDialog(QDialog):
         layout.addLayout(body, 1)
         layout.addLayout(button_row)
 
+    def _open_usage(self, spec: ProviderSpec) -> None:
+        """Open the provider's usage page. MiniMax has one console per region,
+        so it opens the console of each region its rows select."""
+        urls = [spec.usage_url]
+        if spec.id == "minimax":
+            regions = {
+                row.region_combo.currentData()
+                for row in self._browser_account_rows
+                if row.region_combo is not None
+            }
+            urls = [
+                url for region, url in MINIMAX_USAGE_URLS.items() if region in regions
+            ] or urls
+        for url in urls:
+            _open_in_browser(url)
+
     def _build_account_family_page(self, spec: ProviderSpec) -> QWidget:
         """The Settings page of a multi-account provider.
 
@@ -1531,7 +1548,7 @@ class SettingsDialog(QDialog):
                 f"Open {spec.display_name}'s usage page in your default browser."
             )
             usage_btn.clicked.connect(
-                lambda _checked=False, url=spec.usage_url: _open_in_browser(url)
+                lambda _checked=False, spec=spec: self._open_usage(spec)
             )
             accounts_layout.addWidget(
                 usage_btn,

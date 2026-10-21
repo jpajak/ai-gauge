@@ -140,7 +140,10 @@ registry it needs:
    label `Mm`, off by default, ordered after Codex, settings hint naming where
    the key comes from (`platform.minimax.io` Coding Plan or Token Plan page,
    international or China account), usage URL
-   `https://platform.minimax.io/console/usage`.
+   `https://platform.minimax.io/console/usage`. The Settings usage button
+   opens each selected region's console instead:
+   `https://platform.minimax.cn/console/usage` for China accounts, both
+   consoles when the accounts use both regions.
 2. A `minimax: bool = False` toggle field.
 3. A `browser_accounts_version` 3 migration that appends the default MiniMax
    account once, as PR #14 does.

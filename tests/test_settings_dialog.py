@@ -1,3 +1,4 @@
+import pytest
 from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, Qt
 from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
 from PyQt6.QtWidgets import QApplication, QComboBox, QGroupBox, QLabel, QPushButton
@@ -1208,6 +1209,47 @@ def test_minimax_row_has_a_region_combo_set_from_the_account(qtbot, monkeypatch)
         )
     assert intl.region_combo.currentData() == "international"
     assert cn.region_combo.currentData() == "china"
+
+
+@pytest.mark.parametrize(
+    "regions,expected",
+    [
+        (["china"], ["https://platform.minimax.cn/console/usage"]),
+        (
+            ["china", "international", "china"],
+            [
+                "https://platform.minimax.io/console/usage",
+                "https://platform.minimax.cn/console/usage",
+            ],
+        ),
+        ([], ["https://platform.minimax.io/console/usage"]),
+    ],
+)
+def test_minimax_open_usage_follows_the_selected_regions(
+    qtbot, monkeypatch, regions, expected
+):
+    opened = []
+    monkeypatch.setattr(
+        settings_dialog, "_open_in_browser", lambda url: opened.append(url)
+    )
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id=f"minimax-{i}", kind="minimax", name=f"M{i}")
+            for i in range(len(regions))
+        ]
+    )
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    # Unsaved choices count: the button reads the rows, not the config.
+    for row, region in zip(_minimax_rows(dialog), regions):
+        row.region_combo.setCurrentIndex(row.region_combo.findData(region))
+
+    _button(dialog, "minimax_open_usage_btn").click()
+
+    assert opened == expected
 
 
 def test_minimax_region_choice_is_saved(qtbot, monkeypatch):

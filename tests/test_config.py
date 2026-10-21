@@ -512,3 +512,52 @@ def test_provider_order_survives_a_save_and_load():
     c.save()
 
     assert Config.load().provider_order == ["antigravity", "claude"]
+
+
+def test_account_region_defaults_to_international():
+    assert BrowserAccount(id="minimax", kind="minimax").region == "international"
+
+
+def test_account_region_round_trips_through_save_and_load():
+    c = Config(
+        browser_accounts=[
+            BrowserAccount(id="minimax", kind="minimax", region="china"),
+            BrowserAccount(id="minimax-work", kind="minimax"),
+        ]
+    )
+    c.save()
+
+    loaded = Config.load()
+
+    assert [a.region for a in loaded.browser_accounts] == ["china", "international"]
+
+
+def test_existing_accounts_without_a_region_load_as_international():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts_version": 3,'
+        ' "browser_accounts": [{"id": "minimax", "kind": "minimax"}]}',
+        encoding="utf-8",
+    )
+
+    assert Config.load().browser_accounts[0].region == "international"
+
+
+def test_invalid_account_region_is_rejected_and_load_falls_back_to_defaults(caplog):
+    # Like any other invalid field, a bad region fails validation, and
+    # Config.load() answers a validation error with the defaults (it does not
+    # coerce the value or keep the rest of the file).
+    with pytest.raises(ValidationError):
+        BrowserAccount(id="minimax", kind="minimax", region="mars")
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"refresh_interval_minutes": 17, "browser_accounts_version": 3,'
+        ' "browser_accounts": ['
+        '{"id": "minimax", "kind": "minimax", "region": "mars"}]}',
+        encoding="utf-8",
+    )
+
+    loaded = Config.load()
+
+    assert loaded.refresh_interval_minutes == 60
+    assert "using defaults" in caplog.text

@@ -4,6 +4,7 @@ import logging
 import math
 from datetime import datetime, timedelta
 from typing import Any, Callable
+from urllib.parse import urlparse
 
 import requests
 
@@ -12,11 +13,13 @@ from ..models import SnapshotStatus, UsageMetric, UsageSnapshot
 from .base import Provider
 
 MINIMAX_USAGE_URL = "https://platform.minimax.io/console/usage"
-MINIMAX_API_HOSTS = (
-    "https://api.minimax.io",
-    "https://api.minimax.cn",
-    "https://api.minimaxi.com",
-)
+# MiniMax serves each region from its own API host, and a key is only valid on
+# its own region's host. The account picks the region (Settings), and the key is
+# sent only to that region's host: it is never tried against another one.
+MINIMAX_REGIONS = {
+    "international": ("International", "https://api.minimax.io"),
+    "china": ("China", "https://api.minimax.cn"),
+}
 _QUOTA_PATH = "/v1/token_plan/remains"
 
 _LAYOUT_ERROR = (
@@ -25,7 +28,7 @@ _LAYOUT_ERROR = (
 
 # base_resp.status_code values the API uses for the cases we handle.
 _CODE_BAD_KEY = 1004
-_CODE_WRONG_HOST = 2049
+_CODE_WRONG_REGION = 2049
 _CODE_NO_PLAN = 2062
 
 # current_*_status values.
@@ -45,10 +48,15 @@ class _ApiError(Exception):
         self.message = message
 
 
-class _HostsExhausted(Exception):
-    def __init__(self, last_host: str):
-        super().__init__(last_host)
-        self.last_host = last_host
+class _Redirected(Exception):
+    """The quota endpoint answered with a 3xx. It is never followed, because
+    the request carries the API key. Holds the status and the target's
+    hostname only, never the full Location URL."""
+
+    def __init__(self, status: int, location_host: str):
+        super().__init__(f"MiniMax redirected the quota request (HTTP {status})")
+        self.status = status
+        self.location_host = location_host
 
 
 def _headers(api_key: str) -> dict[str, str]:
@@ -59,16 +67,21 @@ def _headers(api_key: str) -> dict[str, str]:
 
 
 def _fetch_usage(host: str, api_key: str) -> dict[str, Any]:
-    """GET the quota payload from one host.
+    """GET the quota payload from the region's host, without following redirects.
 
-    Raises requests.HTTPError on a non-2xx status and ValueError on a body that
-    is not a JSON object. Never puts the body into an exception message.
+    Raises _Redirected on a 3xx (raise_for_status does not raise on those),
+    requests.HTTPError on a 4xx or 5xx status and ValueError on a body that is
+    not a JSON object. Never puts the body into an exception message.
     """
     response = requests.get(
         f"{host}{_QUOTA_PATH}",
         headers=_headers(api_key),
         timeout=15,
+        allow_redirects=False,
     )
+    if 300 <= response.status_code < 400:
+        location = response.headers.get("Location") or ""
+        raise _Redirected(response.status_code, urlparse(location).hostname or "")
     response.raise_for_status()
     try:
         payload = response.json()
@@ -293,6 +306,7 @@ class MiniMaxProvider(Provider):
         account_id: str = "minimax",
         pool=None,
         key_loader: Callable[[str], str | None] | None = None,
+        region: str = "international",
     ):
         # Keep config and parent in the signature for compatibility with the
         # other account providers and existing app construction.
@@ -300,7 +314,8 @@ class MiniMaxProvider(Provider):
         self._account_id = account_id
         self._pool = pool
         self._key_loader = key_loader
-        self._host: str | None = None
+        self._region = region
+        self._host_logged = False
 
     def _load_key(self) -> str | None:
         if self._key_loader is not None:
@@ -311,86 +326,6 @@ class MiniMaxProvider(Provider):
 
         return get_account_api_key("minimax", self._account_id)
 
-    def _hosts(self) -> list[str]:
-        """Remembered host first, then the rest in their canonical order."""
-        if self._host in MINIMAX_API_HOSTS:
-            return [self._host] + [h for h in MINIMAX_API_HOSTS if h != self._host]
-        return list(MINIMAX_API_HOSTS)
-
-    def _fetch_any_host(self, api_key: str) -> tuple[str, dict[str, Any]]:
-        """Try each host until one answers with a quota payload.
-
-        A host's outcome is one of:
-        - success: remember the host and return.
-        - wrong host (HTTP 404, base_resp 2049), rejected key (HTTP 401, 403,
-          base_resp 1004) or unreachable (connection error, timeout): try the
-          next host, because a key is only valid on its own region's host and
-          the first host may simply be unreachable from here.
-        - anything else (base_resp 2062, another base_resp code, another HTTP
-          status): raise at once, since more hosts will not change the answer.
-
-        When every host fails with a move-on outcome, raise the most specific:
-        the first rejected-key error, else _HostsExhausted (wrong host), else
-        the first connection or timeout error.
-        """
-        last_host = MINIMAX_API_HOSTS[0]
-        rejected: Exception | None = None
-        wrong_host = False
-        unreachable: Exception | None = None
-        for host in self._hosts():
-            last_host = host
-            try:
-                payload = _fetch_usage(host, api_key)
-                _check_base_resp(payload)
-            except requests.HTTPError as exc:
-                status = exc.response.status_code if exc.response is not None else 0
-                if status == 404:
-                    self._log_host(host, "host_not_found")
-                    wrong_host = True
-                    continue
-                if status in (401, 403):
-                    self._log_host(host, "rejected_key", f"status={status}")
-                    rejected = rejected or exc
-                    continue
-                raise
-            except _ApiError as exc:
-                if exc.code == _CODE_WRONG_HOST:
-                    self._log_host(host, "wrong_host")
-                    wrong_host = True
-                    continue
-                if exc.code == _CODE_BAD_KEY:
-                    self._log_host(host, "rejected_key", f"code={exc.code}")
-                    rejected = rejected or exc
-                    continue
-                raise
-            except (requests.ConnectionError, requests.Timeout) as exc:
-                self._log_host(host, "unreachable", f"error={type(exc).__name__}")
-                unreachable = unreachable or exc
-                continue
-            if host != self._host:
-                # Once per session (and on a switch): which region answered.
-                log.info(
-                    "provider api host provider=%s host=%s",
-                    self._account_id,
-                    host,
-                )
-            self._host = host
-            return host, payload
-        if rejected is not None:
-            raise rejected
-        if unreachable is not None and not wrong_host:
-            raise unreachable
-        raise _HostsExhausted(last_host)
-
-    def _log_host(self, host: str, classification: str, extra: str = "") -> None:
-        log.info(
-            "provider api diagnosis provider=%s classification=%s host=%s%s",
-            self._account_id,
-            classification,
-            host,
-            f" {extra}" if extra else "",
-        )
-
     def _error(self, status: SnapshotStatus, message: str) -> UsageSnapshot:
         return UsageSnapshot(
             provider=self._account_id,
@@ -399,6 +334,19 @@ class MiniMaxProvider(Provider):
         )
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
+        region = MINIMAX_REGIONS.get(self._region)
+        if region is None:
+            # Checked before the key is loaded: nothing is sent anywhere.
+            on_done(
+                self._error(
+                    SnapshotStatus.ERROR, "Choose a MiniMax region in Settings."
+                )
+            )
+            return
+        label, base_url = region
+        host_name = urlparse(base_url).hostname or base_url
+        where = f"{host_name} ({label})"
+
         api_key = self._load_key()
         if not api_key:
             on_done(
@@ -411,36 +359,55 @@ class MiniMaxProvider(Provider):
 
         def work() -> UsageSnapshot:
             try:
-                host, payload = self._fetch_any_host(api_key)
+                payload = _fetch_usage(base_url, api_key)
+                _check_base_resp(payload)
+                if not self._host_logged:
+                    # Once per provider instance: which region's host answered.
+                    self._host_logged = True
+                    log.info(
+                        "provider api host provider=%s region=%s host=%s",
+                        self._account_id,
+                        self._region,
+                        host_name,
+                    )
                 return _build_snapshot(
                     payload,
                     account_id=self._account_id,
-                    host=host,
+                    host=base_url,
                 )
-            except _HostsExhausted as exc:
+            except _Redirected as exc:
                 log.warning(
                     "provider api diagnosis provider=%s "
-                    "classification=hosts_exhausted last_host=%s",
+                    "classification=redirect status=%s location_host=%s",
                     self._account_id,
-                    exc.last_host,
+                    exc.status,
+                    exc.location_host,
                 )
                 return self._error(
                     SnapshotStatus.ERROR,
-                    "No MiniMax quota endpoint accepted this key "
-                    f"(last host tried: {exc.last_host}).",
+                    f"{host_name} redirected the quota request "
+                    f"(HTTP {exc.status}); AI Gauge does not follow redirects "
+                    "with an API key.",
                 )
             except _ApiError as exc:
                 log.warning(
                     "provider api diagnosis provider=%s "
-                    "classification=base_resp_error code=%s",
+                    "classification=base_resp_error code=%s host=%s",
                     self._account_id,
                     exc.code,
+                    host_name,
                 )
                 if exc.code == _CODE_BAD_KEY:
                     return self._error(
                         SnapshotStatus.AUTH_REQUIRED,
-                        "MiniMax rejected the API key on every regional host. "
-                        "Update it in Settings.",
+                        f"MiniMax rejected the API key at {where}. "
+                        "Check the key and the region in Settings.",
+                    )
+                if exc.code == _CODE_WRONG_REGION:
+                    return self._error(
+                        SnapshotStatus.ERROR,
+                        f"This key does not belong to the {label} region "
+                        f"({host_name}). Check the region in Settings.",
                     )
                 if exc.code == _CODE_NO_PLAN:
                     return self._error(
@@ -456,27 +423,49 @@ class MiniMaxProvider(Provider):
                 status = exc.response.status_code if exc.response is not None else 0
                 log.warning(
                     "provider api diagnosis provider=%s "
-                    "classification=usage_http_error status=%s",
+                    "classification=usage_http_error status=%s host=%s",
                     self._account_id,
                     status,
+                    host_name,
                 )
                 if status == 401:
                     return self._error(
                         SnapshotStatus.AUTH_REQUIRED,
-                        "MiniMax rejected the API key on every regional host. "
-                        "Update it in Settings.",
+                        f"MiniMax rejected the API key at {where}. "
+                        "Check the key and the region in Settings.",
                     )
                 if status == 403:
                     return self._error(
                         SnapshotStatus.ERROR,
-                        "This API key does not have an active MiniMax Coding Plan.",
+                        f"MiniMax refused the key at {where}. Check the "
+                        "region in Settings and that the key has an active "
+                        "Coding Plan.",
+                    )
+                if status == 404:
+                    return self._error(
+                        SnapshotStatus.ERROR,
+                        f"This key does not belong to the {label} region "
+                        f"({host_name}). Check the region in Settings.",
                     )
                 return self._error(
                     SnapshotStatus.ERROR,
                     f"MiniMax usage API returned HTTP {status}.",
                 )
+            except (requests.ConnectionError, requests.Timeout) as exc:
+                log.warning(
+                    "provider api diagnosis provider=%s "
+                    "classification=unreachable host=%s error=%s",
+                    self._account_id,
+                    host_name,
+                    type(exc).__name__,
+                )
+                return self._error(
+                    SnapshotStatus.ERROR,
+                    f"Could not reach {where}. Check the connection, or the "
+                    "region in Settings.",
+                )
             except requests.RequestException as exc:
-                # Connection errors carry the URL, never the Authorization header.
+                # Request errors carry the URL, never the Authorization header.
                 return self._error(
                     SnapshotStatus.ERROR,
                     f"MiniMax usage request failed: {exc}",

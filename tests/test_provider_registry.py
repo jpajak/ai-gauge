@@ -710,3 +710,18 @@ def test_claude_auth_redirect_applies_to_every_claude_account_only():
         assert _claude_auth_redirect(url, provider) == {"logged_out": True, "url": url}
     for provider in ("codex", "claudex", "opencode_go", "minimax", "copilot"):
         assert _claude_auth_redirect(url, provider) is None
+
+
+def test_minimax_provider_is_built_for_the_accounts_region():
+    from aigauge.config import BrowserAccount, Config
+    from aigauge.providers.minimax import MINIMAX_REGIONS
+
+    spec = provider_spec("minimax")
+    cn = spec.make(
+        Config(), BrowserAccount(id="minimax-cn", kind="minimax", region="china"), None
+    )
+    intl = spec.make(Config(), BrowserAccount(id="minimax", kind="minimax"), None)
+
+    assert cn._region == "china"  # noqa: SLF001
+    assert MINIMAX_REGIONS[cn._region][1] == "https://api.minimax.cn"  # noqa: SLF001
+    assert intl._region == "international"  # noqa: SLF001

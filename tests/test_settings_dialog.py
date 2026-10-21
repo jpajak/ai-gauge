@@ -1,6 +1,6 @@
 from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, Qt
 from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
-from PyQt6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton
+from PyQt6.QtWidgets import QApplication, QComboBox, QGroupBox, QLabel, QPushButton
 
 from aigauge import settings_dialog
 from aigauge.providers import registry
@@ -1179,3 +1179,90 @@ def test_minimax_keys_are_saved_per_account(qtbot, monkeypatch):
         ("minimax", second.account_id, "sk-cp-two"),
     ]
     assert secrets == {"minimax": "sk-cp-one", second.account_id: "sk-cp-two"}
+
+
+def test_minimax_row_has_a_region_combo_set_from_the_account(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="minimax", kind="minimax"),
+            BrowserAccount(id="minimax-cn", kind="minimax", region="china"),
+        ]
+    )
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    intl, cn = _minimax_rows(dialog)
+    for row in (intl, cn):
+        combo = dialog.findChild(QComboBox, f"{row.account_id}_region_combo")
+        assert combo is row.region_combo
+        assert [combo.itemText(i) for i in range(combo.count())] == [
+            "International (api.minimax.io)",
+            "China (api.minimax.cn)",
+        ]
+        assert combo.toolTip() == (
+            "The API key is sent only to this region's MiniMax host."
+        )
+    assert intl.region_combo.currentData() == "international"
+    assert cn.region_combo.currentData() == "china"
+
+
+def test_minimax_region_choice_is_saved(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    (row,) = _minimax_rows(dialog)
+    row.region_combo.setCurrentIndex(row.region_combo.findData("china"))
+    dialog.apply_to(config)
+
+    saved = {a.id: a.region for a in config.browser_accounts}
+    assert saved["minimax"] == "china"
+
+
+def test_non_minimax_rows_have_no_region_combo_and_keep_their_region(
+    qtbot, monkeypatch
+):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="claude", kind="claude", region="china"),
+            BrowserAccount(id="codex", kind="codex"),
+        ]
+    )
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    rows = {row.account_id: row for row in dialog._browser_account_rows}  # noqa: SLF001
+    assert rows["claude"].region_combo is None
+    assert rows["codex"].region_combo is None
+    assert dialog.findChild(QComboBox, "claude_region_combo") is None
+    dialog.apply_to(config)
+    assert {a.id: a.region for a in config.browser_accounts}["claude"] == "china"
+
+
+def test_unsaved_minimax_region_survives_a_row_rebuild(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    (first,) = _minimax_rows(dialog)
+    first.region_combo.setCurrentIndex(first.region_combo.findData("china"))
+    dialog._add_browser_account("minimax")  # noqa: SLF001
+
+    first, second = _minimax_rows(dialog)
+    assert first.region_combo.currentData() == "china"
+    assert second.region_combo.currentData() == "international"

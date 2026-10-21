@@ -154,6 +154,11 @@ class BrowserAccount(BaseModel):
     # not appear rather than showing a wrong value. Only Claude accounts read
     # this; it is inert on other kinds.
     show_fable: bool = True
+    # MiniMax serves each region from its own API host, and a key only works on
+    # its own region's host. This is per account, and the account's key is sent
+    # only to that region's host. Only MiniMax accounts read this; it is inert
+    # on other kinds.
+    region: Literal["international", "china"] = "international"
 
 
 class CopilotConfig(BaseModel):

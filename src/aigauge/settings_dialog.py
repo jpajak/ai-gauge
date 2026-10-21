@@ -525,6 +525,12 @@ class _ColorThresholdLauncher(QWidget):
         return self.colors.model_copy(deep=True)
 
 
+_MINIMAX_REGION_CHOICES = (
+    ("International (api.minimax.io)", "international"),
+    ("China (api.minimax.cn)", "china"),
+)
+
+
 class _BrowserAccountRow(QWidget):
     sign_in_clicked = pyqtSignal(str)
     paste_cookie_clicked = pyqtSignal(str)
@@ -542,6 +548,7 @@ class _BrowserAccountRow(QWidget):
         self.account_id = account.id
         self.kind = account.kind
         self.colors = account.colors.model_copy(deep=True)
+        self.region = account.region
         self.api_key_edit: QLineEdit | None = None
         self.clear_api_key_cb: QCheckBox | None = None
         self._had_existing_api_key = False
@@ -626,6 +633,24 @@ class _BrowserAccountRow(QWidget):
             fable_row.addWidget(self.fable_cb)
             fable_row.addStretch(1)
             layout.addLayout(fable_row)
+        self.region_combo: QComboBox | None = None
+        if account.kind == "minimax":
+            self.region_combo = QComboBox()
+            self.region_combo.setObjectName(f"{account.id}_region_combo")
+            for label, value in _MINIMAX_REGION_CHOICES:
+                self.region_combo.addItem(label, value)
+            index = self.region_combo.findData(account.region)
+            self.region_combo.setCurrentIndex(max(index, 0))
+            self.region_combo.setToolTip(
+                "The API key is sent only to this region's MiniMax host."
+            )
+            region_row = QHBoxLayout()
+            region_row.setContentsMargins(0, 0, 0, 0)
+            region_row.setSpacing(6)
+            region_row.addWidget(QLabel("Region:"))
+            region_row.addWidget(self.region_combo)
+            region_row.addStretch(1)
+            layout.addLayout(region_row)
         if is_api_key:
             self.api_key_edit = QLineEdit()
             self.api_key_edit.setObjectName(f"{account.id}_api_key_edit")
@@ -670,6 +695,11 @@ class _BrowserAccountRow(QWidget):
             enabled=True,
             colors=self.colors.model_copy(deep=True),
             show_fable=self.fable_cb is not None and self.fable_cb.isChecked(),
+            region=(
+                self.region_combo.currentData()
+                if self.region_combo is not None
+                else self.region
+            ),
         )
 
 

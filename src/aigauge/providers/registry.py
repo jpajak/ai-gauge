@@ -118,7 +118,9 @@ def _make_opencode_go(config, account, parent):
 def _make_minimax(config, account, parent):
     from .minimax import MiniMaxProvider
 
-    return MiniMaxProvider(config, parent=parent, account_id=account.id)
+    return MiniMaxProvider(
+        config, parent=parent, account_id=account.id, region=account.region
+    )
 
 
 def _make_copilot(config, account, parent):
@@ -256,6 +258,8 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
             "<a style='color:#60a5fa;' "
             "href='https://platform.minimax.io/console/plan'>MiniMax "
             "console</a>, or from platform.minimax.cn for a China account. "
+            "Pick each account's region (International or China): its key "
+            "is sent only to that region's API host. "
             "Keys usually start with <b>sk-cp-</b>. Every row has an "
             "independent key, tile, and gauge colors; keys are stored in "
             "your system keychain. API credit balance is not tracked."

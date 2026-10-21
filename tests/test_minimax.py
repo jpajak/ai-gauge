@@ -9,13 +9,14 @@ import aigauge.config
 from aigauge.config import Config
 from aigauge.models import SnapshotStatus
 from aigauge.providers.minimax import (
-    MINIMAX_API_HOSTS,
+    MINIMAX_REGIONS,
     MINIMAX_USAGE_URL,
     MiniMaxProvider,
     _build_snapshot,
 )
 
-INTL, CN, CN_OLD = MINIMAX_API_HOSTS
+INTL = MINIMAX_REGIONS["international"][1]
+CN = MINIMAX_REGIONS["china"][1]
 QUOTA = "/v1/token_plan/remains"
 END_5H_MS = 1_790_000_000_000
 END_WEEK_MS = 1_790_400_000_000
@@ -145,11 +146,10 @@ def test_reset_time_accepts_seconds_or_milliseconds():
 
 def test_contract_constants():
     assert MINIMAX_USAGE_URL == "https://platform.minimax.io/console/usage"
-    assert MINIMAX_API_HOSTS == (
-        "https://api.minimax.io",
-        "https://api.minimax.cn",
-        "https://api.minimaxi.com",
-    )
+    assert MINIMAX_REGIONS == {
+        "international": ("International", "https://api.minimax.io"),
+        "china": ("China", "https://api.minimax.cn"),
+    }
     assert MiniMaxProvider.name == "minimax"
     assert MiniMaxProvider.display_name == "MiniMax"
 
@@ -462,29 +462,179 @@ def test_refresh_sends_bearer_key_and_accept_header_with_timeout(monkeypatch):
     assert "sk-cp-secret" not in repr(snapshot)
 
 
+def _urls() -> list[str]:
+    return [c.request.url for c in responses.calls]
+
+
+def _redirect(host: str, status: int = 302, location: str = "https://evil.example/x"):
+    responses.add(
+        responses.GET, host + QUOTA, status=status, headers={"Location": location}
+    )
+
+
+# Each outcome: how the host answers, the snapshot status and the message
+# (with {host} and {label} filled in for the region under test).
+OUTCOMES = {
+    "http_401": (
+        dict(status=401),
+        SnapshotStatus.AUTH_REQUIRED,
+        "MiniMax rejected the API key at {host} ({label}). "
+        "Check the key and the region in Settings.",
+    ),
+    "base_resp_1004": (
+        dict(json=_error_payload(1004, "login fail"), status=200),
+        SnapshotStatus.AUTH_REQUIRED,
+        "MiniMax rejected the API key at {host} ({label}). "
+        "Check the key and the region in Settings.",
+    ),
+    "http_403": (
+        dict(status=403),
+        SnapshotStatus.ERROR,
+        "MiniMax refused the key at {host} ({label}). Check the region in "
+        "Settings and that the key has an active Coding Plan.",
+    ),
+    "http_404": (
+        dict(status=404),
+        SnapshotStatus.ERROR,
+        "This key does not belong to the {label} region ({host}). "
+        "Check the region in Settings.",
+    ),
+    "base_resp_2049": (
+        dict(json=_error_payload(2049), status=200),
+        SnapshotStatus.ERROR,
+        "This key does not belong to the {label} region ({host}). "
+        "Check the region in Settings.",
+    ),
+    "connection_error": (
+        dict(body=requests.ConnectionError("offline")),
+        SnapshotStatus.ERROR,
+        "Could not reach {host} ({label}). Check the connection, or the "
+        "region in Settings.",
+    ),
+    "timeout": (
+        dict(body=requests.Timeout("slow")),
+        SnapshotStatus.ERROR,
+        "Could not reach {host} ({label}). Check the connection, or the "
+        "region in Settings.",
+    ),
+}
+REGION_CASES = [
+    ("international", INTL, "api.minimax.io", "International"),
+    ("china", CN, "api.minimax.cn", "China"),
+]
+
+
 @responses.activate
-def test_refresh_wrong_host_2049_advances_and_remembers_working_host(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, json=_error_payload(2049), status=200)
+@pytest.mark.parametrize("outcome", OUTCOMES)
+@pytest.mark.parametrize("region,base,host,label", REGION_CASES)
+def test_refresh_failure_makes_one_request_to_the_selected_region_only(
+    monkeypatch, region, base, host, label, outcome
+):
+    kwargs, status, message = OUTCOMES[outcome]
+    # Every host is registered; only the selected one may be called.
+    for other in (INTL, CN):
+        responses.add(responses.GET, other + QUOTA, **kwargs)
+    provider = _provider(monkeypatch, region=region)
+
+    snapshot = _refresh(provider)
+
+    assert snapshot.status == status
+    assert snapshot.error == message.format(host=host, label=label)
+    assert _urls() == [base + QUOTA]
+
+
+@responses.activate
+@pytest.mark.parametrize("region,base,host,label", REGION_CASES)
+def test_refresh_redirect_is_not_followed_and_names_only_the_host(
+    monkeypatch, caplog, region, base, host, label
+):
+    _redirect(base, 302, "https://evil.example/steal?token=abc")
+    responses.add(
+        responses.GET, "https://evil.example/steal", json=_payload(), status=200
+    )
+    provider = _provider(monkeypatch, region=region)
+
+    with caplog.at_level(logging.INFO, logger="aigauge"):
+        snapshot = _refresh(provider)
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert snapshot.error == (
+        f"{host} redirected the quota request (HTTP 302); AI Gauge does not "
+        "follow redirects with an API key."
+    )
+    assert _urls() == [base + QUOTA]
+    assert (
+        "provider api diagnosis provider=minimax-work classification=redirect "
+        "status=302 location_host=evil.example"
+    ) in caplog.text
+    assert "token=abc" not in caplog.text
+    assert "token=abc" not in snapshot.error
+
+
+@responses.activate
+def test_refresh_china_region_requests_only_the_china_host(monkeypatch):
     responses.add(responses.GET, CN + QUOTA, json=_payload(), status=200)
-    provider = _provider(monkeypatch)
+    responses.add(responses.GET, INTL + QUOTA, json=_payload(), status=200)
+    provider = _provider(monkeypatch, region="china")
 
-    first = _refresh(provider)
+    snapshot = _refresh(provider)
 
-    assert first.status == SnapshotStatus.OK
-    assert first.raw["host"] == CN
-    assert [c.request.url for c in responses.calls] == [INTL + QUOTA, CN + QUOTA]
-
-    responses.calls.reset()
-    second = _refresh(provider)
-
-    assert second.status == SnapshotStatus.OK
-    assert [c.request.url for c in responses.calls] == [CN + QUOTA]
+    assert snapshot.status == SnapshotStatus.OK
+    assert snapshot.raw["host"] == CN
+    assert _urls() == [CN + QUOTA]
 
 
 @responses.activate
-def test_refresh_logs_the_answering_host_once(monkeypatch, caplog):
+def test_refresh_default_region_is_international(monkeypatch):
     responses.add(responses.GET, INTL + QUOTA, json=_payload(), status=200)
     provider = _provider(monkeypatch)
+
+    assert _refresh(provider).status == SnapshotStatus.OK
+    assert _urls() == [INTL + QUOTA]
+
+
+@responses.activate
+def test_refresh_passes_allow_redirects_false(monkeypatch):
+    responses.add(responses.GET, INTL + QUOTA, json=_payload(), status=200)
+    responses.add(responses.GET, CN + QUOTA, json=_payload(), status=200)
+    seen = []
+    real_get = requests.get
+
+    def spy(url, **kwargs):
+        seen.append(kwargs)
+        return real_get(url, **kwargs)
+
+    monkeypatch.setattr(requests, "get", spy)
+
+    _refresh(_provider(monkeypatch, region="international"))
+    _refresh(_provider(monkeypatch, region="china"))
+
+    assert len(seen) == 2
+    assert all(kwargs["allow_redirects"] is False for kwargs in seen)
+
+
+@pytest.mark.parametrize("region", ["", "mars", "CHINA"])
+def test_refresh_unknown_region_sends_no_request_and_loads_no_key(
+    monkeypatch, region
+):
+    def boom(*args, **kwargs):
+        raise AssertionError("no request or key load for an unknown region")
+
+    monkeypatch.setattr(requests, "get", boom)
+    provider = MiniMaxProvider(
+        Config(), account_id="minimax-work", key_loader=boom, region=region
+    )
+
+    snapshot = _refresh(provider)
+
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert snapshot.error == "Choose a MiniMax region in Settings."
+
+
+@responses.activate
+def test_refresh_logs_the_region_host_once(monkeypatch, caplog):
+    responses.add(responses.GET, CN + QUOTA, json=_payload(), status=200)
+    provider = _provider(monkeypatch, region="china")
 
     with caplog.at_level(logging.INFO, logger="aigauge"):
         _refresh(provider)
@@ -492,180 +642,13 @@ def test_refresh_logs_the_answering_host_once(monkeypatch, caplog):
 
     messages = [record.getMessage() for record in caplog.records]
     host_lines = [message for message in messages if "api host" in message]
-    assert host_lines == [f"provider api host provider=minimax-work host={INTL}"]
+    assert host_lines == [
+        "provider api host provider=minimax-work region=china host=api.minimax.cn"
+    ]
 
 
 @responses.activate
-def test_refresh_remembered_host_failing_with_2049_tries_the_others(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, json=_payload(), status=200)
-    responses.add(responses.GET, CN + QUOTA, json=_error_payload(2049), status=200)
-    provider = _provider(monkeypatch)
-    provider._host = CN
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.OK
-    assert [c.request.url for c in responses.calls] == [CN + QUOTA, INTL + QUOTA]
-    assert provider._host == INTL
-
-
-@responses.activate
-def test_refresh_http_404_falls_through_to_next_host(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, status=404)
-    responses.add(responses.GET, CN + QUOTA, status=404)
-    responses.add(responses.GET, CN_OLD + QUOTA, json=_payload(), status=200)
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.OK
-    assert snapshot.raw["host"] == CN_OLD
-    assert provider._host == CN_OLD
-
-
-@responses.activate
-def test_refresh_all_hosts_exhausted_names_last_host(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, json=_error_payload(2049), status=200)
-    responses.add(responses.GET, CN + QUOTA, status=404)
-    responses.add(
-        responses.GET, CN_OLD + QUOTA, json=_error_payload(2049), status=200
-    )
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.ERROR
-    assert CN_OLD in (snapshot.error or "")
-    assert len(responses.calls) == 3
-    assert provider._host is None
-
-
-REJECTED_EVERYWHERE = (
-    "MiniMax rejected the API key on every regional host. Update it in Settings."
-)
-
-
-def _urls() -> list[str]:
-    return [c.request.url for c in responses.calls]
-
-
-@responses.activate
-def test_refresh_base_resp_1004_on_every_host_is_auth_required(monkeypatch):
-    for host in MINIMAX_API_HOSTS:
-        responses.add(
-            responses.GET,
-            host + QUOTA,
-            json=_error_payload(1004, "login fail"),
-            status=200,
-        )
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
-    assert snapshot.error == REJECTED_EVERYWHERE
-    assert _urls() == [INTL + QUOTA, CN + QUOTA, CN_OLD + QUOTA]
-
-
-@responses.activate
-def test_refresh_1004_on_first_host_then_ok_uses_and_remembers_second(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, json=_error_payload(1004), status=200)
-    responses.add(responses.GET, CN + QUOTA, json=_payload(), status=200)
-    provider = _provider(monkeypatch)
-
-    first = _refresh(provider)
-
-    assert first.status == SnapshotStatus.OK
-    assert first.raw["host"] == CN
-    assert _urls() == [INTL + QUOTA, CN + QUOTA]
-
-    responses.calls.reset()
-    second = _refresh(provider)
-
-    assert second.status == SnapshotStatus.OK
-    assert _urls() == [CN + QUOTA]
-
-
-@responses.activate
-def test_refresh_http_401_on_first_host_then_ok(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, status=401)
-    responses.add(responses.GET, CN + QUOTA, json=_payload(), status=200)
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.OK
-    assert snapshot.raw["host"] == CN
-    assert _urls() == [INTL + QUOTA, CN + QUOTA]
-
-
-@responses.activate
-@pytest.mark.parametrize(
-    "failure",
-    [requests.ConnectionError("offline"), requests.Timeout("slow")],
-    ids=["connection_error", "timeout"],
-)
-def test_refresh_unreachable_first_host_then_ok(monkeypatch, failure):
-    responses.add(responses.GET, INTL + QUOTA, body=failure)
-    responses.add(responses.GET, CN + QUOTA, json=_payload(), status=200)
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.OK
-    assert snapshot.raw["host"] == CN
-    assert _urls() == [INTL + QUOTA, CN + QUOTA]
-
-
-@responses.activate
-def test_refresh_rejected_key_outranks_wrong_host_and_unreachable(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, json=_error_payload(1004), status=200)
-    responses.add(responses.GET, CN + QUOTA, json=_error_payload(2049), status=200)
-    responses.add(
-        responses.GET, CN_OLD + QUOTA, body=requests.ConnectionError("offline")
-    )
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
-    assert snapshot.error == REJECTED_EVERYWHERE
-    assert len(responses.calls) == 3
-
-
-@responses.activate
-def test_refresh_wrong_host_outranks_unreachable(monkeypatch):
-    responses.add(responses.GET, INTL + QUOTA, json=_error_payload(2049), status=200)
-    responses.add(responses.GET, CN + QUOTA, body=requests.ConnectionError("offline"))
-    responses.add(
-        responses.GET, CN_OLD + QUOTA, body=requests.ConnectionError("offline")
-    )
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.ERROR
-    assert snapshot.error.startswith("No MiniMax quota endpoint accepted this key")
-    assert CN_OLD in snapshot.error
-    assert len(responses.calls) == 3
-
-
-@responses.activate
-def test_refresh_every_host_unreachable_reports_request_failed(monkeypatch):
-    for host in MINIMAX_API_HOSTS:
-        responses.add(responses.GET, host + QUOTA, body=requests.ConnectionError("x"))
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.ERROR
-    assert snapshot.error.startswith("MiniMax usage request failed")
-    assert len(responses.calls) == 3
-    assert provider._host is None
-
-
-@responses.activate
-def test_refresh_2062_on_first_host_stops_without_trying_others(monkeypatch):
+def test_refresh_2062_is_the_no_plan_error_after_one_request(monkeypatch):
     responses.add(responses.GET, INTL + QUOTA, json=_error_payload(2062), status=200)
     responses.add(responses.GET, CN + QUOTA, json=_payload(), status=200)
     provider = _provider(monkeypatch)
@@ -678,7 +661,7 @@ def test_refresh_2062_on_first_host_stops_without_trying_others(monkeypatch):
 
 
 @responses.activate
-def test_refresh_http_500_on_first_host_stops_without_trying_others(monkeypatch):
+def test_refresh_http_500_is_reported_after_one_request(monkeypatch):
     responses.add(responses.GET, INTL + QUOTA, status=500)
     responses.add(responses.GET, CN + QUOTA, json=_payload(), status=200)
     provider = _provider(monkeypatch)
@@ -704,32 +687,6 @@ def test_refresh_other_base_resp_code_reports_code_and_message(monkeypatch):
 
     assert snapshot.status == SnapshotStatus.ERROR
     assert "1002" in snapshot.error and "rate limited" in snapshot.error
-
-
-@responses.activate
-def test_refresh_http_401_on_every_host_is_auth_required(monkeypatch):
-    for host in MINIMAX_API_HOSTS:
-        responses.add(responses.GET, host + QUOTA, status=401)
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
-    assert snapshot.error == REJECTED_EVERYWHERE
-    assert len(responses.calls) == 3
-
-
-@responses.activate
-def test_refresh_http_403_on_every_host_is_error(monkeypatch):
-    for host in MINIMAX_API_HOSTS:
-        responses.add(responses.GET, host + QUOTA, status=403)
-    provider = _provider(monkeypatch)
-
-    snapshot = _refresh(provider)
-
-    assert snapshot.status == SnapshotStatus.ERROR
-    assert "Coding Plan" in snapshot.error
-    assert len(responses.calls) == 3
 
 
 @responses.activate

@@ -4,7 +4,7 @@
 
 ### Added
 
-- Optional MiniMax Coding Plan tile showing the 5-hour and weekly limits. It is off by default; turn it on from its Settings page and enter the Coding Plan API key for each account. ([#13](https://github.com/jpajak/ai-gauge/issues/13), thanks [@innoscoutpro](https://github.com/innoscoutpro).)
+- Optional MiniMax Coding Plan tile showing the 5-hour and weekly limits. It is off by default; turn it on from its Settings page and enter each account's Coding Plan API key and region (International or China). The key is sent only to that region's API host. ([#13](https://github.com/jpajak/ai-gauge/issues/13), thanks [@innoscoutpro](https://github.com/innoscoutpro).)
 
 ## 0.8.5 - 2026-10-08
 

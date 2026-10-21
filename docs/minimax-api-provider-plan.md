@@ -61,21 +61,28 @@ Authorization: Bearer <sk-cp-... key>
 Accept: application/json
 ```
 
-- Hosts, in order: `api.minimax.io` (international), `api.minimax.cn`
-  (China, the official CLI's `REGIONS.cn` in `src/config/schema.ts`), then
-  `api.minimaxi.com` (older China host, still recognised by the CLI's error
-  module). Advance to the next host on a wrong host (`base_resp.status_code
-  == 2049`, HTTP 404), a rejected key (1004, HTTP 401 or 403) or an
-  unreachable host (connection error, timeout): a key from one region may be
-  rejected outright by the other, and the international host may be
-  unreachable from mainland China. Stop at the first success, at 2062 (no
-  plan), or at any other error. If every host fails, report the most specific
-  failure: rejected key, then wrong host, then unreachable. Remember the
-  working host per account for the session, so a healthy refresh is one
-  request. No region setting unless that fails in practice.
+- Region rule: each account picks a region in Settings (`BrowserAccount.region`,
+  default International), and its key is sent only to that region's host:
+  `api.minimax.io` (International) or `api.minimax.cn` (China, the official
+  CLI's `REGIONS.cn` in `src/config/schema.ts`). One refresh is one request.
+  The key is never tried against another host, and redirects are not followed
+  (`allow_redirects=False`; a 3xx is reported with the status and the target
+  hostname only). A failure says which host and region it concerned and points
+  at Settings: HTTP 401 or 1004 (check key and region), 403 (check region and
+  that the plan is active), HTTP 404 or 2049 (the key belongs to another
+  region), connection error or timeout (check the connection or the region).
+  An unknown region sends nothing and asks the user to choose one.
+- Why: an earlier draft cycled the key across `api.minimax.io`,
+  `api.minimax.cn` and `api.minimaxi.com` and remembered the one that
+  answered. The PR #15 review (a reviewer with a Coding Plan) asked that a key
+  only reach the region the user chose, that failures be actionable instead of
+  silently retried against other hosts, and that the authenticated request not
+  follow redirects. `api.minimaxi.com` (an older China host, still recognised
+  by the CLI's error module) was dropped: the official CLI's China region is
+  `api.minimax.cn`.
 - MiniMax can answer HTTP 200 with the error in the body. Treat
   `base_resp.status_code != 0` as the result: 1004 means no or bad key
-  (`AUTH_REQUIRED`), 2049 wrong host (retry), 2062 no active plan
+  (`AUTH_REQUIRED`), 2049 wrong region (`ERROR`), 2062 no active plan
   (`ERROR` with a plain message). Also handle 401 and 403 the OpenCode way.
 - Older tools call `/v1/api/openplatform/coding_plan/remains` on the console
   host. That path wants the web session cookie, not the key. Do not use it.
@@ -169,9 +176,10 @@ The generic per-kind key helpers (`get_account_api_key`,
   platform docs site. Mitigated by preferring the percent fields, failing
   closed on an unknown shape, and fixture tests built from the CLI's own
   fixtures.
-- Host selection by error code may not cover every account type. Mitigated by
-  trying every host before reporting a failure, and by the live check below
-  recording which host the contributor's key landed on.
+- A key picked against the wrong region fails, and the user has to change the
+  region by hand. Mitigated by error messages that name the host and region
+  and point at Settings, and by the live check below recording which region
+  and host answered.
 - Nobody on the project has a Coding Plan key. innoscoutpro has a subscribed
   account and offered to test; the live pass criterion below is theirs to
   run unless John buys a plan.
@@ -197,8 +205,9 @@ The generic per-kind key helpers (`get_account_api_key`,
     percent should equal `100 − console remaining × 1000 / boost`. Example:
     60% base remaining with a 150% boost, console shows 90% left, tile shows
     40% used and its note names the console's 90%.
-  - Report which host answered (the `provider api host` line in the
-    diagnostic log) and whether the weekly row was boosted.
+  - Report the region selected in Settings, which host answered (the
+    `provider api host` line in the diagnostic log) and whether the weekly row
+    was boosted.
 - Run with `.venv\Scripts\python.exe -m pytest tests -q` and
   `QT_QPA_PLATFORM=offscreen`.
 

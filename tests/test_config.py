@@ -31,17 +31,20 @@ def test_defaults():
     assert c.browser_accounts[0].show_fable is True
     assert [a.id for a in c.browser_accounts] == [
         "claude",
+        "claude_api",
         "codex",
         "opencode_go",
         "minimax",
     ]
     assert [a.kind for a in c.browser_accounts] == [
         "claude",
+        "claude_api",
         "codex",
         "opencode_go",
         "minimax",
     ]
     assert c.providers.copilot is True
+    assert c.providers.claude_api is False
     assert c.providers.opencode_go is False
     assert c.start_at_login is False
     assert c.sign_in_browser == "ask"
@@ -244,6 +247,7 @@ def test_load_migrates_old_refresh_interval_to_active_rate():
         ("codex", "codex", True),
         ("opencode_go", "opencode_go", True),
         ("minimax", "minimax", True),
+        ("claude_api", "claude_api", True),
     ]
 
 
@@ -273,6 +277,7 @@ def test_load_migrates_legacy_provider_toggles_to_browser_accounts():
         ("codex", "codex", True),
         ("opencode_go", "opencode_go", True),
         ("minimax", "minimax", True),
+        ("claude_api", "claude_api", True),
     ]
 
 
@@ -281,7 +286,7 @@ def test_upgraded_config_without_fable_key_shows_the_limit():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         '{"providers": {"claude": true},'
-        ' "browser_accounts_version": 3,'
+        ' "browser_accounts_version": 4,'
         ' "browser_accounts": ['
         '{"id": "claude", "kind": "claude"},'
         '{"id": "claude-work", "kind": "claude"}]}',
@@ -297,7 +302,7 @@ def test_explicitly_disabled_fable_account_stays_disabled():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         '{"providers": {"claude": true},'
-        ' "browser_accounts_version": 3,'
+        ' "browser_accounts_version": 4,'
         ' "browser_accounts": ['
         '{"id": "claude", "kind": "claude", "show_fable": false},'
         '{"id": "claude-work", "kind": "claude"}]}',
@@ -318,13 +323,14 @@ def test_load_adds_opencode_without_restoring_removed_claude_or_codex():
     assert [(a.id, a.kind) for a in c.browser_accounts] == [
         ("opencode_go", "opencode_go"),
         ("minimax", "minimax"),
+        ("claude_api", "claude_api"),
     ]
 
 
-def test_load_preserves_explicitly_removed_accounts_after_v3_migration():
+def test_load_preserves_explicitly_removed_accounts_after_v4_migration():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
-        '{"browser_accounts": [], "browser_accounts_version": 3}',
+        '{"browser_accounts": [], "browser_accounts_version": 4}',
         encoding="utf-8",
     )
 
@@ -347,7 +353,7 @@ def test_load_migrates_single_opencode_colors_to_account():
 
     assert account is not None
     assert account.colors.green_max == 20
-    assert c.browser_accounts_version == 3
+    assert c.browser_accounts_version == 4
 
 
 def test_load_adds_one_minimax_account_to_a_version_2_config():
@@ -365,15 +371,16 @@ def test_load_adds_one_minimax_account_to_a_version_2_config():
         ("claude", "claude", None, True),
         ("opencode_go", "opencode_go", None, True),
         ("minimax", "minimax", None, True),
+        ("claude_api", "claude_api", None, True),
     ]
-    assert c.browser_accounts_version == 3
+    assert c.browser_accounts_version == 4
     assert c.providers.minimax is False
 
 
 def test_load_does_not_resurrect_a_removed_minimax_account():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
-        '{"browser_accounts_version": 3, "browser_accounts": ['
+        '{"browser_accounts_version": 4, "browser_accounts": ['
         '{"id": "claude", "kind": "claude"}]}',
         encoding="utf-8",
     )
@@ -381,7 +388,7 @@ def test_load_does_not_resurrect_a_removed_minimax_account():
     c = Config.load()
 
     assert [a.id for a in c.browser_accounts] == ["claude"]
-    assert c.browser_accounts_version == 3
+    assert c.browser_accounts_version == 4
 
 
 def test_load_keeps_an_existing_minimax_account_in_a_version_2_config():
@@ -395,7 +402,8 @@ def test_load_keeps_an_existing_minimax_account_in_a_version_2_config():
     c = Config.load()
 
     assert [(a.id, a.name) for a in c.browser_accounts] == [
-        ("minimax-work", "Work")
+        ("minimax-work", "Work"),
+        ("claude_api", None),
     ]
 
 
@@ -405,7 +413,7 @@ def test_a_fresh_config_has_a_minimax_account_at_the_current_version():
     assert [(a.id, a.kind) for a in c.browser_accounts if a.kind == "minimax"] == [
         ("minimax", "minimax")
     ]
-    assert c.browser_accounts_version == 3
+    assert c.browser_accounts_version == 4
 
 
 def test_load_runs_both_account_steps_for_a_version_1_config():
@@ -417,8 +425,96 @@ def test_load_runs_both_account_steps_for_a_version_1_config():
 
     c = Config.load()
 
-    assert [a.id for a in c.browser_accounts] == ["claude", "opencode_go", "minimax"]
-    assert c.browser_accounts_version == 3
+    assert [a.id for a in c.browser_accounts] == [
+        "claude",
+        "opencode_go",
+        "minimax",
+        "claude_api",
+    ]
+    assert c.browser_accounts_version == 4
+
+
+def test_load_adds_one_claude_api_account_to_a_version_3_config():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts_version": 3, "browser_accounts": ['
+        '{"id": "claude", "kind": "claude", "name": "Work"},'
+        '{"id": "minimax", "kind": "minimax", "region": "china"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [(a.id, a.kind, a.name, a.enabled) for a in c.browser_accounts] == [
+        ("claude", "claude", "Work", True),
+        ("minimax", "minimax", None, True),
+        ("claude_api", "claude_api", None, True),
+    ]
+    assert c.browser_accounts[1].region == "china"
+    assert c.browser_accounts_version == 4
+    assert c.providers.claude_api is False
+
+
+def test_claude_api_migration_is_idempotent():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts_version": 3, "browser_accounts": ['
+        '{"id": "claude", "kind": "claude"}]}',
+        encoding="utf-8",
+    )
+
+    first = Config.load()
+    first.save()
+    second = Config.load()
+
+    assert [a.id for a in second.browser_accounts] == ["claude", "claude_api"]
+    data = {"browser_accounts_version": 3, "browser_accounts": []}
+    Config._migrate(data)
+    Config._migrate(data)
+    assert [a["id"] for a in data["browser_accounts"]] == ["claude_api"]
+    data = {"browser_accounts_version": 4, "browser_accounts": []}
+    Config._migrate(data)
+    assert data["browser_accounts"] == []
+
+
+def test_load_keeps_an_existing_claude_api_account_in_a_version_3_config():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts_version": 3, "browser_accounts": ['
+        '{"id": "claude_api-work", "kind": "claude_api", "name": "Work"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [(a.id, a.name) for a in c.browser_accounts] == [
+        ("claude_api-work", "Work")
+    ]
+
+
+def test_a_config_file_from_before_claude_api_still_loads():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"providers": {"claude": true, "codex": false, "minimax": true},'
+        ' "browser_accounts_version": 3,'
+        ' "browser_accounts": [{"id": "claude", "kind": "claude"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert c.providers.claude_api is False
+    assert c.providers.minimax is True
+    assert c.providers.codex is False
+
+
+def test_a_fresh_config_has_a_claude_api_account_at_the_current_version():
+    c = Config()
+
+    assert [(a.id, a.kind) for a in c.browser_accounts if a.kind == "claude_api"] == [
+        ("claude_api", "claude_api")
+    ]
+    assert c.browser_accounts_version == 4
 
 
 def test_browser_account_display_names():
@@ -490,6 +586,7 @@ def test_provider_order_puts_saved_kinds_first_then_the_rest():
     assert config_module.provider_order(c) == (
         "openrouter",
         "claude",
+        "claude_api",
         "codex",
         "opencode_go",
         "minimax",

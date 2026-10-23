@@ -6,8 +6,7 @@ internal billing JSON from inside the billing page, never from Python, so the
 session cookie stays in Chromium. The route is undocumented: every unknown
 shape is an ERROR, never zero and never the last reading.
 
-See docs/claude-api-credit-plan.md. Not registered yet: a later commit wires
-it into providers/registry.py.
+See docs/claude-api-credit-plan.md.
 """
 
 from __future__ import annotations
@@ -478,6 +477,7 @@ def _subscription_snapshot(
                     f"{_money(group.granted, currency)} left. {expiry_note}"
                 ),
                 window=latest - earliest,
+                guard_eligible=False,
             )
         )
         left = group.remaining

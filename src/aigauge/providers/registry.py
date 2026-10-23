@@ -106,6 +106,12 @@ def _make_claude(config, account, parent):
     )
 
 
+def _make_claude_api(config, account, parent):
+    from .claude_api import ClaudeApiProvider
+
+    return ClaudeApiProvider(parent=parent, account_id=account.id)
+
+
 def _make_codex(config, account, parent):
     from .codex import CodexProvider
 
@@ -185,6 +191,39 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         compact_collapse=True,
     ),
     ProviderSpec(
+        id="claude_api",
+        display_name="Claude API",
+        settings_label="Claude API",
+        short_label="CA",
+        auth="browser_session",
+        multi_account=True,
+        default_enabled=False,
+        default_order=1,
+        make=_make_claude_api,
+        login=LoginSpec(
+            url="https://platform.claude.com/login",
+            window_title="Sign in to Claude Console",
+            prompt_name="Claude Console",
+            hosts=("claude.com", "anthropic.com"),
+        ),
+        cookies=CookieSpec(
+            domain="platform.claude.com",
+            name="sessionKey",
+            aliases=("sessionKey", "sessionKeyV3"),
+        ),
+        usage_url="https://platform.claude.com/settings/billing",
+        settings_hint=(
+            "Name each Claude Console sign-in here. All accounts appear when "
+            "Claude API is enabled above. <b>Sign in</b> opens a real "
+            "installed browser and supports Google and passkeys; the session "
+            "is connected automatically. The Console is a separate sign-in "
+            "from claude.ai, and reading billing needs the Owner, Admin or "
+            "Billing role."
+        ),
+        paste_cookie=False,
+        usage_guard=False,
+    ),
+    ProviderSpec(
         id="codex",
         display_name="Codex",
         settings_label="Codex",
@@ -192,7 +231,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="browser_session",
         multi_account=True,
         default_enabled=True,
-        default_order=1,
+        default_order=2,
         make=_make_codex,
         login=LoginSpec(
             url="https://chatgpt.com/auth/login",
@@ -231,7 +270,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="api_key",
         multi_account=True,
         default_enabled=False,
-        default_order=2,
+        default_order=3,
         make=_make_opencode_go,
         settings_hint=(
             "Name each OpenCode Go subscription and enter its API key. "
@@ -252,7 +291,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="api_key",
         multi_account=True,
         default_enabled=False,
-        default_order=3,
+        default_order=4,
         make=_make_minimax,
         usage_url="https://platform.minimax.io/console/usage",
         settings_hint=(
@@ -279,7 +318,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="single",
         multi_account=False,
         default_enabled=True,
-        default_order=4,
+        default_order=5,
         make=_make_copilot,
     ),
     ProviderSpec(
@@ -290,7 +329,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="single",
         multi_account=False,
         default_enabled=False,
-        default_order=5,
+        default_order=6,
         make=_make_openrouter,
     ),
     ProviderSpec(
@@ -301,7 +340,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
         auth="single",
         multi_account=False,
         default_enabled=False,
-        default_order=6,
+        default_order=7,
         make=_make_antigravity,
     ),
 )
@@ -376,9 +415,12 @@ def has_auth_cookie(kind: str, names: Iterable[str]) -> bool:
 
 def sign_in_hosts() -> tuple[str, ...]:
     """Provider host suffixes allowed in the embedded sign-in browser."""
+    # Claude and Claude API share anthropic.com; list each host once.
     return tuple(
-        host
-        for spec in PROVIDER_SPECS
-        if spec.login is not None
-        for host in spec.login.hosts
+        dict.fromkeys(
+            host
+            for spec in PROVIDER_SPECS
+            if spec.login is not None
+            for host in spec.login.hosts
+        )
     )

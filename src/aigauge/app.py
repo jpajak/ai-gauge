@@ -45,7 +45,6 @@ from .providers.registry import (
     account_family,
     account_kinds,
     api_key_kinds,
-    browser_session_kinds,
     provider_spec,
     single_specs,
 )
@@ -1036,7 +1035,9 @@ class App(QObject):
         accounts = [
             account
             for account in self._config.browser_accounts
-            if account.enabled and account.kind in browser_session_kinds()
+            # Ratio history and local usage exist for these two kinds only;
+            # Claude API is a browser-session kind with neither.
+            if account.enabled and account.kind in ("claude", "codex")
         ]
         if not accounts:
             empty = menu.addAction("No Claude or Codex accounts")

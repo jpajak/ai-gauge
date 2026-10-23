@@ -290,7 +290,9 @@ And two keyed tables:
 
 5. A `VERIFY_TARGETS` entry in `webview/targets.py`: the signed-in page
    URL and its predicate.
-6. A paste-cookie hint in `cookie_dialog.INSTRUCTIONS`.
+6. A paste-cookie hint in `cookie_dialog.INSTRUCTIONS`, only when the spec
+   has `paste_cookie=True` (the registry test requires the entry exactly then,
+   and a dotted `CookieSpec.domain` with it).
 
 If the sign-in flow uses an identity provider not yet allowed, add its host
 to `_IDENTITY_PROVIDER_HOSTS` in `webview/login_window.py`.

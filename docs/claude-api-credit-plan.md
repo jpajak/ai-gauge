@@ -1,8 +1,9 @@
 # Plan: show the monthly Claude API credit (Max and Team plans)
 
-**Status:** in progress since 2026-10-23. Commits 1 and 2 are in, commit 3 is
-being built. P1 and P2 are recorded; commit 5 turns the provider's
-provisional signed-out and permission rules into the measured ones. First
+**Status:** built on 2026-10-23, waiting on the manual check (the last bullet
+of [Test strategy](#test-strategy)). Commits 1 to 4 and the P2 rules of
+commit 5 are in; whatever the manual run finds finishes commit 5. P1 and P2
+are recorded. First
 written 2026-10-08; revised 2026-10-23 after an outside review, whose points
 are folded into [Review outcome](#review-outcome-2026-10-23).
 **Found while:** asking how to monitor the new subscriber API credit

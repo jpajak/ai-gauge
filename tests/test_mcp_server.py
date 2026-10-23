@@ -304,6 +304,51 @@ def test_usage_cache_marks_tagged_metrics_ineligible(tmp_path, monkeypatch):
     assert [metric["guard_eligible"] for metric in metrics] == [True, False]
 
 
+def test_usage_cache_honours_guard_eligible_flag(tmp_path, monkeypatch):
+    monkeypatch.setattr("aigauge.usage_cache.app_data_dir", lambda: tmp_path)
+    snapshot = UsageSnapshot(
+        provider="codex",
+        status=SnapshotStatus.OK,
+        metrics=[
+            UsageMetric("Weekly", 10),
+            UsageMetric("Credit", 20, guard_eligible=False),
+            UsageMetric("Breakdown", 30, tag="model_breakdown", guard_eligible=False),
+            UsageMetric("Tagged", 40, tag="model_breakdown"),
+        ],
+    )
+
+    write_usage_cache({"codex": snapshot})
+    metrics = read_usage_cache()["accounts"]["codex"]["metrics"]
+
+    assert [metric["guard_eligible"] for metric in metrics] == [
+        True,
+        False,
+        False,
+        False,
+    ]
+
+
+def test_balance_only_account_is_blocked_and_never_recommended(
+    tmp_path, monkeypatch
+):
+    monkeypatch.setattr("aigauge.usage_cache.app_data_dir", lambda: tmp_path)
+    write_usage_cache(
+        {
+            "codex": UsageSnapshot(
+                provider="codex",
+                status=SnapshotStatus.OK,
+                metrics=[UsageMetric("Credit", 5, guard_eligible=False)],
+            )
+        }
+    )
+    _patch_context(monkeypatch, _config(codex=90), read_usage_cache())
+
+    assert check_usage_guard("codex")["reason_code"] == "no_eligible_metric"
+    result = recommend_ai_account()
+    assert result["account"] is None
+    assert result["reason_code"] == "no_allowed_account"
+
+
 def test_usage_cache_can_be_invalidated(tmp_path, monkeypatch):
     monkeypatch.setattr("aigauge.usage_cache.app_data_dir", lambda: tmp_path)
     write_usage_cache({})

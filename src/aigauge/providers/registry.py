@@ -85,6 +85,9 @@ class ProviderSpec:
     # ``account_id``. Only ``api_key`` specs set it.
     api_key_entry: str | None = None
     api_key_placeholder: str = ""
+    # False for providers whose rows are balances, not limits; Settings shows
+    # no pause policy for their accounts.
+    usage_guard: bool = True
 
 
 # ----- Factories -------------------------------------------------------------

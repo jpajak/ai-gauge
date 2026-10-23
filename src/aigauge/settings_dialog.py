@@ -1355,11 +1355,12 @@ class SettingsDialog(QDialog):
         mcp_accounts = [
             (account.id, account_display_name(account))
             for account in self._browser_accounts
+            if (spec := provider_spec(account.kind)) is None or spec.usage_guard
         ]
         mcp_accounts.extend(
             (spec.id, spec.settings_label)
             for spec in single_specs()
-            if getattr(config.providers, spec.id, False)
+            if spec.usage_guard and getattr(config.providers, spec.id, False)
         )
         for account_id, label in mcp_accounts:
             enabled = QCheckBox("Pause at")

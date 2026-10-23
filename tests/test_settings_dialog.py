@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, Qt
 from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
@@ -536,6 +538,47 @@ def test_mcp_policy_for_removed_account_is_not_saved(qtbot, monkeypatch):
 
     assert "claude" in config.mcp_pause_policies
     assert "codex" not in config.mcp_pause_policies
+
+
+def test_usage_guard_false_hides_pause_rows_and_drops_policies(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    spec = registry.provider_spec("codex")
+    monkeypatch.setitem(
+        registry._SPECS_BY_ID, "codex", dataclasses.replace(spec, usage_guard=False)
+    )
+    config = Config(mcp_enabled=True)
+    config.mcp_pause_policies = {"codex": 80, "claude": 70}
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert "codex" not in dialog.mcp_policy_controls
+    assert "claude" in dialog.mcp_policy_controls
+
+    dialog.apply_to(config)
+
+    assert config.mcp_pause_policies == {"claude": 70}
+
+
+def test_usage_guard_false_hides_single_spec_pause_row(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    specs = tuple(
+        dataclasses.replace(spec, usage_guard=False) if spec.id == "openrouter" else spec
+        for spec in registry.PROVIDER_SPECS
+    )
+    monkeypatch.setattr(registry, "PROVIDER_SPECS", specs)
+    config = Config(mcp_enabled=True)
+    config.providers.openrouter = True
+    config.providers.copilot = True
+    config.mcp_pause_policies = {"openrouter": 80, "copilot": 70}
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert "openrouter" not in dialog.mcp_policy_controls
+    assert "copilot" in dialog.mcp_policy_controls
+
+    dialog.apply_to(config)
+
+    assert config.mcp_pause_policies == {"copilot": 70}
 
 
 _PAGE_KEYS = [

@@ -31,6 +31,8 @@ xattr -dr com.apple.quarantine ai-gauge-mcp
 Configure the client to call `check_current_account_usage` before costly work
 and stop whenever the returned `allowed` value is `false`. Other tools provide
 sanitized usage and recommend the account with the most configured headroom.
+Balance rows, such as a prepaid credit, are reported with
+`guard_eligible: false` and never count toward a pause.
 
 `--account-id` selects which account the guard applies to; it is not an access
 boundary. `get_ai_usage` and `recommend_ai_account` report every enabled

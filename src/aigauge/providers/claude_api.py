@@ -4,7 +4,10 @@ The credit lives on the Claude Console (platform.claude.com), not on
 claude.ai, so this provider has its own sign-in. It reads the Console's
 internal billing JSON from inside the billing page, never from Python, so the
 session cookie stays in Chromium. The route is undocumented: every unknown
-shape is an ERROR, never zero and never the last reading.
+shape is an ERROR, never zero. The provider never supplies an earlier reading
+itself. After a failed refresh the app may keep the last numbers on screen
+marked stale; an error that describes the account (several organizations, no
+billing role) clears them.
 
 See docs/claude-api-credit-plan.md.
 """
@@ -351,7 +354,7 @@ def _build_snapshot(
     snapshot = _snapshot(
         payload if isinstance(payload, dict) else {}, account_id, now, diag
     )
-    snapshot.raw = dict(diag)
+    snapshot.raw = {**snapshot.raw, **diag}
     log.info("%s credit %s", account_id, _diag_line(diag))
     return snapshot
 
@@ -385,9 +388,18 @@ def _fail(
     result: str,
     error: str,
     status: SnapshotStatus = SnapshotStatus.ERROR,
+    account_state: bool = False,
 ) -> UsageSnapshot:
+    """`account_state` marks an error about the account itself, which will not
+    heal on its own: the app then blanks the tile instead of keeping the last
+    numbers on screen as stale."""
     diag["result"] = result
-    return UsageSnapshot(provider=account_id, status=status, error=error)
+    return UsageSnapshot(
+        provider=account_id,
+        status=status,
+        error=error,
+        raw={"config_error": True} if account_state else {},
+    )
 
 
 def _snapshot(
@@ -437,7 +449,10 @@ def _snapshot(
     too_many = _as_int(payload.get("too_many_orgs"))
     if too_many is not None:
         diag["api_orgs"] = too_many
-        return _fail(account_id, diag, "too_many_orgs", _SEVERAL_ORGS_ERROR)
+        return _fail(
+            account_id, diag, "too_many_orgs", _SEVERAL_ORGS_ERROR,
+            account_state=True,
+        )
 
     api_orgs = _as_int(payload.get("api_orgs"))
     credits = payload.get("credits")
@@ -498,7 +513,7 @@ def _snapshot(
     if len(subscription_orgs) > 1:
         return _fail(
             account_id, diag, "several_subscription_orgs",
-            _SEVERAL_SUBSCRIPTION_ERROR,
+            _SEVERAL_SUBSCRIPTION_ERROR, account_state=True,
         )
     if len(subscription_orgs) == 1:
         org, active = subscription_orgs[0]
@@ -506,12 +521,20 @@ def _snapshot(
 
     # No org has an active subscription grant.
     if api_orgs == 0:
-        return _fail(account_id, diag, "no_api_org", _NO_API_ORG_ERROR)
+        return _fail(
+            account_id, diag, "no_api_org", _NO_API_ORG_ERROR, account_state=True
+        )
     if api_orgs > 1:
-        return _fail(account_id, diag, "several_orgs", _SEVERAL_ORGS_ERROR)
+        return _fail(
+            account_id, diag, "several_orgs", _SEVERAL_ORGS_ERROR,
+            account_state=True,
+        )
     org = parsed[0]
     if org is None:
-        return _fail(account_id, diag, "no_billing_role", _NO_BILLING_ROLE_ERROR)
+        return _fail(
+            account_id, diag, "no_billing_role", _NO_BILLING_ROLE_ERROR,
+            account_state=True,
+        )
     return _purchased_only_snapshot(account_id, now, org, diag)
 
 

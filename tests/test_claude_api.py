@@ -476,6 +476,39 @@ def test_rule5_several_api_orgs_without_a_subscription_grant_is_an_error():
     assert_error(build(payload(org(status=403), org([], purchased=2))), SEVERAL_ORGS)
 
 
+# -- account-state errors blank the tile ------------------------------------------
+# The app keeps the previous numbers on screen after a failed refresh unless
+# the snapshot says its error will not heal on its own (raw["config_error"]).
+
+
+def test_account_state_errors_carry_config_error():
+    results = {
+        "too_many_orgs": build({"orgs_status": 200, "too_many_orgs": 11}),
+        "several_subscription_orgs": build(payload(org([tranche()]), org([tranche()]))),
+        "no_api_org": build(payload()),
+        "several_orgs": build(payload(org([], purchased=1), org([], purchased=2))),
+        "no_billing_role": build(payload(org(status=403))),
+    }
+    for result, snap in results.items():
+        assert snap.status == SnapshotStatus.ERROR
+        assert snap.raw["result"] == result
+        assert snap.raw["config_error"] is True, result
+
+
+def test_read_errors_do_not_carry_config_error():
+    results = [
+        build(payload(org(status=500))),  # credits_status
+        build(payload(org(status=403, error=None, code=None))),
+        build({"orgs_status": 500, "orgs_error": None}),
+        build({"orgs_status": 200, "api_orgs": 2, "credits": []}),  # bad_shape
+        build({"error": "AbortError"}),
+        build({"signed_out": True, "reason": "host"}),
+        build(payload(org([tranche()], amount=-5))),
+    ]
+    for snap in results:
+        assert "config_error" not in snap.raw, snap.raw["result"]
+
+
 def test_rule6_no_api_org_is_an_error():
     assert_error(build(payload()), NO_API)
 

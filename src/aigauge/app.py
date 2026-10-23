@@ -192,8 +192,10 @@ def _preserve_error_metrics(
 ) -> UsageSnapshot:
     if (
         snapshot.status == SnapshotStatus.ERROR
-        # A configuration error (a mis-set CLI path) will not heal on its own,
-        # so old numbers would sit there as "stale" for as long as it lasts.
+        # A configuration error (a mis-set CLI path) or an account state the
+        # user has to change (several Console organizations, no billing role)
+        # will not heal on its own, so old numbers would sit there as "stale"
+        # for as long as it lasts.
         and not snapshot.raw.get("config_error")
         and not snapshot.metrics
         and previous is not None

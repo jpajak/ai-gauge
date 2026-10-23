@@ -460,7 +460,12 @@ The extractor fetches JSON in the page.
 - Any other non-200 from `/api/organizations` (including other 403s), any
   other credits status, a timeout, or `error`: `ERROR`, "Couldn't read Console
   billing".
-- An unknown shape anywhere: `ERROR`. Never zero, never the last reading.
+- An unknown shape anywhere: `ERROR`. Never zero. The provider never supplies
+  an earlier reading itself: the app keeps the last numbers on screen marked
+  "error · stale" after a failed refresh. Errors that describe the account and
+  will not heal (`too_many_orgs`, `several_subscription_orgs`, `no_api_org`,
+  `several_orgs`, `no_billing_role`) set `raw["config_error"]`, so the app
+  blanks the tile instead.
 
 **Which org.**
 
@@ -586,8 +591,6 @@ After P1, P2 and the manual check these remain:
   expires on 2026-10-30 or 31. If the tile still reads a balance on 2026-11-01
   without a new sign-in, the refreshes roll it forward. If it asks to sign in,
   the session is fixed-length and the README should say so.
-- Whether the reading moves after ordinary API use. Not part of the
-  2026-10-23 run.
 - The response at rollover. A P2 run between 2026-11-04 04:07Z and
   2026-11-05 00:00Z captures it on the test account.
 - The response with purchased credit, on a Team plan (pooled credit), for a
@@ -641,11 +644,12 @@ Fixtures come from the P2 output.
 - **Manual**: sign in to the Console in the gauge; compare the bar and "Left"
   with Console > Settings > Billing > Promotional credits; restart the app and
   refresh; after ordinary API use, confirm the reading moves; clear the Console
-  sign-in and confirm only that tile changes. **Result (2026-10-23):** passed,
-  except the API-use step, which was not run. The external sign-in completes
-  and QtWebEngine accepts the imported session, the reading matched the
-  Console, the session survived a restart, and Clear sign-in left the Claude
-  tile signed in.
+  sign-in and confirm only that tile changes. **Result (2026-10-23):** passed.
+  The external sign-in completes and QtWebEngine accepts the imported session,
+  the reading matched the Console, the session survived a restart, and Clear
+  sign-in left the Claude tile signed in. The API-use step was not part of the
+  run; John confirmed afterwards, on 2026-10-23, that the balance left drops
+  with API use.
 
 ## Implementation checklist
 

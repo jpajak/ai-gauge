@@ -54,7 +54,7 @@ EXPECTED_COOKIE_NAME_ALIASES = {
 }
 EXPECTED_COOKIE_DOMAINS = {
     "claude": ".claude.ai",
-    "claude_api": "platform.claude.com",
+    "claude_api": ".platform.claude.com",
     "codex": ".chatgpt.com",
 }
 EXPECTED_DEFAULT_PROVIDER_ORDER = (
@@ -209,13 +209,12 @@ def test_browser_session_specs_have_login_cookies_and_keyed_tables():
         assert spec.login is not None, spec.id
         assert spec.login.hosts, spec.id
         assert spec.cookies is not None, spec.id
-        assert spec.cookies.domain, spec.id
+        # A leading dot: cookies._set_cookie sets it as the cookie domain when a
+        # pasted cookie or the saved fallback is injected at start-up.
+        assert spec.cookies.domain.startswith("."), spec.id
         assert spec.id in VERIFY_TARGETS, spec.id
-        # Pasting a cookie is the only path that reads a dotted cookie domain
-        # (cookies._set_cookie) or opens the instructions dialog.
+        # Only the paste-cookie flow opens the instructions dialog.
         assert (spec.id in INSTRUCTIONS) == spec.paste_cookie, spec.id
-        if spec.paste_cookie:
-            assert spec.cookies.domain.startswith("."), spec.id
         assert spec.api_key_entry is None, spec.id
 
 

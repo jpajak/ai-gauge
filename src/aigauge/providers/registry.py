@@ -207,7 +207,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
             hosts=("claude.com", "anthropic.com"),
         ),
         cookies=CookieSpec(
-            domain="platform.claude.com",
+            domain=".platform.claude.com",
             name="sessionKey",
             aliases=("sessionKey", "sessionKeyV3"),
         ),

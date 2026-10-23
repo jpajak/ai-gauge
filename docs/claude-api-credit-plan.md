@@ -187,7 +187,7 @@ not needed:
 | `activitySessionId` | `platform.claude.com` | yes | 2026-10 |
 | `__cf_bm`, `lastActiveOrg`, analytics | `.claude.com` | mixed | various |
 
-`CookieSpec(domain="platform.claude.com", name="sessionKey",
+`CookieSpec(domain=".platform.claude.com", name="sessionKey",
 aliases=("sessionKey", "sessionKeyV3"))`. `_domain_matches` strips the
 leading dot, so both forms match, and the `.claude.com` cookies (Cloudflare's
 `__cf_bm`, analytics) stay out; the scraper's own page load gets a fresh
@@ -359,7 +359,7 @@ In `providers/registry.py`:
 - `LoginSpec(url="https://platform.claude.com/login",
   window_title="Sign in to Claude Console", prompt_name="Claude Console",
   hosts=("claude.com", "anthropic.com"))`.
-- `CookieSpec(domain="platform.claude.com", name="sessionKey",
+- `CookieSpec(domain=".platform.claude.com", name="sessionKey",
   aliases=("sessionKey", "sessionKeyV3"))`, from P1.
 - `usage_url="https://platform.claude.com/settings/billing"`,
   `paste_cookie=False`.

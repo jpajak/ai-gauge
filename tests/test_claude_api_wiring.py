@@ -233,7 +233,7 @@ def test_signed_out_claude_api_tile_shows_the_sign_in_button(qtbot):
     assert signal.args == ["claude_api"]
 
 
-def test_ok_claude_api_tile_draws_the_credit_bar_and_its_text_line(qtbot):
+def test_ok_claude_api_tile_draws_the_credit_bar_and_the_balance_in_the_header(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)
 
@@ -242,13 +242,10 @@ def test_ok_claude_api_tile_draws_the_credit_bar_and_its_text_line(qtbot):
     tile = widget._tiles["claude_api"]  # noqa: SLF001
     tile.set_expanded(True)
     rows = tile._rows  # noqa: SLF001
-    assert [row.label.text() for row in rows][0] == "Credit"
+    assert [row.label.text() for row in rows] == ["Credit"]
     assert rows[0].pct.text() == "12%"
     assert not rows[0].pct.isHidden()
-    text_lines = [row for row in rows[1:]]
-    assert text_lines, "the Left line is drawn"
-    assert text_lines[0].label.text().startswith("Left $87.60")
-    assert text_lines[0].pct.isHidden()
+    assert tile.status.text() == "$87.60 left · Other $12.34"
 
 
 def test_claude_tile_beside_claude_api_is_unchanged(qtbot):

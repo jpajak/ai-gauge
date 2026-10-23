@@ -427,7 +427,7 @@ def test_extractor_output_builds_a_snapshot(tmp_path):
     payload = result_of(tmp_path, routes({"status": 200, "body": body}))
     snap = _build_snapshot(payload, "claude_api", datetime(2026, 10, 23, 12, 0))
     assert snap.status == SnapshotStatus.OK
-    assert [m.label for m in snap.metrics] == ["Credit", "Left $87.60 · Other $12.34"]
+    assert [m.label for m in snap.metrics] == ["Credit", "$87.60 left · Other $12.34"]
     assert snap.metrics[0].percent_used == pytest.approx(12.4)
 
 
@@ -615,6 +615,6 @@ def test_measured_console_response_builds_the_credit_bar(tmp_path, caplog):
     assert credit_bar.label == "Credit"
     assert round(credit_bar.percent_used, 2) == 58.17
     assert credit_bar.guard_eligible is False
-    assert [m.label for m in snap.metrics] == ["Credit", "Left $41.83"]
+    assert [m.label for m in snap.metrics] == ["Credit", "$41.83 left"]
     assert snap.raw["other"] == "agree"
     assert "other=agree" in caplog.records[-1].getMessage()

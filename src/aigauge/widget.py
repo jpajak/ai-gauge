@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import html
 import math
 import re
 import sys
@@ -1315,7 +1316,9 @@ class _ProviderTile(QFrame):
                 return
             self._hide_compact_metrics()
             visible = [
-                m for m in snapshot.metrics if not m.tag or self._expanded
+                m
+                for m in snapshot.metrics
+                if (not m.tag or self._expanded) and not m.in_header
             ]
             self._set_rows(
                 [
@@ -1337,7 +1340,18 @@ class _ProviderTile(QFrame):
         # snapshot, but it is an important provider state rather than merely a
         # red progress bar. Surface it in the header until the reset arrives.
         limit_hit = _claude_weekly_limit_hit(snapshot)
-        self.status.setText("limit hit" if limit_hit else "")
+        # A metric flagged in_header (the Claude API balance left) is the
+        # header's right-side text instead of a row, unless the limit-hit
+        # state needs the spot.
+        header_metric = next(
+            (m for m in snapshot.metrics if m.in_header), None
+        )
+        if limit_hit:
+            self.status.setText("limit hit")
+        elif header_metric is not None:
+            self.status.setText(html.escape(header_metric.label))
+        else:
+            self.status.setText("")
         self.status.setStyleSheet(
             (
                 "color: #ef4444; font-size: 10px; font-style: normal; "
@@ -1346,9 +1360,12 @@ class _ProviderTile(QFrame):
             if limit_hit
             else "color: #9ca3af; font-size: 10px; font-style: normal;"
         )
-        self.status.setToolTip(
-            _claude_limit_hit_tooltip(snapshot) if limit_hit else ""
-        )
+        if limit_hit:
+            self.status.setToolTip(_claude_limit_hit_tooltip(snapshot))
+        elif header_metric is not None:
+            self.status.setToolTip(header_metric.note or "")
+        else:
+            self.status.setToolTip("")
         self.status.setCursor(Qt.CursorShape.ArrowCursor)
         self.action_btn.setVisible(False)
         has_breakdown = any(m.tag for m in snapshot.metrics)
@@ -1366,7 +1383,9 @@ class _ProviderTile(QFrame):
             return
         self._hide_compact_metrics()
         visible = [
-            m for m in snapshot.metrics if not m.tag or self._expanded
+            m
+            for m in snapshot.metrics
+            if (not m.tag or self._expanded) and not m.in_header
         ]
         self._set_rows(
             [

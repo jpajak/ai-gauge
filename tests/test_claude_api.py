@@ -140,8 +140,42 @@ def test_unused_credit_is_zero_percent():
     assert credit_bar.resets_at == _local(utc(EXPIRES))
     assert credit_bar.resets_at.tzinfo is None
     assert credit_bar.window == utc(EXPIRES) - utc(GRANTED)
-    assert lines(snap) == ["Left $100.00"]
+    assert lines(snap) == ["$100.00 left"]
     assert snap.fetched_at == NOW
+
+
+def test_balance_left_is_in_the_header_for_a_single_group_and_never_a_row_label():
+    snap = build(payload(org([tranche(remaining=8760)], purchased=1234)))
+    left = [m for m in snap.metrics if m.label.endswith(("left", "Other $12.34"))]
+    assert [m.label for m in left] == ["$87.60 left · Other $12.34"]
+    assert left[0].in_header is True
+    assert left[0].percent_used is None
+    assert bar(snap).in_header is False
+
+
+def test_older_rows_and_purchased_balance_are_not_in_the_header():
+    older = build(
+        payload(
+            org(
+                [
+                    tranche(),
+                    tranche(
+                        granted=10000,
+                        remaining=410,
+                        granted_at=OLDER_GRANTED,
+                        expires=OLDER_EXPIRES,
+                    ),
+                ]
+            )
+        )
+    )
+    assert [(m.label.split(" ")[0], m.in_header) for m in older.metrics] == [
+        ("Credit", False),
+        ("$100.00", True),
+        ("Older", False),
+    ]
+    purchased = build(payload(org([], purchased=1234)))
+    assert [(m.label, m.in_header) for m in purchased.metrics] == [("Balance $12.34", False)]
 
 
 def test_bar_note_states_amounts_expiry_and_claude_code():
@@ -156,13 +190,13 @@ def test_bar_note_states_amounts_expiry_and_claude_code():
 def test_partly_used_credit():
     snap = build(payload(org([tranche(remaining=8760)])))
     assert bar(snap).percent_used == pytest.approx(12.4)
-    assert lines(snap) == ["Left $87.60"]
+    assert lines(snap) == ["$87.60 left"]
 
 
 def test_exhausted_credit_with_purchased_credit_left():
     snap = build(payload(org([tranche(remaining=0)], purchased=1234)))
     assert bar(snap).percent_used == 100
-    assert lines(snap) == ["Left $0.00 · Other $12.34"]
+    assert lines(snap) == ["$0.00 left · Other $12.34"]
 
 
 def test_prorated_upgrade_grant_combines_with_the_regular_one():
@@ -181,7 +215,7 @@ def test_prorated_upgrade_grant_combines_with_the_regular_one():
     # 15000 granted, 11000 left.
     assert credit_bar.percent_used == pytest.approx(4000 / 15000 * 100)
     assert credit_bar.window == utc(EXPIRES) - utc(GRANTED)  # earliest grant
-    assert lines(snap) == ["Left $110.00"]
+    assert lines(snap) == ["$110.00 left"]
     assert "$110.00 of $150.00 left" in credit_bar.note
 
 
@@ -202,7 +236,7 @@ def test_older_group_overlapping_the_current_one_gets_its_own_line():
         )
     )
     ends = _date_time_text(_local(utc(OLDER_EXPIRES)))
-    assert lines(snap) == ["Left $100.00", f"Older $4.10, ends {ends}"]
+    assert lines(snap) == ["$100.00 left", f"Older $4.10, ends {ends}"]
     # The bar is the current (latest expiry) group only.
     assert bar(snap).percent_used == 0
     assert bar(snap).resets_at == _local(utc(EXPIRES))
@@ -237,8 +271,9 @@ def test_same_expiry_with_different_scope_tokens_has_no_bar():
     )
     assert snap.status == SnapshotStatus.OK
     assert bar(snap) is None
-    assert lines(snap) == ["Left $120.00"]
+    assert lines(snap) == ["$120.00 left"]
     assert "no percentage" in snap.metrics[0].note
+    assert [m.in_header for m in snap.metrics] == [False]
 
 
 def test_purchased_credit_only_is_a_text_line_without_a_bar():
@@ -285,7 +320,7 @@ def test_other_programs_are_ignored_except_through_amount():
         )
     )
     assert snap.status == SnapshotStatus.OK
-    assert lines(snap) == ["Left $87.60 · Other $1.00"]
+    assert lines(snap) == ["$87.60 left · Other $1.00"]
 
 
 # -- "Other" cross-check --------------------------------------------------------
@@ -293,14 +328,14 @@ def test_other_programs_are_ignored_except_through_amount():
 
 def test_other_agreeing_is_shown():
     snap = build(payload(org([tranche(remaining=8760)], purchased=1234)))
-    assert lines(snap) == ["Left $87.60 · Other $12.34"]
+    assert lines(snap) == ["$87.60 left · Other $12.34"]
     assert snap.raw["other"] == "agree"
     assert "Other is credit outside the subscription grants." in snap.metrics[-1].note
 
 
 def test_other_agreeing_at_zero_is_omitted():
     snap = build(payload(org([tranche(remaining=8760)])))
-    assert lines(snap) == ["Left $87.60"]
+    assert lines(snap) == ["$87.60 left"]
     assert snap.raw["other"] == "agree"
 
 
@@ -308,14 +343,14 @@ def test_other_disagreeing_is_omitted_and_flagged():
     # amount minus remaining says 12.34, amount_without_scoped_credits says 20.00.
     snap = build(payload(org([tranche(remaining=8760)], amount=8760 + 1234, without=2000)))
     assert snap.status == SnapshotStatus.OK
-    assert lines(snap) == ["Left $87.60"]
+    assert lines(snap) == ["$87.60 left"]
     assert snap.raw["other"] == "mismatch"
 
 
 def test_other_agrees_within_one_unit_per_active_tranche():
     # One tranche: derived is 1233 against 1234, one unit apart.
     snap = build(payload(org([tranche(remaining=8760)], amount=8760 + 1233, without=1234)))
-    assert lines(snap) == ["Left $87.60 · Other $12.34"]  # the reported figure is shown
+    assert lines(snap) == ["$87.60 left · Other $12.34"]  # the reported figure is shown
     assert snap.raw["other"] == "agree"
     # Two tranches allow two units.
     two = [
@@ -323,17 +358,17 @@ def test_other_agrees_within_one_unit_per_active_tranche():
         tranche(granted=5000, remaining=4760),
     ]
     snap = build(payload(org(two, amount=8760 + 1236, without=1234)))
-    assert lines(snap) == ["Left $87.60 · Other $12.34"]
+    assert lines(snap) == ["$87.60 left · Other $12.34"]
     assert snap.raw["other"] == "agree"
     snap = build(payload(org(two, amount=8760 + 1231, without=1234)))
     assert snap.raw["other"] == "mismatch"
-    assert lines(snap) == ["Left $87.60"]
+    assert lines(snap) == ["$87.60 left"]
 
 
 def test_other_disagreeing_by_more_than_the_tolerance_is_omitted():
     snap = build(payload(org([tranche(remaining=8760)], amount=8760 + 1236, without=1234)))
     assert snap.raw["other"] == "mismatch"
-    assert lines(snap) == ["Left $87.60"]
+    assert lines(snap) == ["$87.60 left"]
 
 
 def test_other_tolerance_counts_only_active_tranches():
@@ -345,7 +380,7 @@ def test_other_tolerance_counts_only_active_tranches():
 def test_the_measured_one_unit_gap_with_nothing_else_agrees_and_shows_no_other():
     snap = build(payload(org([tranche(remaining=4183)], amount=4184, without=0)))
     assert snap.status == SnapshotStatus.OK
-    assert lines(snap) == ["Left $41.83"]
+    assert lines(snap) == ["$41.83 left"]
     assert snap.raw["other"] == "agree"
 
 
@@ -359,7 +394,7 @@ def test_other_null_on_the_subscription_path_is_omitted_and_not_an_error(missing
         del entry["credit"]["amount_without_scoped_credits"]
     snap = build(payload(entry))
     assert snap.status == SnapshotStatus.OK
-    assert lines(snap) == ["Left $87.60"]
+    assert lines(snap) == ["$87.60 left"]
     assert snap.raw["other"] == "none"
     assert "other=none" in caplog.records[-1].getMessage()
 
@@ -394,7 +429,7 @@ def test_a_spent_older_group_has_no_line():
         )
     )
     assert snap.status == SnapshotStatus.OK
-    assert lines(snap) == ["Left $100.00"]
+    assert lines(snap) == ["$100.00 left"]
     assert bar(snap).percent_used == 0
 
 
@@ -411,7 +446,7 @@ def test_non_usd_shows_the_currency_code():
             )
         )
     )
-    assert lines(snap) == ["Left EUR 87.60 · Other EUR 12.34"]
+    assert lines(snap) == ["EUR 87.60 left · Other EUR 12.34"]
     assert bar(snap).note.startswith("EUR 87.60 of EUR 100.00 left.")
 
 
@@ -437,7 +472,7 @@ def test_whole_number_floats_are_accepted():
     t = tranche(granted=10000.0, remaining=8760.0)
     snap = build(payload(org([t], amount=8760.0, without=0.0)))
     assert snap.status == SnapshotStatus.OK
-    assert lines(snap) == ["Left $87.60"]
+    assert lines(snap) == ["$87.60 left"]
 
 
 # -- org selection rules --------------------------------------------------------
@@ -452,7 +487,7 @@ def test_rule1_exactly_one_org_with_a_subscription_grant_is_used():
     )
     assert snap.status == SnapshotStatus.OK
     assert bar(snap).percent_used == pytest.approx(12.4)
-    assert lines(snap) == ["Left $87.60"]
+    assert lines(snap) == ["$87.60 left"]
 
 
 def test_rule2_two_orgs_with_subscription_grants_is_an_error():

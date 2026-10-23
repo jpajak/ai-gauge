@@ -346,9 +346,8 @@ Claude                              ~7.9/wk
 Session  ▏░░░░░░░░░░░░░   2%   4h 30m
 Weekly   ███████░░░░░░░  49%   3.9d
 
-Claude API
+Claude API            $87.60 left · Other $12.34
 Credit   ██░░░░░░░░░░░░  12%   13d
-Left $87.60 · Other $12.34
 ```
 
 ### 1. Spec
@@ -502,10 +501,15 @@ code. Red near 100% is right: at $0 requests stop unless there is purchased
 credit. If two groups share the latest expiry with different scope tokens,
 there is no bar, only the text line.
 
-**Text line.** A `percent_used=None` metric whose label carries the figures,
-OpenRouter style:
+**Balance label.** A `percent_used=None` metric whose label carries the
+figures. With a single current group (so there is a Credit bar) it is flagged
+`in_header=True`: the tile draws it as the right-side header text, where the
+Claude tile shows `~8.3/wk`, with the note as its tooltip, and not as a row.
+The metric stays in `snapshot.metrics`, so the usage cache and MCP still see
+it. When several scopes end together there is no bar and the same label stays
+a normal row, the only place the amount shows.
 
-- `Left $87.60` for the current group.
+- `$87.60 left` for the current group.
 - `Other $12.34` only when
   `amount - sum remaining over all active subscription tranches` is within one
   minor unit per active tranche of `amount_without_scoped_credits`, and
@@ -639,10 +643,10 @@ Fixtures come from the P2 output.
   `claude_api` account blocks with `no_eligible_metric` and is not
   recommended; existing Claude and Codex guard tests unchanged; Settings shows
   no pause row for the account.
-- **Widget**: an OK snapshot draws the bar and its text lines, a signed-out
-  snapshot shows Sign in, a Claude tile beside it is unchanged.
-- **Manual**: sign in to the Console in the gauge; compare the bar and "Left"
-  with Console > Settings > Billing > Promotional credits; restart the app and
+- **Widget**: an OK snapshot draws the bar with the balance left in the header
+  and any older-grant lines as rows, a signed-out snapshot shows Sign in, a Claude tile beside it is unchanged.
+- **Manual**: sign in to the Console in the gauge; compare the bar and the
+  header "left" figure with Console > Settings > Billing > Promotional credits; restart the app and
   refresh; after ordinary API use, confirm the reading moves; clear the Console
   sign-in and confirm only that tile changes. **Result (2026-10-23):** passed.
   The external sign-in completes and QtWebEngine accepts the imported session,

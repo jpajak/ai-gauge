@@ -562,7 +562,8 @@ def _subscription_snapshot(
     )
 
     metrics: list[UsageMetric] = []
-    if len(current) == 1:
+    single_group = len(current) == 1
+    if single_group:
         group = current[0]
         earliest = min(t.granted_at for t in group.tranches)
         metrics.append(
@@ -589,11 +590,20 @@ def _subscription_snapshot(
             f"{expiry_note}"
         )
 
-    left_label = f"Left {_money(left, currency)}"
+    left_label = f"{_money(left, currency)} left"
     if show_other:
         left_label += f" · Other {_money(other, currency)}"
         left_note += " Other is credit outside the subscription grants."
-    metrics.append(UsageMetric(label=left_label, percent_used=None, note=left_note))
+    # With a Credit bar the balance goes in the tile header. Without one (several
+    # scopes end together) it stays a row, the only place the amount shows.
+    metrics.append(
+        UsageMetric(
+            label=left_label,
+            percent_used=None,
+            note=left_note,
+            in_header=single_group,
+        )
+    )
 
     for group in older:
         if group.remaining == 0:

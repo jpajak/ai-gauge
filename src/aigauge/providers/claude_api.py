@@ -58,8 +58,8 @@ _NO_API_ORG_ERROR = "No Console organization with API access."
 # scope contents stay in it: the scope of each tranche becomes the index of its
 # JSON among the distinct scopes of that response. An error reports only its
 # status, its `error.type`, its `error.details.error_code` and its top-level
-# `code`, each a short lowercase word or null. An exception reports only its name, because its
-# message can carry a URL with an org id.
+# `code`, each a short lowercase word or null. An exception reports only its
+# name, because its message can carry a URL with an org id.
 EXTRACTOR_JS = r"""
 (() => {
   const S = (window.__aigaugeCredit = window.__aigaugeCredit || {});

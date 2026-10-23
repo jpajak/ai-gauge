@@ -1,8 +1,8 @@
 # Plan: show the monthly Claude API credit (Max and Team plans)
 
-**Status:** in progress since 2026-10-23. Commit 2 is in; commit 1 is being
-built. P1 is recorded. P2 has a partial result: the provider's signed-out and
-permission rules stay provisional until its rerun. First
+**Status:** in progress since 2026-10-23. Commits 1 and 2 are in, commit 3 is
+being built. P1 and P2 are recorded; commit 5 turns the provider's
+provisional signed-out and permission rules into the measured ones. First
 written 2026-10-08; revised 2026-10-23 after an outside review, whose points
 are folded into [Review outcome](#review-outcome-2026-10-23).
 **Found while:** asking how to monitor the new subscriber API credit
@@ -240,12 +240,27 @@ Then run `copy(__aigaugeProbe)` on its own line. DevTools' `copy()` exists
 only at the console's top level, not after an `await`, which is why the first
 run ended in "copy is not defined".
 
-**P2 partial result (2026-10-23).** The first run died at `copy()`, after its
-requests. The console showed `/api/organizations` without cookies answering
-**403**, and one org's `prepaid/credits` answering 403 (most likely the chat
-org). A dead session and a permission refusal are therefore both 403, and
-only the response body can tell them apart. The rerun is still needed for
-that.
+**P2 result (2026-10-23),** same Max 5x account, sanitized:
+
+- **Signed out** (`/api/organizations` without cookies): 403 JSON,
+  `error.type: "permission_error"`,
+  `error.details.error_code: "account_session_invalid"`.
+- **Permission refusal** (`prepaid/credits` for the chat org): 403 JSON,
+  `error.type: "permission_error"`, no `details`, top-level
+  `code: "permission_denied"`.
+- Both share status and `error.type`; only `error.details.error_code` tells
+  them apart. The extractor reports that code too.
+- **Org list:** 200, two orgs. The Console org's `capabilities` are `api` and
+  `customer_terms:standard`; the chat org's are `claude_max` and `chat`.
+- **Credits:** the shape of 10-08 plus `balance` (`{money, credits}`) and three
+  more null auto-reload keys. `amount` 4184, `amount_without_scoped_credits`
+  0, one subscription tranche granted 10000 with **remaining 4183**. The total
+  and the tranche differ by one minor unit, presumably because each is rounded
+  from a finer figure, so the "Other" cross-check needs a tolerance.
+- **Scope:** `{"kind": "scoped", "applies_to": [{product, model_family,
+  model_version}, ...]}` listing `agent_sdk`, `api`, `batch`, `console` and
+  two products whose names the probe masked. No ids, so the scope token rule
+  holds: grants of one program share it.
 
 What each part settles:
 
@@ -430,11 +445,13 @@ The extractor fetches JSON in the page.
 
 **Status.**
 
-- `AUTH_REQUIRED` only for `signed_out`, or the signed-out response P2
-  measures on `/api/organizations`.
-- Any other non-200 from `/api/organizations`, any credits status other than
-  200 or the permission refusal P2 measures, a timeout, or `error`: `ERROR`,
-  "Couldn't read Console billing".
+- `AUTH_REQUIRED` only for `signed_out` (off-host), a 401, or a 403 whose
+  `error.details.error_code` is `account_session_invalid`, on
+  `/api/organizations` or on a credits fetch.
+- A credits 403 without that code is the permission refusal of org rule 4.
+- Any other non-200 from `/api/organizations` (including other 403s), any
+  other credits status, a timeout, or `error`: `ERROR`, "Couldn't read Console
+  billing".
 - An unknown shape anywhere: `ERROR`. Never zero, never the last reading.
 
 **Which org.**
@@ -477,12 +494,16 @@ OpenRouter style:
 
 - `Left $87.60` for the current group.
 - `Other $12.34` only when
-  `amount - sum remaining over all active subscription tranches` equals
-  `amount_without_scoped_credits` and is above zero. Disagreement omits it and
-  logs `other=mismatch`. That reading needs no assumption about what either
-  field means.
-- An older active group gets its own text line, `Older $4.10, ends <local
-  time>`, so the overlap never hides behind a tooltip.
+  `amount - sum remaining over all active subscription tranches` is within one
+  minor unit per active tranche of `amount_without_scoped_credits`, and
+  `amount_without_scoped_credits` (the figure shown) is above zero. P2 saw
+  the total and the tranche one unit apart. Disagreement omits it and logs
+  `other=mismatch`; a null `amount_without_scoped_credits` omits it and logs
+  `other=none`. That reading needs no assumption about what either field
+  means.
+- An older active group with something left gets its own text line, `Older
+  $4.10, ends <local time>`, so the overlap never hides behind a tooltip. A
+  spent older group gets none.
 
 The note (tooltip) states that unused credit expires at the shown time and
 does not pay for Claude Code. Amounts are minor units with exponent 2; a
@@ -626,7 +647,11 @@ Fixtures come from the P2 output.
    bar. Registry, config, domain, verify and MCP tests. **Gate:** John signs
    in to the Console through the gauge and the tile reads a balance.
 4. Settings hint check, README, changelog.
-5. Fixes from the manual run, most likely around sign-in, and the P2 rules.
+5. The P2 rules: the extractor reports `error.details.error_code`, the
+   builder maps `account_session_invalid` to `AUTH_REQUIRED`, the "Other"
+   tolerance and its null case, no line for a spent older group, and a test on
+   the measured response shape. Then fixes from the manual run, most likely
+   around sign-in.
 
 Commits 1 and 2 touch different files and are built in parallel. Commit 3
 needs both, and P1.

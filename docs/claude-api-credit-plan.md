@@ -1,9 +1,9 @@
 # Plan: show the monthly Claude API credit (Max and Team plans)
 
-**Status:** built on 2026-10-23, waiting on the manual check (the last bullet
-of [Test strategy](#test-strategy)). Commits 1 to 4 and the P2 rules of
-commit 5 are in; whatever the manual run finds finishes commit 5. P1 and P2
-are recorded. First
+**Status:** built and manually checked on 2026-10-23, ready for its PR after
+#15. The manual check (the last bullet of [Test strategy](#test-strategy))
+found nothing to fix, so commit 5 is complete. P1 and P2 are recorded. What
+is still open is under [Not verified](#not-verified). First
 written 2026-10-08; revised 2026-10-23 after an outside review, whose points
 are folded into [Review outcome](#review-outcome-2026-10-23).
 **Found while:** asking how to monitor the new subscriber API credit
@@ -573,12 +573,14 @@ amounts or response text.
 
 ## Not verified
 
-After P1 and P2 these remain:
+After P1, P2 and the manual check these remain:
 
-- Whether the gauge's external sign-in completes for the Console, and whether
-  the Console accepts the imported session in QtWebEngine. The gate after
-  commit 3.
-- How long a Console session lasts, and whether it survives an app restart.
+- How long a Console session lasts. The session from the 2026-10-23 sign-in
+  expires on 2026-10-30 or 31. If the tile still reads a balance on 2026-11-01
+  without a new sign-in, the refreshes roll it forward. If it asks to sign in,
+  the session is fixed-length and the README should say so.
+- Whether the reading moves after ordinary API use. Not part of the
+  2026-10-23 run.
 - The response at rollover. A P2 run between 2026-11-04 04:07Z and
   2026-11-05 00:00Z captures it on the test account.
 - The response with purchased credit, on a Team plan (pooled credit), for a
@@ -632,7 +634,11 @@ Fixtures come from the P2 output.
 - **Manual**: sign in to the Console in the gauge; compare the bar and "Left"
   with Console > Settings > Billing > Promotional credits; restart the app and
   refresh; after ordinary API use, confirm the reading moves; clear the Console
-  sign-in and confirm only that tile changes.
+  sign-in and confirm only that tile changes. **Result (2026-10-23):** passed,
+  except the API-use step, which was not run. The external sign-in completes
+  and QtWebEngine accepts the imported session, the reading matched the
+  Console, the session survived a restart, and Clear sign-in left the Claude
+  tile signed in.
 
 ## Implementation checklist
 
@@ -651,8 +657,7 @@ Fixtures come from the P2 output.
 5. The P2 rules: the extractor reports `error.details.error_code`, the
    builder maps `account_session_invalid` to `AUTH_REQUIRED`, the "Other"
    tolerance and its null case, no line for a spent older group, and a test on
-   the measured response shape. Then fixes from the manual run, most likely
-   around sign-in.
+   the measured response shape. The manual run needed no fixes.
 
 Commits 1 and 2 touch different files and are built in parallel. Commit 3
 needs both, and P1.

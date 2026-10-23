@@ -19,6 +19,12 @@ ACTIVITY_LABEL = "Models"
 MAX_MODEL_BREAKDOWN_ROWS = 6
 MODEL_DISPLAY_MAX_LEN = 20
 
+KEY_BREAKDOWN_TAG = "key_breakdown"
+KEYS_LABEL = "Keys"
+MAX_KEY_BREAKDOWN_ROWS = 6
+KEYS_PAGE_SIZE = 100
+KEYS_MAX_PAGES = 10
+
 
 def _headers(api_key: str) -> dict[str, str]:
     return {
@@ -73,6 +79,43 @@ def _fetch_key_info(api_key: str) -> dict:
         sorted(data.keys()) if isinstance(data, dict) else [],
     )
     return data
+
+
+def _fetch_keys(mgmt_key: str) -> list[dict]:
+    """Returns every API key on the account. Raises HTTPError on non-200.
+
+    /keys requires a management key. Disabled and expired keys are included so
+    spend they made earlier in the current UTC month still counts. Pages hold up
+    to KEYS_PAGE_SIZE keys; a full page means there may be another one, and the
+    walk stops after KEYS_MAX_PAGES pages.
+    """
+    keys: list[dict] = []
+    offset = 0
+    for _ in range(KEYS_MAX_PAGES):
+        r = requests.get(
+            f"{OPENROUTER_API}/keys",
+            headers=_headers(mgmt_key),
+            params={
+                "include_disabled": "true",
+                "include_expired": "true",
+                "offset": offset,
+            },
+            timeout=15,
+        )
+        r.raise_for_status()
+        payload = r.json()
+        data = payload.get("data") if isinstance(payload, dict) else None
+        page = data if isinstance(data, list) else []
+        keys.extend(item for item in page if isinstance(item, dict))
+        offset += len(page)
+        if len(page) < KEYS_PAGE_SIZE:
+            break
+    log.debug(
+        "provider api diagnosis provider=openrouter "
+        "classification=keys_ok keys=%d",
+        len(keys),
+    )
+    return keys
 
 
 def _fetch_activity(
@@ -193,10 +236,22 @@ def _usage_amount(key_info: dict, field: str) -> float | None:
         return None
 
 
+def _account_usage(keys: list[dict]) -> dict:
+    """Sum daily and monthly spend over every key on the account."""
+    totals = {"usage_daily": 0.0, "usage_monthly": 0.0}
+    for key in keys:
+        for field in totals:
+            amount = _usage_amount(key, field)
+            if amount is not None:
+                totals[field] += amount
+    return totals
+
+
 def _build_summary_metric(
     credits: dict | None,
     key_info: dict,
     daily_budget: float | None,
+    key_count: int | None = None,
 ) -> UsageMetric | None:
     remaining = _remaining_balance(credits)
 
@@ -216,12 +271,17 @@ def _build_summary_metric(
     parts.extend(spend_parts)
     if not parts:
         return None
+    if key_count is not None:
+        plural = "" if key_count == 1 else "s"
+        scope = f"spend across all {key_count} API key{plural} on the account"
+    else:
+        scope = "spend on the inference key only"
     return UsageMetric(
         label=" · ".join(parts),
         percent_used=None,
         note=(
             "Balance is the credit remaining on the OpenRouter account. "
-            "Today and Month are spend for the current UTC day and the "
+            f"Today and Month are {scope}, for the current UTC day and the "
             "current UTC month."
         ),
     )
@@ -241,6 +301,61 @@ def _build_daily_metric(key_info: dict, daily_budget: float | None) -> UsageMetr
             window=timedelta(days=1),
         )
     return None
+
+
+def _truncate_name(name: str) -> str:
+    if len(name) > MODEL_DISPLAY_MAX_LEN:
+        return name[: MODEL_DISPLAY_MAX_LEN - 1] + "…"
+    return name
+
+
+def _key_name(key: dict) -> str:
+    for field in ("name", "label"):
+        value = key.get(field)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    return "Unnamed key"
+
+
+def _build_key_metrics(keys: list[dict]) -> list[UsageMetric]:
+    """Per-key spend for the current UTC month, shown in the expanded view."""
+    spending: list[tuple[dict, float]] = []
+    for key in keys:
+        monthly = _usage_amount(key, "usage_monthly")
+        if monthly is not None and monthly > 0:
+            spending.append((key, monthly))
+    # With one spending key the section would only repeat the summary row.
+    if len(spending) < 2:
+        return []
+    spending.sort(key=lambda pair: pair[1], reverse=True)
+    total = sum(monthly for _, monthly in spending)
+    metrics: list[UsageMetric] = [
+        UsageMetric(
+            label=f"{KEYS_LABEL}: this month",
+            percent_used=None,
+            note=(
+                "Spend per API key for the current UTC month. "
+                "Keys with no spend this month are not listed."
+            ),
+            tag=KEY_BREAKDOWN_TAG,
+        )
+    ]
+    for key, monthly in spending[:MAX_KEY_BREAKDOWN_ROWS]:
+        name = _key_name(key)
+        daily = _usage_amount(key, "usage_daily") or 0.0
+        note = f"{name}\nToday ${daily:.2f} · Month ${monthly:.2f}"
+        if key.get("disabled"):
+            note += "\nDisabled"
+        metrics.append(
+            UsageMetric(
+                label=_truncate_name(name),
+                percent_used=monthly / total * 100.0,
+                reset_label=f"${monthly:.2f}",
+                note=note,
+                tag=KEY_BREAKDOWN_TAG,
+            )
+        )
+    return metrics
 
 
 def _build_model_metrics(
@@ -269,8 +384,7 @@ def _build_model_metrics(
         percent = (cost / activity_total * 100.0) if activity_total > 0 else None
         display = model.split("/", 1)[1] if "/" in model else model
         truncated = len(display) > MODEL_DISPLAY_MAX_LEN
-        if truncated:
-            display = display[: MODEL_DISPLAY_MAX_LEN - 1] + "…"
+        display = _truncate_name(display)
         if "/" in model or truncated:
             note = f"{model}\n${cost:.2f}"
         else:
@@ -295,10 +409,19 @@ def _build_snapshot(
     mgmt_key_configured: bool,
     activity_error: str | None = None,
     activity_date: str | None = None,
+    keys: list[dict] | None = None,
 ) -> UsageSnapshot:
+    """`keys` is the /keys list on the management-key path, in which case
+    `key_info` is `_account_usage(keys)`. On the inference-key-only path `keys`
+    is None and `key_info` is the /key payload."""
     metrics: list[UsageMetric] = []
 
-    summary_metric = _build_summary_metric(credits, key_info, daily_budget)
+    summary_metric = _build_summary_metric(
+        credits,
+        key_info,
+        daily_budget,
+        key_count=len(keys) if keys is not None else None,
+    )
     if summary_metric:
         metrics.append(summary_metric)
     if not mgmt_key_configured:
@@ -308,7 +431,10 @@ def _build_snapshot(
             UsageMetric(
                 label="Account balance",
                 percent_used=None,
-                note="Add a management key in Settings to show remaining credits.",
+                note=(
+                    "Add a management key in Settings to show the balance and "
+                    "spend across all your keys."
+                ),
             )
         )
     # If mgmt_key_configured is True but credits is None here, _fetch_credits
@@ -318,6 +444,9 @@ def _build_snapshot(
     daily_metric = _build_daily_metric(key_info, daily_budget)
     if daily_metric:
         metrics.append(daily_metric)
+
+    if keys is not None:
+        metrics.extend(_build_key_metrics(keys))
 
     if activity_error:
         # /activity failed. Surface a clearly visible row instead of silently
@@ -346,7 +475,19 @@ def _build_snapshot(
         metrics=metrics,
         raw={
             "credits": credits,
-            "key": key_info,
+            "key": key_info if keys is None else None,
+            "keys": [
+                {
+                    "name": key.get("name"),
+                    "usage_daily": key.get("usage_daily"),
+                    "usage_monthly": key.get("usage_monthly"),
+                    "disabled": key.get("disabled"),
+                }
+                for key in keys
+            ]
+            if keys is not None
+            else None,
+            "usage_source": "all_keys" if keys is not None else "inference_key",
             "top_models": [list(pair) for pair in top_models],
             "activity_error": activity_error,
             "activity_date": activity_date,
@@ -376,7 +517,7 @@ class OpenRouterProvider(Provider):
             bool(api_key),
             bool(mgmt_key),
         )
-        if not api_key:
+        if not api_key and not mgmt_key:
             log.info(
                 "provider api diagnosis provider=openrouter classification=missing_key"
             )
@@ -384,27 +525,30 @@ class OpenRouterProvider(Provider):
                 UsageSnapshot(
                     provider="openrouter",
                     status=SnapshotStatus.AUTH_REQUIRED,
-                    error="OpenRouter API key not set. Configure it in Settings.",
+                    error=(
+                        "Add an OpenRouter management key (or an inference key) "
+                        "in Settings."
+                    ),
                 )
             )
             return
 
         config = self._config
 
-        def work() -> UsageSnapshot:
-            # /credits requires a management key per OpenRouter docs. Only call
-            # it when the user provided one. If they didn't, _build_snapshot
-            # adds a visible "configure management key" row instead of silently
-            # hiding the credits.
-            credits: dict | None = None
-            if mgmt_key:
+        def work_with_mgmt_key(mgmt_key: str) -> UsageSnapshot:
+            # With a management key, /keys gives spend across every key on the
+            # account, so the single-key /key endpoint is never called, even if
+            # an inference key is saved.
+            fetched: dict[str, object] = {}
+            for endpoint, fetch in (("credits", _fetch_credits), ("keys", _fetch_keys)):
                 try:
-                    credits = _fetch_credits(mgmt_key)
+                    fetched[endpoint] = fetch(mgmt_key)
                 except requests.HTTPError as exc:
                     status = exc.response.status_code if exc.response is not None else 0
                     log.warning(
                         "provider api diagnosis provider=openrouter "
-                        "classification=credits_http_error status=%s",
+                        "classification=%s_http_error status=%s",
+                        endpoint,
                         status,
                     )
                     if status in (401, 403):
@@ -419,15 +563,28 @@ class OpenRouterProvider(Provider):
                     return UsageSnapshot(
                         provider="openrouter",
                         status=SnapshotStatus.ERROR,
-                        error=f"OpenRouter /credits {status}",
+                        error=f"OpenRouter /{endpoint} {status}",
                     )
-                except requests.RequestException as exc:
+                except (requests.RequestException, ValueError) as exc:
                     return UsageSnapshot(
                         provider="openrouter",
                         status=SnapshotStatus.ERROR,
                         error=str(exc),
                     )
 
+            keys = fetched["keys"]
+            activity, activity_error = _fetch_activity(mgmt_key)
+            return _build_snapshot(
+                fetched["credits"],
+                _account_usage(keys),
+                _activity_model_costs(activity),
+                config.openrouter.daily_budget,
+                mgmt_key_configured=True,
+                activity_error=activity_error,
+                keys=keys,
+            )
+
+        def work_with_inference_key(api_key: str) -> UsageSnapshot:
             try:
                 key_info = _fetch_key_info(api_key)
             except requests.HTTPError as exc:
@@ -455,27 +612,22 @@ class OpenRouterProvider(Provider):
                     error=str(exc),
                 )
 
-            if mgmt_key:
-                activity_date = None
-                activity, activity_error = _fetch_activity(mgmt_key)
-            else:
-                log.debug(
-                    "provider api diagnosis provider=openrouter "
-                    "classification=management_endpoints_skipped reason=missing_mgmt_key"
-                )
-                activity = []
-                activity_error = (
-                    "Add a management key in Settings to show model activity."
-                )
-            top_models = _activity_model_costs(activity)
-            return _build_snapshot(
-                credits,
-                key_info,
-                top_models,
-                config.openrouter.daily_budget,
-                mgmt_key_configured=bool(mgmt_key),
-                activity_error=activity_error,
-                activity_date=activity_date if mgmt_key else None,
+            log.debug(
+                "provider api diagnosis provider=openrouter "
+                "classification=management_endpoints_skipped reason=missing_mgmt_key"
             )
+            return _build_snapshot(
+                None,
+                key_info,
+                [],
+                config.openrouter.daily_budget,
+                mgmt_key_configured=False,
+                activity_error="Add a management key in Settings to show model activity.",
+            )
+
+        def work() -> UsageSnapshot:
+            if mgmt_key:
+                return work_with_mgmt_key(mgmt_key)
+            return work_with_inference_key(api_key)
 
         self._run_async(work, on_done)

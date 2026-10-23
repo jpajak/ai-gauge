@@ -26,6 +26,11 @@ from .base import Provider
 CLAUDE_API_BILLING_URL = "https://platform.claude.com/settings/billing"
 SUBSCRIPTION_PROGRAM = "subscription_api_credit"
 _SESSION_INVALID = "account_session_invalid"
+# The measured billing-permission refusal: a 403 JSON body whose error.type is
+# "permission_error" and whose top-level code is "permission_denied", with no
+# error.details.error_code. Anything else that is not a 200 is a failed read.
+_REFUSAL_TYPE = "permission_error"
+_REFUSAL_CODE = "permission_denied"
 log = logging.getLogger("aigauge.providers.claude_api")
 
 _READ_ERROR = "Couldn't read Console billing"
@@ -49,8 +54,8 @@ _NO_API_ORG_ERROR = "No Console organization with API access."
 # Only structure and amounts leave the page. Org ids, names, tranche ids and
 # scope contents stay in it: the scope of each tranche becomes the index of its
 # JSON among the distinct scopes of that response. An error reports only its
-# status, its `error.type` and its `error.details.error_code`, each a short
-# lowercase word or null. An exception reports only its name, because its
+# status, its `error.type`, its `error.details.error_code` and its top-level
+# `code`, each a short lowercase word or null. An exception reports only its name, because its
 # message can carry a URL with an org id.
 EXTRACTOR_JS = r"""
 (() => {
@@ -61,6 +66,10 @@ EXTRACTOR_JS = r"""
   };
   const errorCode = body => {
     const c = body && body.error && body.error.details && body.error.details.error_code;
+    return typeof c === 'string' && /^[a-z_]{1,40}$/.test(c) ? c : null;
+  };
+  const topCode = body => {
+    const c = body && body.code;
     return typeof c === 'string' && /^[a-z_]{1,40}$/.test(c) ? c : null;
   };
   const num = v => (typeof v === 'number' ? v : null);
@@ -125,7 +134,7 @@ EXTRACTOR_JS = r"""
       const credits = await Promise.all(api.map(o =>
         get(`/api/organizations/${o.uuid}/prepaid/credits`)
           .then(c => ({ status: c.status, error: errorType(c.body),
-                        error_code: errorCode(c.body),
+                        error_code: errorCode(c.body), code: topCode(c.body),
                         credit: c.status === 200 ? pick(c.body) : null }))));
       return { orgs_status: 200, api_orgs: api.length, credits };
     })().then(
@@ -230,6 +239,16 @@ def _date_time_text(local: datetime) -> str:
 
 def _safe_word(value: Any) -> str | None:
     return value if isinstance(value, str) and _WORD.match(value) else None
+
+
+def _is_refusal(status: int | None, entry: dict[str, Any]) -> bool:
+    """The measured billing-permission refusal, and nothing looser."""
+    return (
+        status == 403
+        and _safe_word(entry.get("error")) == _REFUSAL_TYPE
+        and _safe_word(entry.get("code")) == _REFUSAL_CODE
+        and entry.get("error_code") is None
+    )
 
 
 def _parse_org(entry: Any) -> _OrgCredit:
@@ -344,6 +363,11 @@ def _diag_line(diag: dict[str, Any]) -> str:
         f"orgs_status={diag.get('orgs_status', '-')}",
         f"api_orgs={diag.get('api_orgs', '-')}",
         "credits_statuses=" + (",".join(str(s) for s in statuses) or "-"),
+        *(
+            ["credits_errors=" + ",".join(diag["credits_errors"])]
+            if diag.get("credits_errors")
+            else []
+        ),
         f"subscription_tranches={diag.get('subscription_tranches', '-')}",
         f"groups={diag.get('groups', '-')}",
         f"other={diag.get('other', '-')}",
@@ -376,7 +400,9 @@ def _snapshot(
 
     # Signed-out and refusal responses are the shapes measured on a Console
     # account ("P2 result" in docs/claude-api-credit-plan.md): both are a 403
-    # permission_error, told apart only by error.details.error_code.
+    # permission_error. The signed-out one carries error.details.error_code;
+    # the refusal carries a top-level code of permission_denied and no
+    # error_code. Nothing else counts as a refusal.
     if payload.get("signed_out"):
         return _fail(
             account_id, diag, "signed_out", _SIGNED_OUT_ERROR,
@@ -428,9 +454,9 @@ def _snapshot(
     statuses = [_as_int(c.get("status")) for c in credits]
     diag["credits_statuses"] = [s if s is not None else 0 for s in statuses]
     # A signed-out answer on any fetch fails the whole refresh as a sign-out.
-    # Otherwise a 403 is the permission refusal, and any other non-200 fails
-    # the whole refresh so a transient failure can never hand the tile to
-    # another org.
+    # Otherwise only the exact measured refusal is skipped; any other non-200
+    # (an unknown 403, an HTML page from a proxy, a 5xx) fails the whole
+    # refresh so it can never hand the tile to another org.
     if any(
         s == 401
         or (s == 403 and _safe_word(c.get("error_code")) == _SESSION_INVALID)
@@ -440,7 +466,17 @@ def _snapshot(
             account_id, diag, "credits_signed_out", _SIGNED_OUT_ERROR,
             SnapshotStatus.AUTH_REQUIRED,
         )
-    if any(s not in (200, 403) for s in statuses):
+    refused = [_is_refusal(s, c) for s, c in zip(statuses, credits)]
+    # Words only, already sanitized: `status:type:code`, `-` for null.
+    errors = [
+        f"{s if s is not None else 0}:{_safe_word(c.get('error')) or '-'}"
+        f":{_safe_word(c.get('code')) or '-'}"
+        for s, c in zip(statuses, credits)
+        if s != 200
+    ]
+    if errors:
+        diag["credits_errors"] = errors
+    if any(s != 200 and not r for s, r in zip(statuses, refused)):
         return _fail(account_id, diag, "credits_status", _READ_ERROR)
 
     parsed: list[_OrgCredit | None] = []  # None marks a refused org

@@ -250,7 +250,9 @@ run ended in "copy is not defined".
   `error.type: "permission_error"`, no `details`, top-level
   `code: "permission_denied"`.
 - Both share status and `error.type`; only `error.details.error_code` tells
-  them apart. The extractor reports that code too.
+  them apart. The extractor reports that code too, and the refusal's top-level
+  `code`, because the refusal is recognised by that exact shape and nothing
+  looser.
 - **Org list:** 200, two orgs. The Console org's `capabilities` are `api` and
   `customer_terms:standard`; the chat org's are `claude_max` and `chat`.
 - **Credits:** the shape of 10-08 plus `balance` (`{money, credits}`) and three
@@ -449,7 +451,12 @@ The extractor fetches JSON in the page.
 - `AUTH_REQUIRED` only for `signed_out` (off-host), a 401, or a 403 whose
   `error.details.error_code` is `account_session_invalid`, on
   `/api/organizations` or on a credits fetch.
-- A credits 403 without that code is the permission refusal of org rule 4.
+- The permission refusal of org rule 4 is exactly the measured shape: a credits
+  403 whose `error.type` is `permission_error`, whose top-level `code` is
+  `permission_denied`, and that has no `error.details.error_code`. The
+  extractor reports `error`, `error_code` and `code` as sanitized words, and
+  anything else that is not a 200 (an HTML 403 from Cloudflare, an unknown
+  403, a 5xx) is the read error for the whole refresh.
 - Any other non-200 from `/api/organizations` (including other 403s), any
   other credits status, a timeout, or `error`: `ERROR`, "Couldn't read Console
   billing".

@@ -267,14 +267,20 @@ def test_credits_refusal_reports_status_and_error_type(tmp_path):
     }
     payload = result_of(tmp_path, routes(refused))
     assert payload["credits"] == [
-        {"status": 403, "error": "permission_error", "error_code": None, "credit": None}
+        {
+            "status": 403,
+            "error": "permission_error",
+            "error_code": None,
+            "code": None,
+            "credit": None,
+        }
     ]
 
 
 def test_a_credits_200_with_an_unparsable_body_has_no_credit(tmp_path):
     payload = result_of(tmp_path, routes({"status": 200, "invalid": True}))
     assert payload["credits"] == [
-        {"status": 200, "error": None, "error_code": None, "credit": None}
+        {"status": 200, "error": None, "error_code": None, "code": None, "credit": None}
     ]
 
 
@@ -457,11 +463,33 @@ def test_organizations_signed_out_reports_the_error_code(tmp_path):
     assert ORG_ID not in json.dumps(out["runs"])
 
 
-def test_permission_refusal_has_the_same_type_and_no_code(tmp_path):
+def test_permission_refusal_has_the_same_type_no_error_code_and_a_top_level_code(tmp_path):
     payload = result_of(tmp_path, routes({"status": 403, "body": REFUSAL_BODY}))
     assert payload["credits"] == [
-        {"status": 403, "error": "permission_error", "error_code": None, "credit": None}
+        {
+            "status": 403,
+            "error": "permission_error",
+            "error_code": None,
+            "code": "permission_denied",
+            "credit": None,
+        }
     ]
+
+
+def test_a_non_json_body_reports_no_type_and_no_code(tmp_path):
+    payload = result_of(tmp_path, routes({"status": 403, "invalid": True}))
+    assert payload["credits"] == [
+        {"status": 403, "error": None, "error_code": None, "code": None, "credit": None}
+    ]
+
+
+@pytest.mark.parametrize(
+    "code", ["Permission", "has space", "x" * 41, "", 7, None, ["a"], {"a": 1}]
+)
+def test_top_level_code_must_be_a_short_lowercase_word(tmp_path, code):
+    body = {"error": {"type": "permission_error"}, "code": code}
+    payload = result_of(tmp_path, routes({"status": 403, "body": body}))
+    assert payload["credits"][0]["code"] is None
 
 
 def test_credits_signed_out_reports_the_error_code(tmp_path):
@@ -471,6 +499,7 @@ def test_credits_signed_out_reports_the_error_code(tmp_path):
             "status": 403,
             "error": "permission_error",
             "error_code": "account_session_invalid",
+            "code": None,
             "credit": None,
         }
     ]

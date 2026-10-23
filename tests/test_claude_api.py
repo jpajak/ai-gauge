@@ -82,10 +82,26 @@ def credit(tranches, purchased=0, currency="USD", amount=None, without=None):
     }
 
 
-def org(tranches=None, status=200, error_code=None, **kwargs):
+_MEASURED = object()
+
+
+def org(tranches=None, status=200, error_code=None, error=_MEASURED, code=_MEASURED, **kwargs):
+    """A non-200 entry defaults to what the Console measured: a 403 is the
+    billing refusal (permission_error plus top-level permission_denied), or
+    the signed-out answer when `error_code` is given. Pass error=None and
+    code=None for an unknown 403, such as an HTML page."""
     if status != 200:
-        error = "permission_error" if status == 403 else None
-        return {"status": status, "error": error, "error_code": error_code, "credit": None}
+        if error is _MEASURED:
+            error = "permission_error" if status == 403 else None
+        if code is _MEASURED:
+            code = "permission_denied" if status == 403 and error_code is None else None
+        return {
+            "status": status,
+            "error": error,
+            "error_code": error_code,
+            "code": code,
+            "credit": None,
+        }
     return {"status": 200, "error": None, "credit": credit(tranches or [], **kwargs)}
 
 
@@ -491,7 +507,7 @@ def test_organizations_other_non_200_is_an_error_not_a_sign_out(status):
     assert_error(build({"orgs_status": status, "orgs_error": None}), READ_ERROR)
 
 
-def test_credits_status_other_than_200_or_403_fails_the_whole_refresh():
+def test_credits_status_other_than_200_fails_the_whole_refresh():
     for status in (404, 429, 500):
         snap = build(payload(org([tranche()]), org(status=status)))
         assert_error(snap, READ_ERROR)
@@ -517,9 +533,41 @@ def test_credits_403_with_account_session_invalid_needs_sign_in():
     assert snap.status == SnapshotStatus.AUTH_REQUIRED
 
 
-def test_credits_403_with_another_code_is_the_permission_refusal():
-    snap = build(payload(org(status=403, error_code="permission_denied")))
-    assert_error(snap, NO_ROLE)
+def test_credits_403_with_an_unrelated_error_code_is_not_the_refusal():
+    snap = build(payload(org(status=403, error_code="something_else")))
+    assert_error(snap, READ_ERROR)
+
+
+def test_unknown_403_beside_a_good_org_fails_the_whole_refresh():
+    # An HTML 403 (Cloudflare) reports no error type and no code.
+    unknown = org(status=403, error=None, code=None)
+    snap = build(payload(org([tranche(remaining=8760)]), unknown))
+    assert_error(snap, READ_ERROR)
+    assert snap.raw["result"] == "credits_status"
+    assert snap.raw["credits_errors"] == ["403:-:-"]
+
+
+def test_403_permission_error_without_the_code_is_not_the_refusal():
+    snap = build(payload(org([tranche()]), org(status=403, code=None)))
+    assert_error(snap, READ_ERROR)
+    assert snap.raw["credits_errors"] == ["403:permission_error:-"]
+
+
+def test_403_with_the_code_but_another_error_type_is_not_the_refusal():
+    snap = build(payload(org([tranche()]), org(status=403, error="api_error")))
+    assert_error(snap, READ_ERROR)
+
+
+def test_a_sole_api_org_with_an_unknown_403_is_a_read_error_not_no_billing_role():
+    snap = build(payload(org(status=403, error=None, code=None)))
+    assert_error(snap, READ_ERROR)
+    assert snap.raw["result"] == "credits_status"
+
+
+def test_measured_refusal_beside_a_good_org_still_shows_the_good_org():
+    snap = build(payload(org([tranche(remaining=8760)]), org(status=403)))
+    assert snap.status == SnapshotStatus.OK
+    assert bar(snap).percent_used == pytest.approx(12.4)
 
 
 # -- measured signed-out and refusal responses ----------------------------------
@@ -550,6 +598,7 @@ def test_measured_refusal_body_on_a_sole_api_orgs_credits_is_the_rule_4_error():
         "status": 403,
         "error": "permission_error",
         "error_code": None,
+        "code": "permission_denied",
         "credit": None,
     }
     assert_error(build(payload(entry)), NO_ROLE)
@@ -723,7 +772,22 @@ def test_diagnostics_line_for_failures(caplog):
     assert "orgs_status=403" in messages[1] and "orgs_error=permission_error" in messages[1]
     assert messages[1].endswith("orgs_error_code=account_session_invalid")
     assert "credits_statuses=403" in messages[2] and messages[2].endswith("result=no_billing_role")
+    assert "credits_errors=403:permission_error:permission_denied" in messages[2]
     assert messages[3].endswith("result=exception error=AbortError")
+
+
+def test_diagnostics_line_has_no_credits_errors_when_every_fetch_is_a_200(caplog):
+    caplog.set_level(logging.INFO, logger="aigauge.providers.claude_api")
+    build(payload(org([tranche()])))
+    assert "credits_errors" not in caplog.records[0].getMessage()
+
+
+def test_credits_errors_carry_only_sanitized_words(caplog):
+    caplog.set_level(logging.INFO, logger="aigauge.providers.claude_api")
+    hostile = "https://platform.claude.com/api/organizations/1234-secret/prepaid/credits"
+    snap = build(payload(org(status=403, error=hostile, code=hostile)))
+    assert snap.raw["credits_errors"] == ["403:-:-"]
+    assert "secret" not in caplog.records[0].getMessage()
 
 
 def test_diagnostics_line_names_the_account(caplog):
@@ -738,6 +802,7 @@ def test_raw_holds_only_structural_counts():
         "orgs_status": 200,
         "api_orgs": 2,
         "credits_statuses": [200, 403],
+        "credits_errors": ["403:permission_error:permission_denied"],
         "subscription_tranches": 1,
         "groups": 1,
         "other": "agree",

@@ -6,7 +6,7 @@ import uuid
 from collections.abc import Callable
 from pathlib import Path
 
-from PyQt6.QtCore import QDir, QEvent, QPoint, QPointF, QRect, QRectF, Qt, QUrl, pyqtSignal
+from PyQt6.QtCore import QDir, QEvent, QPoint, QPointF, QRect, QRectF, QSize, Qt, QUrl, pyqtSignal
 from PyQt6.QtGui import (
     QColor,
     QDesktopServices,
@@ -148,6 +148,10 @@ QGroupBox::title {
     padding: 0 6px;
     background: #1f2937;
     color: #f3f4f6;
+}
+QScrollArea#settings_page_scroll,
+QScrollArea#settings_page_scroll > QWidget > QWidget {
+    background: transparent;
 }
 QListWidget#settings_nav {
     background: #111827;
@@ -337,12 +341,52 @@ def _build_stylesheet() -> str:
     ).replace("__UP_ARROW__", _chevron_png_path("up"))
 
 
+class _HintLabel(QLabel):
+    """A word-wrapped hint whose size hint follows its width.
+
+    QLabel sizes a wrapped label at a narrow default width, so a form row that
+    now spans the column would still reserve the tall narrow height and leave a
+    gap under the text. Reporting the height at the current width fixes that.
+    """
+
+    def sizeHint(self) -> QSize:
+        hint = super().sizeHint()
+        width = self.width()
+        if self.wordWrap() and width > hint.width():
+            hint.setHeight(self.heightForWidth(width))
+        return hint
+
+    def resizeEvent(self, event) -> None:
+        super().resizeEvent(event)
+        self.updateGeometry()
+
+
 def _hint_label(text: str) -> QLabel:
-    label = QLabel(text)
+    label = _HintLabel(text)
     label.setProperty("hint", True)
     label.setOpenExternalLinks(True)
     label.setWordWrap(True)
+    # A row can be taller than its wrapped text; keep the text by its field.
+    label.setAlignment(Qt.AlignmentFlag.AlignLeft | Qt.AlignmentFlag.AlignTop)
+    # Grow with the column. QFormLayout's ExpandingFieldsGrow only widens
+    # Expanding fields, so a Preferred hint stays at QLabel's narrow wrap width
+    # beside full-width line edits. Edit the existing policy: a fresh
+    # QSizePolicy would drop the height-for-width flag word wrap set.
+    policy = label.sizePolicy()
+    policy.setHorizontalPolicy(QSizePolicy.Policy.Expanding)
+    label.setSizePolicy(policy)
     return label
+
+
+def _scrolling_page(page: QWidget) -> QScrollArea:
+    """Wrap a Settings page so it scrolls vertically when it outgrows the window."""
+    scroll = QScrollArea()
+    scroll.setObjectName("settings_page_scroll")
+    scroll.setWidgetResizable(True)
+    scroll.setFrameShape(QFrame.Shape.NoFrame)
+    scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+    scroll.setWidget(page)
+    return scroll
 
 
 def _open_in_browser(url: str) -> None:
@@ -1142,34 +1186,8 @@ class SettingsDialog(QDialog):
             QFormLayout.FieldGrowthPolicy.ExpandingFieldsGrow
         )
 
-        self.or_key_edit = QLineEdit()
-        self.or_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        existing_or_key = get_openrouter_key()
-        self._had_existing_or_key = bool(existing_or_key)
-        if existing_or_key:
-            self.or_key_edit.setPlaceholderText(
-                "•••••••••• (saved — leave blank to keep)"
-            )
-        else:
-            self.or_key_edit.setPlaceholderText("sk-or-...")
-        openrouter_form.addRow("Inference key:", self.or_key_edit)
-
-        self.clear_or_key_cb = QCheckBox("Clear saved inference key")
-        self.clear_or_key_cb.setToolTip(
-            "Remove the inference key from the system keychain."
-        )
-        self.clear_or_key_cb.setVisible(self._had_existing_or_key)
-        if self._had_existing_or_key:
-            openrouter_form.addRow("", self.clear_or_key_cb)
-
-        or_key_help = _hint_label(
-            "Your regular API key from <a style='color:#60a5fa;' "
-            "href='https://openrouter.ai/keys'>openrouter.ai/keys</a> — the same "
-            "one your apps use for chat completions. <b>Required</b> for daily "
-            "spend."
-        )
-        openrouter_form.addRow("", or_key_help)
-
+        # The management key comes first: with it the inference key is not
+        # read at all, so it should not look like the field to fill in first.
         self.or_mgmt_key_edit = QLineEdit()
         self.or_mgmt_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
         existing_or_mgmt_key = get_openrouter_mgmt_key()
@@ -1179,7 +1197,7 @@ class SettingsDialog(QDialog):
                 "•••••••••• (saved — leave blank to keep)"
             )
         else:
-            self.or_mgmt_key_edit.setPlaceholderText("sk-or-v1-... (optional)")
+            self.or_mgmt_key_edit.setPlaceholderText("sk-or-v1-... (recommended)")
         openrouter_form.addRow("Management key:", self.or_mgmt_key_edit)
 
         self.clear_or_mgmt_key_cb = QCheckBox("Clear saved management key")
@@ -1191,15 +1209,44 @@ class SettingsDialog(QDialog):
             openrouter_form.addRow("", self.clear_or_mgmt_key_cb)
 
         or_mgmt_key_help = _hint_label(
-            "<b>Optional</b>, but needed to show your <b>account-wide remaining "
-            "balance</b> and <b>model activity</b>. Create a separate management key at "
-            "<a style='color:#60a5fa;' "
+            "<b>Recommended.</b> Shows your account balance, today's and this "
+            "month's spend across all your API keys, spend per key, and model "
+            "activity. Create one at <a style='color:#60a5fa;' "
             "href='https://openrouter.ai/settings/provisioning-keys'>"
-            "openrouter.ai/settings/provisioning-keys</a>. Management keys can't "
-            "make inference calls, so this is in addition to the inference key "
-            "above, not a replacement."
+            "openrouter.ai/settings/provisioning-keys</a>. With a management "
+            "key you don't need the inference key below."
         )
         openrouter_form.addRow("", or_mgmt_key_help)
+
+        self.or_key_edit = QLineEdit()
+        self.or_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
+        existing_or_key = get_openrouter_key()
+        self._had_existing_or_key = bool(existing_or_key)
+        if existing_or_key:
+            self.or_key_edit.setPlaceholderText(
+                "•••••••••• (saved — leave blank to keep)"
+            )
+        else:
+            self.or_key_edit.setPlaceholderText(
+                "sk-or-v1-... (not needed with a management key)"
+            )
+        openrouter_form.addRow("Inference key:", self.or_key_edit)
+
+        self.clear_or_key_cb = QCheckBox("Clear saved inference key")
+        self.clear_or_key_cb.setToolTip(
+            "Remove the inference key from the system keychain."
+        )
+        self.clear_or_key_cb.setVisible(self._had_existing_or_key)
+        if self._had_existing_or_key:
+            openrouter_form.addRow("", self.clear_or_key_cb)
+
+        or_key_help = _hint_label(
+            "<b>Only needed without a management key.</b> A regular API key from "
+            "<a style='color:#60a5fa;' href='https://openrouter.ai/keys'>"
+            "openrouter.ai/keys</a>. On its own it shows today's and this "
+            "month's spend for that one key, with no balance or model activity."
+        )
+        openrouter_form.addRow("", or_key_help)
 
         self.or_daily_budget = QDoubleSpinBox()
         self.or_daily_budget.setRange(0.0, 10000.0)
@@ -1211,8 +1258,9 @@ class SettingsDialog(QDialog):
         openrouter_form.addRow("Daily budget:", self.or_daily_budget)
 
         budget_hint = _hint_label(
-            "Optional. If set, the Daily row shows a colored gauge against this "
-            "budget. Leave at $0.00 to show only the dollar amount."
+            "Optional. If set, the Today row shows a colored gauge against this "
+            "budget, counting all your keys when a management key is set. Leave "
+            "at $0.00 to show only the dollar amount."
         )
         openrouter_form.addRow("", budget_hint)
 
@@ -1397,17 +1445,24 @@ class SettingsDialog(QDialog):
         )
         local_usage_scroll = QScrollArea()
         local_usage_scroll.setWidgetResizable(True)
+        local_usage_scroll.setObjectName("settings_page_scroll")  # dark background
         local_usage_scroll.setFrameShape(QFrame.Shape.NoFrame)
         local_usage_scroll.setWidget(self.local_usage_panel)
 
-        pages = {
+        # Every other page scrolls too, so a page taller than the window
+        # scrolls instead of squeezing its rows and clipping wrapped hints.
+        # The stack holds the scroll area; _page_contents keeps the page inside.
+        content_pages = {
             "general": general_tab,
             # A spec with neither an account page nor a bespoke page fails
             # here, when Settings is built, rather than at first navigation.
             **{spec.id: provider_pages[spec.id] for spec in PROVIDER_SPECS},
             "mcp": mcp_tab,
-            "local_usage": local_usage_scroll,
         }
+        self._page_contents: dict[str, QWidget] = dict(content_pages)
+        pages = {key: _scrolling_page(page) for key, page in content_pages.items()}
+        pages["local_usage"] = local_usage_scroll
+        self._page_contents["local_usage"] = self.local_usage_panel
         self.nav_list = _NavList(self.move_provider)
         self.nav_list.setObjectName("settings_nav")
         self.nav_list.setFixedWidth(_NAV_WIDTH)
@@ -1643,7 +1698,12 @@ class SettingsDialog(QDialog):
         return item.data(Qt.ItemDataRole.UserRole) if item is not None else ""
 
     def page_widget(self, key: str) -> QWidget:
+        """The widget in the page stack for `key` (the scroll area)."""
         return self.pages.widget(self._page_indexes[key])
+
+    def page_content(self, key: str) -> QWidget:
+        """The page inside `key`'s scroll area, the one that owns the layout."""
+        return self._page_contents[key]
 
     def show_page(self, key: str) -> None:
         """Select the row and show the page for `key`."""

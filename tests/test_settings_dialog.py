@@ -740,7 +740,7 @@ def test_enable_checkbox_sits_above_hint_and_group_box(qtbot):
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
 
-    layout = dialog.page_widget("codex").layout()
+    layout = dialog.page_content("codex").layout()
     assert layout.itemAt(0).widget() is dialog.codex_cb
     hint = layout.itemAt(1).widget()
     assert "does not poll Codex" in hint.text()
@@ -1355,3 +1355,145 @@ def test_unsaved_minimax_region_survives_a_row_rebuild(qtbot, monkeypatch):
     first, second = _minimax_rows(dialog)
     assert first.region_combo.currentData() == "china"
     assert second.region_combo.currentData() == "international"
+
+
+# ----- Hint labels and scrolling pages ----------------------------------------
+
+
+def _no_openrouter_keys(monkeypatch):
+    monkeypatch.setattr(settings_dialog, "get_openrouter_key", lambda: "")
+    monkeypatch.setattr(settings_dialog, "get_openrouter_mgmt_key", lambda: "")
+
+
+def _settled_dialog(qtbot, page: str, size: tuple[int, int] | None = None):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    if size is not None:
+        dialog.resize(*size)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    dialog.show_page(page)
+    for _ in range(3):
+        QApplication.processEvents()
+    qtbot.wait(20)
+    return dialog
+
+
+def _visible_hints(group: QGroupBox) -> list[QLabel]:
+    return [
+        label
+        for label in group.findChildren(QLabel)
+        if label.property("hint") and label.isVisible()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("page", "field_attr"),
+    [("openrouter", "or_key_edit"), ("copilot", "gh_pat_edit")],
+)
+@pytest.mark.parametrize("size", [None, (1000, 890)])
+def test_provider_hints_are_not_clipped_and_span_the_field_column(
+    qtbot, monkeypatch, page, field_attr, size
+):
+    _no_openrouter_keys(monkeypatch)
+    dialog = _settled_dialog(qtbot, page, size)
+
+    edit = getattr(dialog, field_attr)
+    group = edit.parentWidget()
+    assert isinstance(group, QGroupBox)
+    hints = _visible_hints(group)
+    assert len(hints) >= 3
+    for hint in hints:
+        text = hint.text()[:40]
+        # Tall enough for every wrapped line, so nothing is cut off.
+        assert hint.height() >= hint.heightForWidth(hint.width()), text
+        # Wrapped at the field column's width, not at QLabel's narrow default.
+        assert hint.width() >= edit.width(), text
+        assert hint.width() > hint.sizeHint().width(), text
+
+
+def test_openrouter_management_key_comes_before_the_inference_key(qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QFormLayout
+
+    _no_openrouter_keys(monkeypatch)
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    form = dialog.or_key_edit.parentWidget().layout()
+    assert isinstance(form, QFormLayout)
+    mgmt_row, _ = form.getWidgetPosition(dialog.or_mgmt_key_edit)
+    key_row, _ = form.getWidgetPosition(dialog.or_key_edit)
+    assert mgmt_row < key_row
+    assert dialog.or_mgmt_key_edit.placeholderText() == "sk-or-v1-... (recommended)"
+    assert (
+        dialog.or_key_edit.placeholderText()
+        == "sk-or-v1-... (not needed with a management key)"
+    )
+
+    # Keyboard order follows the visual order.
+    order = []
+    widget = dialog.or_mgmt_key_edit
+    while widget not in order:
+        order.append(widget)
+        widget = widget.nextInFocusChain()
+    assert order.index(dialog.or_mgmt_key_edit) < order.index(dialog.or_key_edit)
+    assert order.index(dialog.or_key_edit) < order.index(dialog.or_daily_budget)
+
+
+def test_openrouter_help_says_the_inference_key_is_not_needed_with_a_management_key(
+    qtbot, monkeypatch
+):
+    _no_openrouter_keys(monkeypatch)
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    group = dialog.or_key_edit.parentWidget()
+    texts = [label.text() for label in group.findChildren(QLabel)]
+    mgmt_help = next(t for t in texts if "provisioning-keys" in t)
+    key_help = next(t for t in texts if "openrouter.ai/keys" in t)
+    budget_help = next(t for t in texts if "Optional. If set" in t)
+    assert "you don't need the inference key" in mgmt_help
+    assert mgmt_help.startswith("<b>Recommended.</b>")
+    assert key_help.startswith("<b>Only needed without a management key.</b>")
+    assert "Today row" in budget_help
+    assert "Daily row" not in budget_help
+    for text in (mgmt_help, key_help, budget_help):
+        assert "—" not in text
+
+
+def test_every_settings_page_is_a_vertical_scroll_area(qtbot):
+    from PyQt6.QtWidgets import QScrollArea
+
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    for key in _PAGE_KEYS:
+        scroll = dialog.page_widget(key)
+        assert isinstance(scroll, QScrollArea), key
+        assert scroll.widgetResizable(), key
+        if key != "local_usage":  # that one predates the wrapper and keeps its own
+            assert (
+                scroll.horizontalScrollBarPolicy()
+                == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            ), key
+        assert scroll.widget() is dialog.page_content(key), key
+
+
+def test_a_page_taller_than_the_window_scrolls_and_keeps_the_dark_background(qtbot):
+    dialog = _settled_dialog(qtbot, "openrouter", (800, 420))
+
+    scroll = dialog.page_widget("openrouter")
+    bar = scroll.verticalScrollBar()
+    assert bar.maximum() > 0
+    assert not scroll.horizontalScrollBar().isVisible()
+    # The content keeps its natural height instead of squeezing its rows.
+    content = dialog.page_content("openrouter")
+    assert content.height() >= content.layout().minimumSize().height()
+
+    bar.setValue(bar.maximum())
+    QApplication.processEvents()
+    image = scroll.viewport().grab().toImage()
+    # A pixel at the viewport's right edge, below any control, is the dialog's
+    # dark background, not the platform's light window color.
+    pixel = QColor(image.pixel(image.width() - 3, image.height() // 2))
+    assert pixel.lightness() < 90

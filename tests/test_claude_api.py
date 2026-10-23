@@ -1,7 +1,7 @@
 """Pure builder tests for the Claude API credit provider.
 
 Fixtures follow the sample response in docs/claude-api-credit-plan.md. The
-signed-out and permission responses are provisional until check P2 there.
+signed-out and permission responses are the ones measured in its "P2 result".
 """
 
 from __future__ import annotations
@@ -31,6 +31,7 @@ OLDER_EXPIRES = "2026-10-30T12:00:00Z"
 SUB = "subscription_api_credit"
 
 READ_ERROR = "Couldn't read Console billing"
+SIGNED_OUT = "Not signed in to Claude Console."
 SEVERAL_SUB = "Several Console organizations receive subscription credit. Not supported yet."
 NO_ROLE = "This Console sign-in can't see billing. It needs the Owner, Admin or Billing role."
 SEVERAL_ORGS = "Several Console organizations. Not supported yet."
@@ -81,9 +82,10 @@ def credit(tranches, purchased=0, currency="USD", amount=None, without=None):
     }
 
 
-def org(tranches=None, status=200, **kwargs):
+def org(tranches=None, status=200, error_code=None, **kwargs):
     if status != 200:
-        return {"status": status, "error": None, "credit": None}
+        error = "permission_error" if status == 403 else None
+        return {"status": status, "error": error, "error_code": error_code, "credit": None}
     return {"status": 200, "error": None, "credit": credit(tranches or [], **kwargs)}
 
 
@@ -294,6 +296,92 @@ def test_other_disagreeing_is_omitted_and_flagged():
     assert snap.raw["other"] == "mismatch"
 
 
+def test_other_agrees_within_one_unit_per_active_tranche():
+    # One tranche: derived is 1233 against 1234, one unit apart.
+    snap = build(payload(org([tranche(remaining=8760)], amount=8760 + 1233, without=1234)))
+    assert lines(snap) == ["Left $87.60 · Other $12.34"]  # the reported figure is shown
+    assert snap.raw["other"] == "agree"
+    # Two tranches allow two units.
+    two = [
+        tranche(granted=5000, remaining=4000),
+        tranche(granted=5000, remaining=4760),
+    ]
+    snap = build(payload(org(two, amount=8760 + 1236, without=1234)))
+    assert lines(snap) == ["Left $87.60 · Other $12.34"]
+    assert snap.raw["other"] == "agree"
+    snap = build(payload(org(two, amount=8760 + 1231, without=1234)))
+    assert snap.raw["other"] == "mismatch"
+    assert lines(snap) == ["Left $87.60"]
+
+
+def test_other_disagreeing_by_more_than_the_tolerance_is_omitted():
+    snap = build(payload(org([tranche(remaining=8760)], amount=8760 + 1236, without=1234)))
+    assert snap.raw["other"] == "mismatch"
+    assert lines(snap) == ["Left $87.60"]
+
+
+def test_other_tolerance_counts_only_active_tranches():
+    expired = tranche(granted_at="2026-08-01T00:00:00Z", expires="2026-10-01T00:00:00Z", remaining=0)
+    snap = build(payload(org([tranche(remaining=8760), expired], amount=8760 + 1236, without=1234)))
+    assert snap.raw["other"] == "mismatch"
+
+
+def test_the_measured_one_unit_gap_with_nothing_else_agrees_and_shows_no_other():
+    snap = build(payload(org([tranche(remaining=4183)], amount=4184, without=0)))
+    assert snap.status == SnapshotStatus.OK
+    assert lines(snap) == ["Left $41.83"]
+    assert snap.raw["other"] == "agree"
+
+
+@pytest.mark.parametrize("missing", ["null", "absent"])
+def test_other_null_on_the_subscription_path_is_omitted_and_not_an_error(missing, caplog):
+    caplog.set_level(logging.INFO, logger="aigauge.providers.claude_api")
+    entry = org([tranche(remaining=8760)])
+    if missing == "null":
+        entry["credit"]["amount_without_scoped_credits"] = None
+    else:
+        del entry["credit"]["amount_without_scoped_credits"]
+    snap = build(payload(entry))
+    assert snap.status == SnapshotStatus.OK
+    assert lines(snap) == ["Left $87.60"]
+    assert snap.raw["other"] == "none"
+    assert "other=none" in caplog.records[-1].getMessage()
+
+
+def test_purchased_only_with_a_null_other_figure_is_an_error():
+    entry = org([], purchased=1234)
+    entry["credit"]["amount_without_scoped_credits"] = None
+    snap = build(payload(entry))
+    assert_error(snap, READ_ERROR)
+    assert snap.raw["other"] == "none"
+
+
+def test_purchased_only_keeps_its_exact_agreement_rule():
+    # One minor unit apart is a mismatch here: there is no tranche to round.
+    assert_error(build(payload(org([], amount=1235, without=1234))), READ_ERROR)
+
+
+def test_a_spent_older_group_has_no_line():
+    snap = build(
+        payload(
+            org(
+                [
+                    tranche(),
+                    tranche(
+                        granted=10000,
+                        remaining=0,
+                        granted_at=OLDER_GRANTED,
+                        expires=OLDER_EXPIRES,
+                    ),
+                ]
+            )
+        )
+    )
+    assert snap.status == SnapshotStatus.OK
+    assert lines(snap) == ["Left $100.00"]
+    assert bar(snap).percent_used == 0
+
+
 # -- non-USD and formatting -----------------------------------------------------
 
 
@@ -404,9 +492,84 @@ def test_organizations_other_non_200_is_an_error_not_a_sign_out(status):
 
 
 def test_credits_status_other_than_200_or_403_fails_the_whole_refresh():
-    for status in (401, 404, 429, 500):
+    for status in (404, 429, 500):
         snap = build(payload(org([tranche()]), org(status=status)))
         assert_error(snap, READ_ERROR)
+
+
+def test_credits_401_needs_sign_in_for_the_whole_refresh():
+    snap = build(payload(org([tranche()]), org(status=401)))
+    assert_error(snap, SIGNED_OUT, SnapshotStatus.AUTH_REQUIRED)
+    assert snap.raw["result"] == "credits_signed_out"
+
+
+def test_credits_403_with_account_session_invalid_needs_sign_in():
+    snap = build(payload(org(status=403, error_code="account_session_invalid")))
+    assert_error(snap, SIGNED_OUT, SnapshotStatus.AUTH_REQUIRED)
+    # One signed-out answer outranks a good org and a failed fetch.
+    snap = build(
+        payload(
+            org([tranche()]),
+            org(status=500),
+            org(status=403, error_code="account_session_invalid"),
+        )
+    )
+    assert snap.status == SnapshotStatus.AUTH_REQUIRED
+
+
+def test_credits_403_with_another_code_is_the_permission_refusal():
+    snap = build(payload(org(status=403, error_code="permission_denied")))
+    assert_error(snap, NO_ROLE)
+
+
+# -- measured signed-out and refusal responses ----------------------------------
+# Shapes as the extractor reports them for the bodies measured in "P2 result":
+# the signed-out and refusal answers share status 403 and error type, and only
+# error.details.error_code tells them apart.
+
+MEASURED_SIGNED_OUT = {
+    "orgs_status": 403,
+    "orgs_error": "permission_error",
+    "orgs_error_code": "account_session_invalid",
+}
+MEASURED_REFUSAL = {"orgs_status": 403, "orgs_error": "permission_error", "orgs_error_code": None}
+
+
+def test_measured_signed_out_body_on_the_org_list_needs_sign_in():
+    snap = build(MEASURED_SIGNED_OUT)
+    assert_error(snap, SIGNED_OUT, SnapshotStatus.AUTH_REQUIRED)
+    assert snap.raw["orgs_error_code"] == "account_session_invalid"
+
+
+def test_measured_refusal_body_on_the_org_list_is_an_error():
+    assert_error(build(MEASURED_REFUSAL), READ_ERROR)
+
+
+def test_measured_refusal_body_on_a_sole_api_orgs_credits_is_the_rule_4_error():
+    entry = {
+        "status": 403,
+        "error": "permission_error",
+        "error_code": None,
+        "credit": None,
+    }
+    assert_error(build(payload(entry)), NO_ROLE)
+
+
+def test_a_403_html_page_on_the_org_list_is_an_error_not_a_sign_out():
+    # The extractor reports no error type or code when the body is not JSON.
+    snap = build({"orgs_status": 403, "orgs_error": None, "orgs_error_code": None})
+    assert_error(snap, READ_ERROR)
+    assert snap.raw["result"] == "orgs_status"
+
+
+def test_org_list_401_needs_sign_in_whatever_the_code():
+    snap = build({"orgs_status": 401, "orgs_error": None, "orgs_error_code": None})
+    assert snap.status == SnapshotStatus.AUTH_REQUIRED
+
+
+def test_org_list_403_with_a_different_code_is_an_error():
+    snap = build({**MEASURED_SIGNED_OUT, "orgs_error_code": "something_else"})
+    assert_error(snap, READ_ERROR)
 
 
 def test_a_failed_credits_fetch_for_the_linked_org_never_hands_over_to_another():
@@ -499,7 +662,8 @@ def test_malformed_tranche_in_a_non_selected_org_still_fails():
         lambda c: c.update(amount="100"),
         lambda c: c.update(amount=None),
         lambda c: c.update(amount=-1),
-        lambda c: c.update(amount_without_scoped_credits=None),
+        lambda c: c.update(amount_without_scoped_credits="0"),
+        lambda c: c.update(amount_without_scoped_credits=-1),
         lambda c: c.update(amount_without_scoped_credits=True),
         lambda c: c.update(currency="usd$"),
         lambda c: c.update(currency=None),
@@ -545,12 +709,19 @@ def test_diagnostics_line_is_structural_only(caplog):
 def test_diagnostics_line_for_failures(caplog):
     caplog.set_level(logging.INFO, logger="aigauge.providers.claude_api")
     build({"signed_out": True, "reason": "host"})
-    build({"orgs_status": 403, "orgs_error": "permission_error"})
+    build(
+        {
+            "orgs_status": 403,
+            "orgs_error": "permission_error",
+            "orgs_error_code": "account_session_invalid",
+        }
+    )
     build(payload(org(status=403)))
     build({"error": "AbortError"})
     messages = [r.getMessage() for r in caplog.records]
     assert messages[0].endswith("result=signed_out")
     assert "orgs_status=403" in messages[1] and "orgs_error=permission_error" in messages[1]
+    assert messages[1].endswith("orgs_error_code=account_session_invalid")
     assert "credits_statuses=403" in messages[2] and messages[2].endswith("result=no_billing_role")
     assert messages[3].endswith("result=exception error=AbortError")
 
@@ -578,7 +749,7 @@ def test_hostile_error_strings_do_not_reach_the_log_or_raw(caplog):
     caplog.set_level(logging.INFO, logger="aigauge.providers.claude_api")
     hostile = "https://platform.claude.com/api/organizations/1234-secret/prepaid/credits"
     snap = build({"error": hostile})
-    snap2 = build({"orgs_status": 403, "orgs_error": hostile})
+    snap2 = build({"orgs_status": 403, "orgs_error": hostile, "orgs_error_code": hostile})
     for text in [str(snap.raw), str(snap2.raw)] + [r.getMessage() for r in caplog.records]:
         assert "secret" not in text
     assert snap.raw["error"] == "unknown"

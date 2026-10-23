@@ -186,6 +186,7 @@ def test_payload_carries_the_amounts_and_structure_the_builder_needs(tmp_path):
     payload = result_of(tmp_path, routes({"status": 200, "body": body}))
     entry = payload["credits"][0]
     assert entry["error"] is None
+    assert entry["error_code"] is None
     assert entry["credit"] == {
         "amount": 9994,
         "amount_without_scoped_credits": 1234,
@@ -225,7 +226,11 @@ def test_login_host_redirect_is_signed_out(tmp_path):
 def test_organizations_401_reports_status_and_error_type_only(tmp_path):
     body = {"error": {"type": "authentication_error", "message": f"no session for {ORG_ID}"}}
     out = run(tmp_path, routes(orgs=body, orgs_status=401))
-    assert out["runs"][-1] == {"orgs_status": 401, "orgs_error": "authentication_error"}
+    assert out["runs"][-1] == {
+        "orgs_status": 401,
+        "orgs_error": "authentication_error",
+        "orgs_error_code": None,
+    }
     assert out["calls"] == ["/api/organizations"]
     assert ORG_ID not in json.dumps(out["runs"])
 
@@ -237,18 +242,22 @@ def test_organizations_401_reports_status_and_error_type_only(tmp_path):
 def test_error_type_must_be_a_short_lowercase_word(tmp_path, error_type):
     body = {"error": {"type": error_type}}
     payload = result_of(tmp_path, routes(orgs=body, orgs_status=403))
-    assert payload == {"orgs_status": 403, "orgs_error": None}
+    assert payload == {"orgs_status": 403, "orgs_error": None, "orgs_error_code": None}
 
 
 def test_organizations_html_body_is_status_only(tmp_path):
     route_map = routes()
     route_map["/api/organizations"] = {"status": 403, "invalid": True}
-    assert result_of(tmp_path, route_map) == {"orgs_status": 403, "orgs_error": None}
+    assert result_of(tmp_path, route_map) == {
+        "orgs_status": 403,
+        "orgs_error": None,
+        "orgs_error_code": None,
+    }
 
 
 def test_organizations_200_with_a_non_list_body_is_not_read_as_orgs(tmp_path):
     payload = result_of(tmp_path, routes(orgs={"organizations": []}))
-    assert payload == {"orgs_status": 200, "orgs_error": None}
+    assert payload == {"orgs_status": 200, "orgs_error": None, "orgs_error_code": None}
 
 
 def test_credits_refusal_reports_status_and_error_type(tmp_path):
@@ -257,12 +266,16 @@ def test_credits_refusal_reports_status_and_error_type(tmp_path):
         "body": {"error": {"type": "permission_error", "message": "Invalid authorization"}},
     }
     payload = result_of(tmp_path, routes(refused))
-    assert payload["credits"] == [{"status": 403, "error": "permission_error", "credit": None}]
+    assert payload["credits"] == [
+        {"status": 403, "error": "permission_error", "error_code": None, "credit": None}
+    ]
 
 
 def test_a_credits_200_with_an_unparsable_body_has_no_credit(tmp_path):
     payload = result_of(tmp_path, routes({"status": 200, "invalid": True}))
-    assert payload["credits"] == [{"status": 200, "error": None, "credit": None}]
+    assert payload["credits"] == [
+        {"status": 200, "error": None, "error_code": None, "credit": None}
+    ]
 
 
 def test_a_hung_fetch_aborts_and_still_settles(tmp_path):
@@ -410,3 +423,169 @@ def test_extractor_output_builds_a_snapshot(tmp_path):
     assert snap.status == SnapshotStatus.OK
     assert [m.label for m in snap.metrics] == ["Credit", "Left $87.60 · Other $12.34"]
     assert snap.metrics[0].percent_used == pytest.approx(12.4)
+
+
+# -- shapes measured on a real Console account (P2 result in the plan) -----------
+
+SIGNED_OUT_BODY = {
+    "type": "error",
+    "error": {
+        "type": "permission_error",
+        "message": f"Invalid session for {ORG_ID}",
+        "details": {
+            "error_visibility": "user_facing",
+            "error_code": "account_session_invalid",
+        },
+    },
+    "request_id": "req_011CAAAAAAAAAAAAAAAAAAAA",
+}
+REFUSAL_BODY = {
+    "type": "error",
+    "error": {"type": "permission_error", "message": f"No billing access for {ORG_ID}"},
+    "request_id": "req_011CBBBBBBBBBBBBBBBBBBBB",
+    "code": "permission_denied",
+}
+
+
+def test_organizations_signed_out_reports_the_error_code(tmp_path):
+    out = run(tmp_path, routes(orgs=SIGNED_OUT_BODY, orgs_status=403))
+    assert out["runs"][-1] == {
+        "orgs_status": 403,
+        "orgs_error": "permission_error",
+        "orgs_error_code": "account_session_invalid",
+    }
+    assert ORG_ID not in json.dumps(out["runs"])
+
+
+def test_permission_refusal_has_the_same_type_and_no_code(tmp_path):
+    payload = result_of(tmp_path, routes({"status": 403, "body": REFUSAL_BODY}))
+    assert payload["credits"] == [
+        {"status": 403, "error": "permission_error", "error_code": None, "credit": None}
+    ]
+
+
+def test_credits_signed_out_reports_the_error_code(tmp_path):
+    payload = result_of(tmp_path, routes({"status": 403, "body": SIGNED_OUT_BODY}))
+    assert payload["credits"] == [
+        {
+            "status": 403,
+            "error": "permission_error",
+            "error_code": "account_session_invalid",
+            "credit": None,
+        }
+    ]
+    assert ORG_ID not in json.dumps(payload)
+
+
+@pytest.mark.parametrize(
+    "code",
+    ["Session Invalid!", "UPPER", "x" * 41, "", 7, None, {"nested": True}],
+)
+def test_error_code_must_be_a_short_lowercase_word(tmp_path, code):
+    body = {"error": {"type": "permission_error", "details": {"error_code": code}}}
+    payload = result_of(tmp_path, routes(orgs=body, orgs_status=403))
+    assert payload == {
+        "orgs_status": 403,
+        "orgs_error": "permission_error",
+        "orgs_error_code": None,
+    }
+
+
+def test_error_without_usable_details_has_no_code(tmp_path):
+    for error in ({"type": "permission_error"}, {"type": "permission_error", "details": "x"}):
+        payload = result_of(tmp_path, routes(orgs={"error": error}, orgs_status=403))
+        assert payload["orgs_error_code"] is None
+
+
+MEASURED_NAME = "Measured Promo Grant"
+MEASURED_TRANCHE_ID = "tranche-0000-measured"
+MEASURED_PRODUCTS = ["agent_sdk", "api", "batch", "console", "product_xx", "product_yy"]
+
+
+def measured_credits_body():
+    def minor(amount):
+        return {"money": None, "credits": {"amount_minor": amount, "exponent": 2}}
+
+    return {
+        "amount": 4184,
+        "amount_without_scoped_credits": 0,
+        "currency": "USD",
+        "balance": minor(4184),
+        "balance_credits": 41,
+        "auto_reload_settings": None,
+        "auto_reload_disabled_reason": None,
+        "auto_reload_stripe_error_code": None,
+        "pending_invoice_amount_cents": None,
+        "last_paid_purchase_cents": None,
+        "expiry_policy_months": None,
+        "credit_expiry_policy": None,
+        "auto_reload_terms_banner": None,
+        "tranches": [],
+        "next_expires_at": "2026-11-05T00:00:00Z",
+        "promo_tranches": [
+            {
+                "program_id": "subscription_api_credit",
+                "currency": "USD",
+                "granted_amount_minor_units": 10000,
+                "remaining_amount_minor_units": 4183,
+                "granted_at": "2026-10-08T13:47:24.772000Z",
+                "expires_at": "2026-11-05T00:00:00Z",
+                "granted": minor(10000),
+                "remaining": minor(4183),
+                "name": MEASURED_NAME,
+                "id": MEASURED_TRANCHE_ID,
+                "scope": {
+                    "kind": "scoped",
+                    "applies_to": [
+                        {"product": p, "model_family": None, "model_version": None}
+                        for p in MEASURED_PRODUCTS
+                    ],
+                },
+            }
+        ],
+    }
+
+
+def test_measured_console_response_builds_the_credit_bar(tmp_path, caplog):
+    import logging
+    from datetime import datetime
+
+    from aigauge.models import SnapshotStatus
+    from aigauge.providers.claude_api import _build_snapshot
+
+    console_org = {
+        "uuid": ORG_ID,
+        "name": ORG_NAME,
+        "capabilities": ["api", "customer_terms:standard"],
+    }
+    chat_org = {
+        "uuid": CHAT_ORG_ID,
+        "name": "Chat " + ORG_NAME,
+        "capabilities": ["claude_max", "chat"],
+    }
+    route_map = routes(
+        {"status": 200, "body": measured_credits_body()},
+        orgs=[chat_org, console_org],
+    )
+    out = run(tmp_path, route_map)
+    assert out["calls"] == [
+        "/api/organizations",
+        f"/api/organizations/{ORG_ID}/prepaid/credits",
+    ]
+    exported = json.dumps(out["runs"][-1])
+    for secret in (
+        ORG_ID, CHAT_ORG_ID, ORG_NAME, MEASURED_NAME, MEASURED_TRANCHE_ID,
+        "agent_sdk", "product_xx", "applies_to", "model_family", "kind",
+    ):
+        assert secret not in exported
+
+    caplog.set_level(logging.INFO, logger="aigauge.providers.claude_api")
+    snap = _build_snapshot(out["runs"][-1], "claude_api", datetime(2026, 10, 23, 12, 0))
+    assert snap.status == SnapshotStatus.OK
+    credit_bar = snap.metrics[0]
+    assert credit_bar.label == "Credit"
+    assert round(credit_bar.percent_used, 2) == 58.17
+    assert credit_bar.guard_eligible is False
+    assert [m.label for m in snap.metrics] == ["Credit", "Left $41.83"]
+    assert snap.raw["other"] == "agree"
+    assert "other=agree" in caplog.records[-1].getMessage()

@@ -25,6 +25,7 @@ from .base import Provider
 
 CLAUDE_API_BILLING_URL = "https://platform.claude.com/settings/billing"
 SUBSCRIPTION_PROGRAM = "subscription_api_credit"
+_SESSION_INVALID = "account_session_invalid"
 log = logging.getLogger("aigauge.providers.claude_api")
 
 _READ_ERROR = "Couldn't read Console billing"
@@ -47,14 +48,20 @@ _NO_API_ORG_ERROR = "No Console organization with API access."
 #
 # Only structure and amounts leave the page. Org ids, names, tranche ids and
 # scope contents stay in it: the scope of each tranche becomes the index of its
-# JSON among the distinct scopes of that response. An exception reports only
-# its name, because its message can carry a URL with an org id.
+# JSON among the distinct scopes of that response. An error reports only its
+# status, its `error.type` and its `error.details.error_code`, each a short
+# lowercase word or null. An exception reports only its name, because its
+# message can carry a URL with an org id.
 EXTRACTOR_JS = r"""
 (() => {
   const S = (window.__aigaugeCredit = window.__aigaugeCredit || {});
   const errorType = body => {
     const t = body && body.error && body.error.type;
     return typeof t === 'string' && /^[a-z_]{1,40}$/.test(t) ? t : null;
+  };
+  const errorCode = body => {
+    const c = body && body.error && body.error.details && body.error.details.error_code;
+    return typeof c === 'string' && /^[a-z_]{1,40}$/.test(c) ? c : null;
   };
   const num = v => (typeof v === 'number' ? v : null);
   const word = (v, re) => (typeof v === 'string' && re.test(v) ? v : null);
@@ -109,7 +116,8 @@ EXTRACTOR_JS = r"""
       }
       const orgs = await get('/api/organizations');
       if (orgs.status !== 200 || !Array.isArray(orgs.body)) {
-        return { orgs_status: orgs.status, orgs_error: errorType(orgs.body) };
+        return { orgs_status: orgs.status, orgs_error: errorType(orgs.body),
+                 orgs_error_code: errorCode(orgs.body) };
       }
       const api = orgs.body.filter(o => o && Array.isArray(o.capabilities) &&
                                         o.capabilities.includes('api'));
@@ -117,6 +125,7 @@ EXTRACTOR_JS = r"""
       const credits = await Promise.all(api.map(o =>
         get(`/api/organizations/${o.uuid}/prepaid/credits`)
           .then(c => ({ status: c.status, error: errorType(c.body),
+                        error_code: errorCode(c.body),
                         credit: c.status === 200 ? pick(c.body) : null }))));
       return { orgs_status: 200, api_orgs: api.length, credits };
     })().then(
@@ -147,7 +156,7 @@ class _Tranche:
 class _OrgCredit:
     currency: str
     amount: int
-    amount_without_scoped: int
+    amount_without_scoped: int | None  # null is allowed; the builder decides
     subscription: tuple[_Tranche, ...]  # every subscription tranche, validated
 
 
@@ -231,8 +240,13 @@ def _parse_org(entry: Any) -> _OrgCredit:
     if not isinstance(currency, str) or not re.fullmatch(r"[A-Za-z]{3}", currency):
         raise _BadShape("currency")
     amount = _as_int(entry.get("amount"))
-    without = _as_int(entry.get("amount_without_scoped_credits"))
-    if amount is None or without is None or amount < 0 or without < 0:
+    raw_without = entry.get("amount_without_scoped_credits")
+    without = None if raw_without is None else _as_int(raw_without)
+    if (
+        amount is None
+        or amount < 0
+        or (raw_without is not None and (without is None or without < 0))
+    ):
         raise _BadShape("amount")
     raw_tranches = entry.get("promo_tranches")
     if not isinstance(raw_tranches, list):
@@ -284,15 +298,24 @@ def _group(tranches: list[_Tranche]) -> list[_Group]:
     ]
 
 
-def _other_amount(org: _OrgCredit, active: list[_Tranche]) -> tuple[bool, int]:
-    """(agree, amount) for the "Other" figure.
+def _other_amount(org: _OrgCredit, active: list[_Tranche]) -> tuple[str, int]:
+    """(state, amount) for the "Other" figure. State is agree, mismatch or none.
 
     Two independent derivations must agree: `amount` minus what remains in the
     active subscription tranches, and `amount_without_scoped_credits`. That
-    needs no assumption about what either field means.
+    needs no assumption about what either field means. The two come from
+    separately rounded figures, so each active tranche allows one minor unit
+    of difference (P2 saw the total and the tranche one unit apart). The amount
+    returned is `amount_without_scoped_credits`, or the derived one when there
+    is no active tranche to round.
     """
     derived = org.amount - sum(t.remaining for t in active)
-    return derived == org.amount_without_scoped, derived
+    without = org.amount_without_scoped
+    if without is None:
+        return "none", derived
+    if abs(derived - without) <= len(active):
+        return "agree", without
+    return "mismatch", derived
 
 
 # -- snapshot -----------------------------------------------------------------
@@ -326,7 +349,7 @@ def _diag_line(diag: dict[str, Any]) -> str:
         f"other={diag.get('other', '-')}",
         f"result={diag.get('result', '-')}",
     ]
-    for key in ("orgs_error", "error"):
+    for key in ("orgs_error", "orgs_error_code", "error"):
         if diag.get(key):
             parts.append(f"{key}={diag[key]}")
     return " ".join(parts)
@@ -351,7 +374,9 @@ def _snapshot(
 ) -> UsageSnapshot:
     now_utc = now.astimezone(timezone.utc)
 
-    # Provisional until check P2 in docs/claude-api-credit-plan.md.
+    # Signed-out and refusal responses are the shapes measured on a Console
+    # account ("P2 result" in docs/claude-api-credit-plan.md): both are a 403
+    # permission_error, told apart only by error.details.error_code.
     if payload.get("signed_out"):
         return _fail(
             account_id, diag, "signed_out", _SIGNED_OUT_ERROR,
@@ -369,11 +394,15 @@ def _snapshot(
     orgs_error = _safe_word(payload.get("orgs_error"))
     if orgs_error:
         diag["orgs_error"] = orgs_error
+    orgs_error_code = _safe_word(payload.get("orgs_error_code"))
+    if orgs_error_code:
+        diag["orgs_error_code"] = orgs_error_code
 
-    # Provisional until check P2 in docs/claude-api-credit-plan.md.
-    if orgs_status == 401:
+    if orgs_status == 401 or (
+        orgs_status == 403 and orgs_error_code == _SESSION_INVALID
+    ):
         return _fail(
-            account_id, diag, "orgs_401", _SIGNED_OUT_ERROR,
+            account_id, diag, "orgs_signed_out", _SIGNED_OUT_ERROR,
             SnapshotStatus.AUTH_REQUIRED,
         )
     if orgs_status != 200:
@@ -398,9 +427,19 @@ def _snapshot(
 
     statuses = [_as_int(c.get("status")) for c in credits]
     diag["credits_statuses"] = [s if s is not None else 0 for s in statuses]
-    # Provisional until check P2 in docs/claude-api-credit-plan.md: a 403 is
-    # the permission refusal, and any other non-200 fails the whole refresh so
-    # a transient failure can never hand the tile to another org.
+    # A signed-out answer on any fetch fails the whole refresh as a sign-out.
+    # Otherwise a 403 is the permission refusal, and any other non-200 fails
+    # the whole refresh so a transient failure can never hand the tile to
+    # another org.
+    if any(
+        s == 401
+        or (s == 403 and _safe_word(c.get("error_code")) == _SESSION_INVALID)
+        for s, c in zip(statuses, credits)
+    ):
+        return _fail(
+            account_id, diag, "credits_signed_out", _SIGNED_OUT_ERROR,
+            SnapshotStatus.AUTH_REQUIRED,
+        )
     if any(s not in (200, 403) for s in statuses):
         return _fail(account_id, diag, "credits_status", _READ_ERROR)
 
@@ -449,9 +488,9 @@ def _subscription_snapshot(
 ) -> UsageSnapshot:
     groups = _group(active)
     diag["groups"] = len(groups)
-    agree, other = _other_amount(org, active)
-    diag["other"] = "agree" if agree else "mismatch"
-    show_other = agree and other > 0
+    state, other = _other_amount(org, active)
+    diag["other"] = state
+    show_other = state == "agree" and other > 0
 
     latest = groups[-1].expires_at
     current = [g for g in groups if g.expires_at == latest]
@@ -498,6 +537,8 @@ def _subscription_snapshot(
     metrics.append(UsageMetric(label=left_label, percent_used=None, note=left_note))
 
     for group in older:
+        if group.remaining == 0:
+            continue  # nothing left to show
         ends = _date_time_text(_local(group.expires_at))
         metrics.append(
             UsageMetric(
@@ -523,11 +564,11 @@ def _purchased_only_snapshot(
     diag: dict[str, Any],
 ) -> UsageSnapshot:
     diag["groups"] = 0
-    agree, balance = _other_amount(org, [])
-    diag["other"] = "agree" if agree else "mismatch"
-    if not agree:
-        # The two fields disagree about the purchased balance, so there is no
-        # figure to trust.
+    state, balance = _other_amount(org, [])
+    diag["other"] = state
+    if state != "agree":
+        # The two fields disagree about the purchased balance, or one is
+        # missing, so there is no figure to trust.
         return _fail(account_id, diag, "bad_shape", _READ_ERROR)
     diag["result"] = "purchased_only"
     return UsageSnapshot(

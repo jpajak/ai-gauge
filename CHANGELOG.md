@@ -5,6 +5,7 @@
 ### Added
 
 - Optional MiniMax Coding Plan tile showing the 5-hour and weekly limits. It is off by default; turn it on from its Settings page and enter each account's Coding Plan API key and region (International or China). The key is sent only to that region's API host. ([#13](https://github.com/jpajak/ai-gauge/issues/13), thanks [@innoscoutpro](https://github.com/innoscoutpro).)
+- Optional Claude API tile showing how much of the monthly API credit included with Claude Max and Team plans is used, what is left, and when it expires. It is off by default and signs in to the Claude Console separately from claude.ai.
 
 ## 0.8.5 - 2026-10-08
 

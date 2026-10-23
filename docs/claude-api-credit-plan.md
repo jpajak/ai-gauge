@@ -1,8 +1,8 @@
 # Plan: show the monthly Claude API credit (Max and Team plans)
 
-**Status:** in progress since 2026-10-23. Commits 1 and 2 need neither check
-in [Before the build](#before-the-build); commit 3 needs P1, and the
-provider's signed-out and permission rules stay provisional until P2. First
+**Status:** in progress since 2026-10-23. Commit 2 is in; commit 1 is being
+built. P1 is recorded. P2 has a partial result: the provider's signed-out and
+permission rules stay provisional until its rerun. First
 written 2026-10-08; revised 2026-10-23 after an outside review, whose points
 are folded into [Review outcome](#review-outcome-2026-10-23).
 **Found while:** asking how to monitor the new subscriber API credit
@@ -175,6 +175,25 @@ HttpOnly and Expires. Not the values.
   `provider-registry-plan.md:167-174` for this provider.
 - The Expires value is the first clue to how long a Console session lasts.
 
+**P1 result (2026-10-23).** Stable session cookies exist, so `d3c98d1` is
+not needed:
+
+| Cookie | Domain | HttpOnly | Expires |
+|---|---|---|---|
+| `sessionKey` | `.platform.claude.com` | yes | 2026-10-30 or 31 |
+| `sessionKeyV3` | `platform.claude.com` | yes | 2026-10-30 or 31 |
+| `sessionKeyLC`, `sessionKeyV3LC` | as above | no | as above |
+| `routingHint` (two) | both forms | yes | 2026-11 |
+| `activitySessionId` | `platform.claude.com` | yes | 2026-10 |
+| `__cf_bm`, `lastActiveOrg`, analytics | `.claude.com` | mixed | various |
+
+`CookieSpec(domain="platform.claude.com", name="sessionKey",
+aliases=("sessionKey", "sessionKeyV3"))`. `_domain_matches` strips the
+leading dot, so both forms match, and the `.claude.com` cookies (Cloudflare's
+`__cf_bm`, analytics) stay out; the scraper's own page load gets a fresh
+`__cf_bm`. The session cookies expire about a week after the reading. Whether
+they roll forward on use is not known yet.
+
 **P2. Response shapes.** Paste this into the DevTools console of a
 platform.claude.com tab (Chrome asks to type "allow pasting" first). It makes
 only GETs and copies a sanitized result to the clipboard. Ids, names and
@@ -212,10 +231,21 @@ messages come out as `"string"`.
                                       keys: Object.keys(o).sort() })) },
     credits,
   };
-  copy(JSON.stringify(out, null, 2));
-  console.log('Copied to clipboard', out);
+  window.__aigaugeProbe = JSON.stringify(out, null, 2);
+  console.log(window.__aigaugeProbe);
 })();
 ```
+
+Then run `copy(__aigaugeProbe)` on its own line. DevTools' `copy()` exists
+only at the console's top level, not after an `await`, which is why the first
+run ended in "copy is not defined".
+
+**P2 partial result (2026-10-23).** The first run died at `copy()`, after its
+requests. The console showed `/api/organizations` without cookies answering
+**403**, and one org's `prepaid/credits` answering 403 (most likely the chat
+org). A dead session and a permission refusal are therefore both 403, and
+only the response body can tell them apart. The rerun is still needed for
+that.
 
 What each part settles:
 
@@ -314,7 +344,8 @@ In `providers/registry.py`:
 - `LoginSpec(url="https://platform.claude.com/login",
   window_title="Sign in to Claude Console", prompt_name="Claude Console",
   hosts=("claude.com", "anthropic.com"))`.
-- `CookieSpec` from P1.
+- `CookieSpec(domain="platform.claude.com", name="sessionKey",
+  aliases=("sessionKey", "sessionKeyV3"))`, from P1.
 - `usage_url="https://platform.claude.com/settings/billing"`,
   `paste_cookie=False`.
 - `settings_hint`: the shared browser sign-in hint, plus one sentence that the
@@ -589,8 +620,8 @@ Fixtures come from the P2 output.
 2. Guard plumbing: `UsageMetric.guard_eligible`, `ProviderSpec.usage_guard`,
    the cache change, the hidden pause row, `docs/mcp.md`, MCP and Settings
    tests against a test-only spec.
-3. If P1 found no stable cookie, first cherry-pick `d3c98d1` and update the
-   registry plan's note on it. Then the spec (with `usage_guard=False`),
+3. The spec (with `usage_guard=False`; P1 found stable cookies, so no
+   cherry-pick of `d3c98d1`),
    toggle, migration, verify target, and `guard_eligible=False` on the Credit
    bar. Registry, config, domain, verify and MCP tests. **Gate:** John signs
    in to the Console through the gauge and the tile reads a balance.

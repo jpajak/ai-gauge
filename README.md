@@ -15,20 +15,21 @@
 
 AI Gauge is a compact desktop monitor for **Claude.ai**, the **Claude API**
 credit included with Max and Team plans, **ChatGPT Codex**, **MiniMax Coding
-Plan**, **OpenCode Go**, **GitHub Copilot**, and **OpenRouter**. It shows usage
-limits, reset times, balances, and spend at a glance. Optional local tracking estimates the API-equivalent cost of Claude
-Code and Codex activity on this computer.
+Plan**, **OpenCode Go**, **GitHub Copilot**, **OpenRouter**, and **Antigravity**
+(through Google's local `agy` CLI). It shows usage limits, reset times,
+balances, and spend at a glance. Optional local tracking estimates the
+API-equivalent cost of Claude Code and Codex activity on this computer.
 
 - **Windows / Linux** — always-on-top draggable frameless widget plus a system-tray icon.
-- **macOS** — Stats-style menu-bar item (`● Cl 42% ● Cx 78% ● Co 15%`); the panel opens as a popover when you click it.
+- **macOS**: Stats-style menu-bar item (`● Cl 42% ● Cx 78% ● Cp 15%`); the panel opens as a popover when you click it.
 
 > **Requires Python 3.11+.** Secrets live in the OS-native credential store (Windows Credential Manager / DPAPI, macOS Keychain, Linux Secret Service). Auto-start uses the platform's standard mechanism (Windows Task Scheduler / LaunchAgent / `~/.config/autostart`).
 
 Current version: **0.8.5**. See [CHANGELOG.md](CHANGELOG.md) for release notes.
 
 AI Gauge is an independent open-source project and unofficial local desktop
-utility. It is not affiliated with Anthropic, OpenAI, GitHub, Microsoft,
-OpenRouter, or any other provider. Provider pages and APIs may change without
+utility. It is not affiliated with Anthropic, OpenAI, Google, GitHub, Microsoft,
+MiniMax, OpenRouter, or any other provider. Provider pages and APIs may change without
 notice.
 
 ## Screenshots
@@ -77,7 +78,7 @@ python3 -m venv .venv
 ./.venv/bin/python -m aigauge
 ```
 
-On first launch the widget appears with enabled provider tiles. Claude and Codex use a **Sign in** or **Paste cookie** flow; OpenCode Go, GitHub Copilot, and OpenRouter are configured from Settings with API credentials. MiniMax Coding Plan is also configured with an API key, and is off by default. Claude API, off by default, uses its own **Sign in** to the Claude Console. Open Settings to disable providers you don't use or to add more Claude, Claude API, Codex, MiniMax, or OpenCode Go accounts.
+On first launch the widget appears with enabled provider tiles. Claude and Codex use a **Sign in** or **Paste cookie** flow; OpenCode Go, GitHub Copilot, and OpenRouter are configured from Settings with API credentials. MiniMax Coding Plan is also configured with an API key, and is off by default. Claude API, off by default, uses its own **Sign in** to the Claude Console. Antigravity, also off by default, runs the local `agy` CLI and needs no credentials in AI Gauge. Open Settings to disable providers you don't use or to add more Claude, Claude API, Codex, MiniMax, or OpenCode Go accounts.
 
 ## First-time setup per provider
 
@@ -90,7 +91,7 @@ On first launch the widget appears with enabled provider tiles. Claude and Codex
 | **MiniMax Coding Plan** | Off by default: enable **MiniMax** on **Settings → MiniMax**, then paste the Coding Plan API key beside each subscription name (keys usually start with `sk-cp-`). Each account has an independent key and tile, and picks its region (International or China): its key is sent only to that region's API host. AI Gauge stores keys in the system credential store. It shows the 5-hour and weekly limits; a weekly limit the plan does not cap shows as **Unlimited**. API credit balance is not tracked. |
 | **GitHub Copilot** | Create a **fine-grained PAT** at <https://github.com/settings/personal-access-tokens/new>. For personal plans, add **Account permissions → Plan → Read**. Paste into Settings; set your monthly AI credit allowance (Pro=1,500, Pro+=7,000, Max=20,000). If Copilot is billed through an organization, enter the billing org and use a token/account with org billing access and **Organization permissions → Administration → Read**. |
 | **OpenRouter**     | Create a management key at <https://openrouter.ai/settings/provisioning-keys> and paste it into Settings. It shows the account balance, today's and this month's spend across all your API keys, spend per key, and model activity. Without a management key, an inference API key from <https://openrouter.ai/keys> shows spend for that one key only. Daily spend budget is optional. |
-| **Antigravity**    | Off by default: enable **Antigravity** in **Settings → General**. AI Gauge runs Google's local `agy` CLI (`agy --print /quota`) on each refresh and shows the quota it reports. No account or API key is entered in AI Gauge; it shows whatever your installed `agy` returns. Leave **agy CLI** empty in **Settings → Antigravity** to auto-detect it (`agy` on `PATH`, then `%LOCALAPPDATA%\agy\bin\agy.exe` on Windows), or set the path. The tile shows Gemini and Claude+GPT quotas, with a 5-hour and a weekly row where the plan has them; choose which groups to show on the Antigravity page. |
+| **Antigravity**    | Off by default: enable **Antigravity** on **Settings → Antigravity**. AI Gauge runs Google's local `agy` CLI (`agy --print /quota`) on each refresh and shows the quota it reports. No account or API key is entered in AI Gauge; it shows whatever your installed `agy` returns. Leave **agy CLI** empty on that page to auto-detect it (`agy` on `PATH`, then `%LOCALAPPDATA%\agy\bin\agy.exe` on Windows), or set the path. The tile shows Gemini and Claude+GPT quotas, with a 5-hour and a weekly row where the plan has them; choose which groups to show on the Antigravity page. |
 
 ### Multiple Claude / Claude API / Codex / MiniMax / OpenCode Go accounts
 
@@ -127,7 +128,7 @@ General → Sign-in browser**. The flow is local:
    passkey.
 3. AI Gauge watches the temporary browser through a random loopback-only
    debugging port and accepts cookies only for the selected provider:
-   `claude.ai` or `chatgpt.com`.
+   `claude.ai`, `platform.claude.com` (Claude API) or `chatgpt.com`.
 4. The provider session is copied into that AI Gauge account's persistent
    browser profile and OS-protected secret storage. Google cookies and cookies
    for unrelated sites are ignored.
@@ -150,7 +151,7 @@ Sessions persist between runs under the per-OS app-data directory:
 
 | OS      | App data                                  | Secrets backend                           |
 | ------- | ----------------------------------------- | ----------------------------------------- |
-| Windows | `%APPDATA%/ai-gauge/`                     | Credential Manager (GitHub PAT + OpenRouter keys) + DPAPI-encrypted `secrets.dat` (cookies, since the Credential Manager blob limit is too small for ChatGPT JWTs) |
+| Windows | `%APPDATA%/ai-gauge/`                     | Credential Manager (GitHub PAT, OpenRouter, OpenCode and MiniMax keys) + DPAPI-encrypted `secrets.dat` (cookies, since the Credential Manager blob limit is too small for ChatGPT JWTs) |
 | macOS   | `~/Library/Application Support/ai-gauge/` | Login Keychain                            |
 | Linux   | `~/.config/ai-gauge/`                     | Secret Service (GNOME Keyring / KWallet)  |
 
@@ -228,7 +229,7 @@ Tests need the dev extras, which the run-from-source install above omits:
 
 The automated suite covers provider parsing, configuration, UI behavior,
 local usage tracking, MCP guards, credential storage, and platform
-integration. Live Claude and Codex browser sessions are validated manually.
+integration. Live Claude, Claude API and Codex browser sessions are validated manually.
 
 ## MCP usage guard
 
@@ -254,8 +255,8 @@ the issue templates to use.
 ## Notes / limitations
 
 - **Why does Sign in open a separate Chrome-family window?** Google blocks OAuth in embedded user-agents, while Chrome's App-Bound Encryption prevents AI Gauge from reading an existing everyday browser profile. AI Gauge therefore opens a fresh temporary browser profile, receives only the selected provider's cookies through Chrome's loopback debugging interface, imports them into the app, and deletes the temporary profile.
-- **Claude / Codex layouts may change.** If a browser-backed provider tile shows "error" after an upstream UI update, its page-extractor JS under `src/aigauge/providers/` may need adjusting — the rest of the app keeps working.
-- **Remote desktops and GPU-less sessions need one caveat.** The gauge is plain Qt Widgets and runs anywhere, including over RDP/XRDP and on machines with no GPU. Claude, Claude API, and Codex are read by driving an embedded Chromium, which needs an OpenGL context; a session offering neither GLX nor EGL cannot provide one. In that case those tiles report that they need a browser, while MiniMax, OpenCode Go, GitHub Copilot, and OpenRouter use API credentials and work normally. Most Linux desktops supply software GL through Mesa, so this only bites on bare X servers and some remote sessions. If AI Gauge misjudges your session, set `AIGAUGE_FORCE_WEBENGINE=1` to skip the check.
+- **Claude, Claude API and Codex pages may change.** If a browser-backed provider tile shows "error" after an upstream UI update, its page-extractor JS under `src/aigauge/providers/` may need adjusting; the rest of the app keeps working.
+- **Remote desktops and GPU-less sessions need one caveat.** The gauge is plain Qt Widgets and runs anywhere, including over RDP/XRDP and on machines with no GPU. Claude, Claude API, and Codex are read by driving an embedded Chromium, which needs an OpenGL context; a session offering neither GLX nor EGL cannot provide one. In that case those tiles report that they need a browser, while MiniMax, OpenCode Go, GitHub Copilot, and OpenRouter use API credentials and Antigravity runs a local CLI, so they work normally. Most Linux desktops supply software GL through Mesa, so this only bites on bare X servers and some remote sessions. If AI Gauge misjudges your session, set `AIGAUGE_FORCE_WEBENGINE=1` to skip the check.
 - The Copilot REST endpoint returns the _current calendar month_ of billing usage. The widget tracks gross AI credits consumed against the included allowance; net quantity/amount is only the billable overage. Reset is computed as the 1st of the next month. GitHub does not currently expose a reliable personal-plan allowance field, so Settings uses a plan dropdown with a Custom fallback. Annual/request-based accounts are handled with a legacy premium-request fallback.
 - **Copilot usage lags upstream.** The Copilot REST endpoint updates noticeably slower than Claude or Codex — credit counts can take hours to reflect recent activity. The widget shows the most recent value GitHub returns; treat the Copilot tile as a trailing indicator, not real-time.
 - **Copilot AI credits.** GitHub moved Copilot from per-request quotas to token-based AI credits. Code completions and next edit suggestions remain included for paid plans, while Chat, CLI, cloud agent, Spaces, Spark, and third-party coding agents consume AI credits. The app shows the credit usage GitHub returns; if your account is org-billed, enter the billing organization so AI Gauge reads the organization billing pool.

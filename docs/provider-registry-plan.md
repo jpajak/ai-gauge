@@ -1,5 +1,7 @@
 # Provider registry: plan
 
+**Status:** built, unreleased. See As built.
+
 Assessed 2026-10-19 against `main` at `f87036c` (0.8.5), prompted by issue
 #12 (Langdock), issue #13 and PR #14 (MiniMax).
 

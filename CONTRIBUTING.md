@@ -3,13 +3,16 @@
 Thanks for your interest. AI Gauge is a small cross-platform desktop utility,
 so most contributions fall into one of three buckets:
 
-- **Provider layout fixes** — when Claude or Codex change their
+- **Provider layout fixes**: when Claude, Claude API or Codex change their
   usage page and a tile starts showing `error · layout changed`. These are
   the most common and most welcome PRs.
 - **Bug reports and small bug fixes** — anything around tray, widget,
   cookie storage, settings, or refresh logic.
 - **New providers or new features** — please open an issue first so we can
   agree on scope before you write code.
+
+A new provider is one `ProviderSpec` in `src/aigauge/providers/registry.py`;
+see [Adding a provider](docs/provider-registry-plan.md#adding-a-provider).
 
 ## Development environment
 
@@ -78,7 +81,7 @@ does not need Screen Recording permission or include other desktop content.
 Use the issue templates under [.github/ISSUE_TEMPLATE/](.github/ISSUE_TEMPLATE/):
 
 - **Bug report** — generic crashes, UI issues, settings glitches.
-- **Provider layout broken** — a Claude or Codex tile started failing.
+- **Provider layout broken**: a Claude, Claude API or Codex tile started failing.
 - **Feature request** — new ideas worth discussing before code.
 
 For anything that exposes session cookies or tokens, please follow

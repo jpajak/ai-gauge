@@ -1,11 +1,11 @@
 name: Provider layout broken
-description: Claude, Codex, or OpenCode tile shows `error · layout changed` or empty values after a provider UI update.
+description: Claude, Claude API, or Codex tile shows `error · layout changed` or empty values after a provider UI update.
 labels: [provider-layout]
 body:
   - type: markdown
     attributes:
       value: |
-        AI Gauge scrapes Claude.ai, ChatGPT Codex, and OpenCode usage pages.
+        AI Gauge reads the Claude.ai, Claude Console, and ChatGPT Codex usage pages.
         When those pages change shape upstream, the corresponding page
         extractor under `src/aigauge/providers/` needs adjusting. These
         reports are very welcome.
@@ -18,8 +18,8 @@ body:
       label: Which provider tile is broken?
       options:
         - Claude.ai
+        - Claude API
         - ChatGPT Codex
-        - OpenCode
         - Multiple providers
     validations:
       required: true
@@ -61,6 +61,6 @@ body:
       label: Relevant log lines
       description: |
         From `ai-gauge.log` in the per-OS app-data directory. Look for
-        `provider=claude`, `provider=codex`, or `provider=opencode_go`
+        `provider=claude`, `provider=claude_api`, or `provider=codex`
         lines around the failed refresh.
       render: text

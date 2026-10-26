@@ -33,11 +33,13 @@ def test_defaults():
         "claude",
         "codex",
         "opencode_go",
+        "minimax",
     ]
     assert [a.kind for a in c.browser_accounts] == [
         "claude",
         "codex",
         "opencode_go",
+        "minimax",
     ]
     assert c.providers.copilot is True
     assert c.providers.opencode_go is False
@@ -241,6 +243,7 @@ def test_load_migrates_old_refresh_interval_to_active_rate():
         ("claude", "claude", True),
         ("codex", "codex", True),
         ("opencode_go", "opencode_go", True),
+        ("minimax", "minimax", True),
     ]
 
 
@@ -269,6 +272,7 @@ def test_load_migrates_legacy_provider_toggles_to_browser_accounts():
         ("claude", "claude", False),
         ("codex", "codex", True),
         ("opencode_go", "opencode_go", True),
+        ("minimax", "minimax", True),
     ]
 
 
@@ -277,7 +281,7 @@ def test_upgraded_config_without_fable_key_shows_the_limit():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         '{"providers": {"claude": true},'
-        ' "browser_accounts_version": 2,'
+        ' "browser_accounts_version": 3,'
         ' "browser_accounts": ['
         '{"id": "claude", "kind": "claude"},'
         '{"id": "claude-work", "kind": "claude"}]}',
@@ -293,7 +297,7 @@ def test_explicitly_disabled_fable_account_stays_disabled():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
         '{"providers": {"claude": true},'
-        ' "browser_accounts_version": 2,'
+        ' "browser_accounts_version": 3,'
         ' "browser_accounts": ['
         '{"id": "claude", "kind": "claude", "show_fable": false},'
         '{"id": "claude-work", "kind": "claude"}]}',
@@ -312,14 +316,15 @@ def test_load_adds_opencode_without_restoring_removed_claude_or_codex():
     c = Config.load()
 
     assert [(a.id, a.kind) for a in c.browser_accounts] == [
-        ("opencode_go", "opencode_go")
+        ("opencode_go", "opencode_go"),
+        ("minimax", "minimax"),
     ]
 
 
-def test_load_preserves_explicitly_removed_accounts_after_v2_migration():
+def test_load_preserves_explicitly_removed_accounts_after_v3_migration():
     config_path().parent.mkdir(parents=True, exist_ok=True)
     config_path().write_text(
-        '{"browser_accounts": [], "browser_accounts_version": 2}',
+        '{"browser_accounts": [], "browser_accounts_version": 3}',
         encoding="utf-8",
     )
 
@@ -342,7 +347,78 @@ def test_load_migrates_single_opencode_colors_to_account():
 
     assert account is not None
     assert account.colors.green_max == 20
-    assert c.browser_accounts_version == 2
+    assert c.browser_accounts_version == 3
+
+
+def test_load_adds_one_minimax_account_to_a_version_2_config():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts_version": 2, "browser_accounts": ['
+        '{"id": "claude", "kind": "claude"},'
+        '{"id": "opencode_go", "kind": "opencode_go"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [(a.id, a.kind, a.name, a.enabled) for a in c.browser_accounts] == [
+        ("claude", "claude", None, True),
+        ("opencode_go", "opencode_go", None, True),
+        ("minimax", "minimax", None, True),
+    ]
+    assert c.browser_accounts_version == 3
+    assert c.providers.minimax is False
+
+
+def test_load_does_not_resurrect_a_removed_minimax_account():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts_version": 3, "browser_accounts": ['
+        '{"id": "claude", "kind": "claude"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [a.id for a in c.browser_accounts] == ["claude"]
+    assert c.browser_accounts_version == 3
+
+
+def test_load_keeps_an_existing_minimax_account_in_a_version_2_config():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts_version": 2, "browser_accounts": ['
+        '{"id": "minimax-work", "kind": "minimax", "name": "Work"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [(a.id, a.name) for a in c.browser_accounts] == [
+        ("minimax-work", "Work")
+    ]
+
+
+def test_a_fresh_config_has_a_minimax_account_at_the_current_version():
+    c = Config()
+
+    assert [(a.id, a.kind) for a in c.browser_accounts if a.kind == "minimax"] == [
+        ("minimax", "minimax")
+    ]
+    assert c.browser_accounts_version == 3
+
+
+def test_load_runs_both_account_steps_for_a_version_1_config():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts": [{"id": "claude", "kind": "claude"}]}',
+        encoding="utf-8",
+    )
+
+    c = Config.load()
+
+    assert [a.id for a in c.browser_accounts] == ["claude", "opencode_go", "minimax"]
+    assert c.browser_accounts_version == 3
 
 
 def test_browser_account_display_names():
@@ -416,6 +492,7 @@ def test_provider_order_puts_saved_kinds_first_then_the_rest():
         "claude",
         "codex",
         "opencode_go",
+        "minimax",
         "copilot",
         "antigravity",
     )
@@ -435,3 +512,52 @@ def test_provider_order_survives_a_save_and_load():
     c.save()
 
     assert Config.load().provider_order == ["antigravity", "claude"]
+
+
+def test_account_region_defaults_to_international():
+    assert BrowserAccount(id="minimax", kind="minimax").region == "international"
+
+
+def test_account_region_round_trips_through_save_and_load():
+    c = Config(
+        browser_accounts=[
+            BrowserAccount(id="minimax", kind="minimax", region="china"),
+            BrowserAccount(id="minimax-work", kind="minimax"),
+        ]
+    )
+    c.save()
+
+    loaded = Config.load()
+
+    assert [a.region for a in loaded.browser_accounts] == ["china", "international"]
+
+
+def test_existing_accounts_without_a_region_load_as_international():
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"browser_accounts_version": 3,'
+        ' "browser_accounts": [{"id": "minimax", "kind": "minimax"}]}',
+        encoding="utf-8",
+    )
+
+    assert Config.load().browser_accounts[0].region == "international"
+
+
+def test_invalid_account_region_is_rejected_and_load_falls_back_to_defaults(caplog):
+    # Like any other invalid field, a bad region fails validation, and
+    # Config.load() answers a validation error with the defaults (it does not
+    # coerce the value or keep the rest of the file).
+    with pytest.raises(ValidationError):
+        BrowserAccount(id="minimax", kind="minimax", region="mars")
+    config_path().parent.mkdir(parents=True, exist_ok=True)
+    config_path().write_text(
+        '{"refresh_interval_minutes": 17, "browser_accounts_version": 3,'
+        ' "browser_accounts": ['
+        '{"id": "minimax", "kind": "minimax", "region": "mars"}]}',
+        encoding="utf-8",
+    )
+
+    loaded = Config.load()
+
+    assert loaded.refresh_interval_minutes == 60
+    assert "using defaults" in caplog.text

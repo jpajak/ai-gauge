@@ -40,12 +40,15 @@ from .menubar import render_menubar_pixmap
 from .models import SnapshotStatus, UsageSnapshot
 from .platforms import autostart_command, get_platform
 from .providers.base import Provider, ProviderSignals
-from .providers.claude import ClaudeProvider
-from .providers.codex import CodexProvider
-from .providers.copilot import CopilotProvider
-from .providers.openrouter import OpenRouterProvider
-from .providers.antigravity import AntigravityProvider
-from .providers.opencode_go import OpenCodeGoProvider
+from .providers.registry import (
+    PROVIDER_SPECS,
+    account_family,
+    account_kinds,
+    api_key_kinds,
+    browser_session_kinds,
+    provider_spec,
+    single_specs,
+)
 from .ratio import RatioStore, sessions_per_week
 from .ratio_dialog import RatioHistoryDialog
 from .settings_dialog import SettingsDialog
@@ -72,8 +75,9 @@ def _login_window_class():
 log = logging.getLogger("aigauge.app")
 
 LOGIN_URLS = {
-    "claude": ("https://claude.ai/login", "Sign in to Claude"),
-    "codex": ("https://chatgpt.com/auth/login", "Sign in to ChatGPT"),
+    spec.id: (spec.login.url, spec.login.window_title)
+    for spec in PROVIDER_SPECS
+    if spec.login is not None
 }
 
 _ACTIVE_MODE_MINUTES = 30
@@ -94,18 +98,16 @@ def _enabled_providers(config: Config) -> tuple[str, ...]:
     # Compatibility for pre-multi-account config-like objects. An explicit
     # empty list is authoritative and must not resurrect removed accounts.
     if configured_accounts is None:
-        if getattr(config.providers, "claude", False):
-            entries.append(("claude", "claude"))
-        if getattr(config.providers, "codex", False):
-            entries.append(("codex", "codex"))
-        if getattr(config.providers, "opencode_go", False):
-            entries.append(("opencode_go", "opencode_go"))
-    if config.providers.copilot:
-        entries.append(("copilot", "copilot"))
-    if config.providers.openrouter:
-        entries.append(("openrouter", "openrouter"))
-    if getattr(config.providers, "antigravity", False):
-        entries.append(("antigravity", "antigravity"))
+        entries.extend(
+            (kind, kind)
+            for kind in account_kinds()
+            if getattr(config.providers, kind, False)
+        )
+    entries.extend(
+        (spec.id, spec.id)
+        for spec in single_specs()
+        if getattr(config.providers, spec.id, False)
+    )
     order = provider_order(config)
     rank = {kind: index for index, kind in enumerate(order)}
     entries.sort(key=lambda entry: rank.get(entry[0], len(order)))
@@ -450,44 +452,19 @@ class App(QObject):
             if not getattr(self._config.providers, account.kind, False):
                 continue
             desired_tiles.add(account.id)
-            if account.kind == "claude":
-                self._providers[account.id] = ClaudeProvider(
-                    parent=self,
-                    account_id=account.id,
-                    show_fable=account.show_fable,
-                )
-            elif account.kind == "codex":
-                self._providers[account.id] = CodexProvider(
-                    parent=self,
-                    account_id=account.id,
-                )
-            elif account.kind == "opencode_go":
-                self._providers[account.id] = OpenCodeGoProvider(
-                    self._config,
-                    parent=self,
-                    account_id=account.id,
-                )
+            # browser_accounts() only returns kinds the registry knows.
+            spec = provider_spec(account.kind)
+            self._providers[account.id] = spec.make(self._config, account, self)
             self._widget.ensure_tile(
                 account.id,
                 display_name_for_account(self._config, account.id),
             )
-        if self._config.providers.copilot:
-            self._providers["copilot"] = CopilotProvider(self._config)
-            desired_tiles.add("copilot")
-            self._widget.ensure_tile("copilot", "Copilot")
-        if self._config.providers.openrouter:
-            self._providers["openrouter"] = OpenRouterProvider(self._config)
-            desired_tiles.add("openrouter")
-            self._widget.ensure_tile("openrouter", "OpenRouter")
-        if self._config.providers.antigravity:
-            antigravity = self._config.antigravity
-            self._providers["antigravity"] = AntigravityProvider(
-                cli_path=antigravity.cli_path,
-                show_gemini=antigravity.show_gemini,
-                show_third_party=antigravity.show_third_party,
-            )
-            desired_tiles.add("antigravity")
-            self._widget.ensure_tile("antigravity", "Antigravity")
+        for spec in single_specs():
+            if not getattr(self._config.providers, spec.id, False):
+                continue
+            self._providers[spec.id] = spec.make(self._config, None, self)
+            desired_tiles.add(spec.id)
+            self._widget.ensure_tile(spec.id, spec.display_name)
         for tile_id in list(self._widget._tiles):  # noqa: SLF001
             if tile_id not in desired_tiles:
                 self._widget.remove_tile(tile_id)
@@ -596,10 +573,7 @@ class App(QObject):
         if manual:
             self._widget.mark_loading(
                 {
-                    name: {
-                        "copilot": "Copilot",
-                        "openrouter": "OpenRouter",
-                    }.get(name, display_name_for_account(self._config, name))
+                    name: display_name_for_account(self._config, name)
                     for name in self._refresh_queue
                 }
             )
@@ -879,7 +853,8 @@ class App(QObject):
     def open_login(self, provider: str) -> None:
         draft = self._draft_browser_account(provider)
         kind = draft.kind if draft is not None else account_kind(self._config, provider)
-        if kind == "opencode_go":
+        if kind in api_key_kinds():
+            # API-key accounts have no sign-in; take the user to the key field.
             self.open_settings()
             if self._settings_dialog is not None:
                 self._settings_dialog.show_provider(kind, provider)
@@ -924,9 +899,8 @@ class App(QObject):
     def open_cookie_paste(self, provider: str) -> None:
         draft = self._draft_browser_account(provider)
         kind = draft.kind if draft is not None else account_kind(self._config, provider)
-        if kind is None:
-            return
-        if kind == "opencode_go":
+        spec = provider_spec(kind)
+        if spec is None or not spec.paste_cookie:
             return
         display_name = (
             account_display_name(draft)
@@ -1062,7 +1036,7 @@ class App(QObject):
         accounts = [
             account
             for account in self._config.browser_accounts
-            if account.enabled and account.kind in ("claude", "codex")
+            if account.enabled and account.kind in browser_session_kinds()
         ]
         if not accounts:
             empty = menu.addAction("No Claude or Codex accounts")
@@ -1344,14 +1318,8 @@ class App(QObject):
             self._raise_settings_dialog()
 
     def _on_tile_expanded_changed(self, provider: str, expanded: bool) -> None:
-        compact_collapsible = (
-            provider == "opencode_go"
-            or provider.startswith("opencode_go-")
-            or provider == "claude"
-            or provider == "codex"
-            or provider.startswith("claude-")
-            or provider.startswith("codex-")
-        )
+        family = provider_spec(account_family(provider))
+        compact_collapsible = family is not None and family.compact_collapse
         if compact_collapsible:
             current = list(getattr(self._config, "collapsed_tiles", []) or [])
             if not expanded and provider not in current:

@@ -60,14 +60,14 @@ from .config import (
     account_display_name,
     app_data_dir,
     browser_accounts,
+    get_account_api_key,
     get_github_pat,
-    get_opencode_go_key,
     get_openrouter_key,
     get_openrouter_mgmt_key,
     provider_base_name,
     provider_order as config_provider_order,
+    set_account_api_key,
     set_github_pat,
-    set_opencode_go_key,
     set_openrouter_key,
     set_openrouter_mgmt_key,
 )
@@ -75,8 +75,19 @@ from .error_dialog import reveal_path
 from .icons import app_icon
 from .local_usage.settings_panel import LocalUsagePanel
 from .logging_setup import log_path
-from .providers.claude import CLAUDE_USAGE_URL
-from .providers.codex import CODEX_USAGE_URL
+# The usage buttons read spec.usage_url; these stay importable from here for
+# callers and tests that name the provider constants.
+from .providers.claude import CLAUDE_USAGE_URL  # noqa: F401
+from .providers.codex import CODEX_USAGE_URL  # noqa: F401
+from .providers.minimax import MINIMAX_USAGE_URLS
+from .providers.registry import (
+    PROVIDER_SPECS,
+    ProviderSpec,
+    account_kinds,
+    account_specs,
+    provider_spec,
+    single_specs,
+)
 from .providers.antigravity import (
     is_agy_file_name,
     normalize_cli_path,
@@ -515,6 +526,12 @@ class _ColorThresholdLauncher(QWidget):
         return self.colors.model_copy(deep=True)
 
 
+_MINIMAX_REGION_CHOICES = (
+    ("International (api.minimax.io)", "international"),
+    ("China (api.minimax.cn)", "china"),
+)
+
+
 class _BrowserAccountRow(QWidget):
     sign_in_clicked = pyqtSignal(str)
     paste_cookie_clicked = pyqtSignal(str)
@@ -532,15 +549,17 @@ class _BrowserAccountRow(QWidget):
         self.account_id = account.id
         self.kind = account.kind
         self.colors = account.colors.model_copy(deep=True)
+        self.region = account.region
         self.api_key_edit: QLineEdit | None = None
         self.clear_api_key_cb: QCheckBox | None = None
         self._had_existing_api_key = False
 
         self.name_edit = QLineEdit()
         self.name_edit.setText(account.name or "")
+        # Each kind's default account has the kind as its id.
         self.name_edit.setPlaceholderText(
             "Default account"
-            if account.id in ("claude", "codex", "opencode_go")
+            if account.id in account_kinds()
             else "Account name"
         )
         self.name_edit.setMinimumWidth(120)
@@ -560,7 +579,9 @@ class _BrowserAccountRow(QWidget):
         account_actions.setContentsMargins(0, 0, 0, 0)
         account_actions.setSpacing(6)
         account_actions.addWidget(self.name_edit, 1)
-        if account.kind != "opencode_go":
+        spec = provider_spec(account.kind)
+        is_api_key = spec is not None and spec.auth == "api_key"
+        if not is_api_key:
             sign_in = QPushButton("Sign in")
             sign_in.setObjectName(f"{account.id}_signin_btn")
             sign_in.setFixedWidth(68)
@@ -572,14 +593,15 @@ class _BrowserAccountRow(QWidget):
             )
             account_actions.addWidget(sign_in)
 
-            paste = QPushButton("Paste cookie")
-            paste.setObjectName(f"{account.id}_paste_cookie_btn")
-            paste.setFixedWidth(92)
-            paste.setToolTip("Paste a session cookie for this account.")
-            paste.clicked.connect(
-                lambda: self.paste_cookie_clicked.emit(self.account_id)
-            )
-            account_actions.addWidget(paste)
+            if spec is not None and spec.paste_cookie:
+                paste = QPushButton("Paste cookie")
+                paste.setObjectName(f"{account.id}_paste_cookie_btn")
+                paste.setFixedWidth(92)
+                paste.setToolTip("Paste a session cookie for this account.")
+                paste.clicked.connect(
+                    lambda: self.paste_cookie_clicked.emit(self.account_id)
+                )
+                account_actions.addWidget(paste)
 
             clear = QPushButton("Clear sign-in")
             clear.setObjectName(f"{account.id}_clear_signin_btn")
@@ -612,19 +634,39 @@ class _BrowserAccountRow(QWidget):
             fable_row.addWidget(self.fable_cb)
             fable_row.addStretch(1)
             layout.addLayout(fable_row)
-        if account.kind == "opencode_go":
+        self.region_combo: QComboBox | None = None
+        if account.kind == "minimax":
+            self.region_combo = QComboBox()
+            self.region_combo.setObjectName(f"{account.id}_region_combo")
+            for label, value in _MINIMAX_REGION_CHOICES:
+                self.region_combo.addItem(label, value)
+            index = self.region_combo.findData(account.region)
+            self.region_combo.setCurrentIndex(max(index, 0))
+            self.region_combo.setToolTip(
+                "The API key is sent only to this region's MiniMax host."
+            )
+            region_row = QHBoxLayout()
+            region_row.setContentsMargins(0, 0, 0, 0)
+            region_row.setSpacing(6)
+            region_row.addWidget(QLabel("Region:"))
+            region_row.addWidget(self.region_combo)
+            region_row.addStretch(1)
+            layout.addLayout(region_row)
+        if is_api_key:
             self.api_key_edit = QLineEdit()
             self.api_key_edit.setObjectName(f"{account.id}_api_key_edit")
             self.api_key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-            self._had_existing_api_key = bool(get_opencode_go_key(account.id))
+            self._had_existing_api_key = bool(
+                get_account_api_key(account.kind, account.id)
+            )
             self.api_key_edit.setPlaceholderText(
                 "•••••••••• (saved — leave blank to keep)"
                 if self._had_existing_api_key
-                else "oc_sk_..."
+                else spec.api_key_placeholder
             )
             self.api_key_edit.setToolTip(
-                "OpenCode API key for this subscription. The key is stored in "
-                "the system keychain."
+                f"{spec.display_name} API key for this subscription. The key "
+                "is stored in the system keychain."
             )
             key_row = QHBoxLayout()
             key_row.setContentsMargins(0, 0, 0, 0)
@@ -654,6 +696,11 @@ class _BrowserAccountRow(QWidget):
             enabled=True,
             colors=self.colors.model_copy(deep=True),
             show_fable=self.fable_cb is not None and self.fable_cb.isChecked(),
+            region=(
+                self.region_combo.currentData()
+                if self.region_combo is not None
+                else self.region
+            ),
         )
 
 
@@ -662,19 +709,12 @@ _NAV_WIDTH = 150
 _NAV_ENTRIES: tuple[tuple[str | None, str], ...] = (
     ("general", "General"),
     (None, "PROVIDERS"),
-    ("claude", "Claude"),
-    ("codex", "Codex"),
-    ("opencode_go", "OpenCode"),
-    ("copilot", "GitHub Copilot"),
-    ("openrouter", "OpenRouter"),
-    ("antigravity", "Antigravity"),
+    *((spec.id, spec.settings_label) for spec in PROVIDER_SPECS),
     (None, "TOOLS"),
     ("mcp", "MCP"),
     ("local_usage", "Local usage"),
 )
-_PROVIDER_PAGE_KEYS = frozenset(
-    {"claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"}
-)
+_PROVIDER_PAGE_KEYS = frozenset(spec.id for spec in PROVIDER_SPECS)
 _PROVIDER_LABELS = {
     key: label for key, label in _NAV_ENTRIES if key in _PROVIDER_PAGE_KEYS
 }
@@ -876,7 +916,10 @@ class SettingsDialog(QDialog):
         self._config = config
         self._browser_account_rows: list[_BrowserAccountRow] = []
         self._removed_browser_accounts: dict[str, str] = {}
-        self._opencode_key_drafts: dict[str, tuple[str, bool]] = {}
+        # Unsaved API-key field text and clear-checkbox state by account id,
+        # kept across rebuilds of the account rows.
+        self._api_key_drafts: dict[str, tuple[str, bool]] = {}
+        self._account_layouts: dict[str, QVBoxLayout] = {}
         self.browser_session_clear_errors: list[tuple[str, str]] = []
         self._browser_accounts = [
             account.model_copy(deep=True) for account in browser_accounts(config)
@@ -996,81 +1039,18 @@ class SettingsDialog(QDialog):
         # ----- Providers -----
         # The enable checkboxes live on each provider's own page; they are
         # created here, ahead of the pages that hold them.
-        self.claude_cb = QCheckBox("Enable Claude")
-        self.claude_cb.setToolTip("Show Claude accounts in the panel.")
-        self.claude_cb.setChecked(config.providers.claude)
-
-        self.codex_cb = QCheckBox("Enable Codex")
-        self.codex_cb.setToolTip("Show Codex accounts in the panel.")
-        self.codex_cb.setChecked(config.providers.codex)
-
-        self.opencode_go_cb = QCheckBox("Enable OpenCode")
-        self.opencode_go_cb.setToolTip("Show OpenCode accounts in the panel.")
-        self.opencode_go_cb.setChecked(config.providers.opencode_go)
-
-        self.copilot_cb = QCheckBox("Enable GitHub Copilot")
-        self.copilot_cb.setToolTip("Show the GitHub Copilot usage tile in the panel.")
-        self.copilot_cb.setChecked(config.providers.copilot)
-
-        self.openrouter_cb = QCheckBox("Enable OpenRouter")
-        self.openrouter_cb.setToolTip("Show the OpenRouter usage tile in the panel.")
-        self.openrouter_cb.setChecked(config.providers.openrouter)
-
-        self.antigravity_cb = QCheckBox("Enable Antigravity")
-        self.antigravity_cb.setToolTip("Show the Antigravity usage tile in the panel.")
-        self.antigravity_cb.setChecked(config.providers.antigravity)
-
-        # ----- Claude accounts -----
-        claude_accounts = QGroupBox("Claude Accounts")
-        claude_accounts_layout = QVBoxLayout(claude_accounts)
-        claude_accounts_layout.setSpacing(8)
-        claude_accounts_layout.addWidget(
-            _hint_label(
-                "Name each Claude subscription here. All accounts appear when "
-                "Claude is enabled above. <b>Sign in</b> opens a "
-                "real installed browser and supports Google and passkeys; the "
-                "session is connected automatically."
+        # Each is also an attribute named after its spec: claude_cb, copilot_cb.
+        self._provider_checkboxes: dict[str, QCheckBox] = {}
+        for spec in PROVIDER_SPECS:
+            checkbox = QCheckBox(f"Enable {spec.settings_label}")
+            checkbox.setToolTip(
+                f"Show {spec.display_name} accounts in the panel."
+                if spec.multi_account
+                else f"Show the {spec.settings_label} usage tile in the panel."
             )
-        )
-        claude_usage_btn = QPushButton("Open usage in browser")
-        claude_usage_btn.setObjectName("claude_open_usage_btn")
-        claude_usage_btn.setToolTip("Open Claude's usage page in your default browser.")
-        claude_usage_btn.clicked.connect(
-            lambda _checked=False: _open_in_browser(CLAUDE_USAGE_URL)
-        )
-        claude_accounts_layout.addWidget(
-            claude_usage_btn,
-            alignment=Qt.AlignmentFlag.AlignLeft,
-        )
-        self._claude_accounts_layout = QVBoxLayout()
-        self._claude_accounts_layout.setSpacing(6)
-        claude_accounts_layout.addLayout(self._claude_accounts_layout)
-
-        # ----- Codex accounts -----
-        codex_accounts = QGroupBox("Codex Accounts")
-        codex_accounts_layout = QVBoxLayout(codex_accounts)
-        codex_accounts_layout.setSpacing(8)
-        codex_accounts_layout.addWidget(
-            _hint_label(
-                "Name each Codex subscription here. All accounts appear when "
-                "Codex is enabled above. <b>Sign in</b> opens a "
-                "real installed browser and supports Google and passkeys; the "
-                "session is connected automatically."
-            )
-        )
-        codex_usage_btn = QPushButton("Open usage in browser")
-        codex_usage_btn.setObjectName("codex_open_usage_btn")
-        codex_usage_btn.setToolTip("Open Codex's usage page in your default browser.")
-        codex_usage_btn.clicked.connect(
-            lambda _checked=False: _open_in_browser(CODEX_USAGE_URL)
-        )
-        codex_accounts_layout.addWidget(
-            codex_usage_btn,
-            alignment=Qt.AlignmentFlag.AlignLeft,
-        )
-        self._codex_accounts_layout = QVBoxLayout()
-        self._codex_accounts_layout.setSpacing(6)
-        codex_accounts_layout.addLayout(self._codex_accounts_layout)
+            checkbox.setChecked(bool(getattr(config.providers, spec.id)))
+            self._provider_checkboxes[spec.id] = checkbox
+            setattr(self, f"{spec.id}_cb", checkbox)
 
         # ----- Copilot details -----
         copilot = QGroupBox("GitHub Copilot")
@@ -1305,22 +1285,11 @@ class SettingsDialog(QDialog):
         self.antigravity_colors = _ColorThresholdLauncher(config.antigravity.colors)
         antigravity_form.addRow("Gauge colors:", self.antigravity_colors)
 
-        # ----- OpenCode accounts -----
-        opencode_go = QGroupBox("OpenCode Accounts")
-        opencode_go_layout = QVBoxLayout(opencode_go)
-        opencode_go_layout.setSpacing(8)
-        opencode_go_layout.addWidget(
-            _hint_label(
-                "Name each OpenCode Go subscription and enter its API key. "
-                "Sign in and copy a key at <a style='color:#60a5fa;' "
-                "href='https://opencode.ai/auth'>opencode.ai/auth</a>. Every "
-                "row has an independent key, tile, and gauge colors; keys are "
-                "stored in your system keychain."
-            )
-        )
-        self._opencode_go_accounts_layout = QVBoxLayout()
-        self._opencode_go_accounts_layout.setSpacing(8)
-        opencode_go_layout.addLayout(self._opencode_go_accounts_layout)
+        # ----- Account pages (Claude, Codex, OpenCode, ...) -----
+        provider_pages: dict[str, QWidget] = {
+            spec.id: self._build_account_family_page(spec)
+            for spec in account_specs()
+        }
         self._rebuild_browser_account_rows()
         general_tab = QWidget()
         general_tab_layout = QVBoxLayout(general_tab)
@@ -1329,22 +1298,7 @@ class SettingsDialog(QDialog):
         general_tab_layout.addWidget(general)
         general_tab_layout.addStretch(1)
 
-        claude_tab = QWidget()
-        claude_tab_layout = QVBoxLayout(claude_tab)
-        claude_tab_layout.setContentsMargins(10, 10, 10, 10)
-        claude_tab_layout.setSpacing(10)
-        _add_provider_enable_row(claude_tab_layout, self.claude_cb, "claude")
-        claude_tab_layout.addWidget(claude_accounts)
-        claude_tab_layout.addStretch(1)
-
-        codex_tab = QWidget()
-        codex_tab_layout = QVBoxLayout(codex_tab)
-        codex_tab_layout.setContentsMargins(10, 10, 10, 10)
-        codex_tab_layout.setSpacing(10)
-        _add_provider_enable_row(codex_tab_layout, self.codex_cb, "codex")
-        codex_tab_layout.addWidget(codex_accounts)
-        codex_tab_layout.addStretch(1)
-
+        # Single-instance providers keep bespoke pages, keyed by spec id.
         copilot_tab = QWidget()
         copilot_tab_layout = QVBoxLayout(copilot_tab)
         copilot_tab_layout.setContentsMargins(10, 10, 10, 10)
@@ -1372,16 +1326,11 @@ class SettingsDialog(QDialog):
         )
         antigravity_tab_layout.addWidget(antigravity)
         antigravity_tab_layout.addStretch(1)
-
-        opencode_go_tab = QWidget()
-        opencode_go_tab_layout = QVBoxLayout(opencode_go_tab)
-        opencode_go_tab_layout.setContentsMargins(10, 10, 10, 10)
-        opencode_go_tab_layout.setSpacing(10)
-        _add_provider_enable_row(
-            opencode_go_tab_layout, self.opencode_go_cb, "opencode_go"
+        provider_pages.update(
+            copilot=copilot_tab,
+            openrouter=openrouter_tab,
+            antigravity=antigravity_tab,
         )
-        opencode_go_tab_layout.addWidget(opencode_go)
-        opencode_go_tab_layout.addStretch(1)
 
         mcp_tab = QWidget()
         mcp_layout = QVBoxLayout(mcp_tab)
@@ -1407,12 +1356,11 @@ class SettingsDialog(QDialog):
             (account.id, account_display_name(account))
             for account in self._browser_accounts
         ]
-        if config.providers.copilot:
-            mcp_accounts.append(("copilot", "GitHub Copilot"))
-        if config.providers.openrouter:
-            mcp_accounts.append(("openrouter", "OpenRouter"))
-        if config.providers.antigravity:
-            mcp_accounts.append(("antigravity", "Antigravity"))
+        mcp_accounts.extend(
+            (spec.id, spec.settings_label)
+            for spec in single_specs()
+            if getattr(config.providers, spec.id, False)
+        )
         for account_id, label in mcp_accounts:
             enabled = QCheckBox("Pause at")
             threshold = QSpinBox()
@@ -1453,12 +1401,9 @@ class SettingsDialog(QDialog):
 
         pages = {
             "general": general_tab,
-            "claude": claude_tab,
-            "codex": codex_tab,
-            "opencode_go": opencode_go_tab,
-            "copilot": copilot_tab,
-            "openrouter": openrouter_tab,
-            "antigravity": antigravity_tab,
+            # A spec with neither an account page nor a bespoke page fails
+            # here, when Settings is built, rather than at first navigation.
+            **{spec.id: provider_pages[spec.id] for spec in PROVIDER_SPECS},
             "mcp": mcp_tab,
             "local_usage": local_usage_scroll,
         }
@@ -1498,14 +1443,6 @@ class SettingsDialog(QDialog):
             self.nav_list.addItem(item)
             self._page_rows[key] = self.nav_list.count() - 1
             self._page_indexes[key] = self.pages.addWidget(pages[key])
-        self._provider_checkboxes = {
-            "claude": self.claude_cb,
-            "codex": self.codex_cb,
-            "opencode_go": self.opencode_go_cb,
-            "copilot": self.copilot_cb,
-            "openrouter": self.openrouter_cb,
-            "antigravity": self.antigravity_cb,
-        }
         for checkbox in self._provider_checkboxes.values():
             checkbox.toggled.connect(self._refresh_provider_rows)
         self._refresh_provider_rows()
@@ -1576,6 +1513,63 @@ class SettingsDialog(QDialog):
         body.addWidget(self.pages, 1)
         layout.addLayout(body, 1)
         layout.addLayout(button_row)
+
+    def _open_usage(self, spec: ProviderSpec) -> None:
+        """Open the provider's usage page. MiniMax has one console per region,
+        so it opens the console of each region its rows select."""
+        urls = [spec.usage_url]
+        if spec.id == "minimax":
+            regions = {
+                row.region_combo.currentData()
+                for row in self._browser_account_rows
+                if row.region_combo is not None
+            }
+            urls = [
+                url for region, url in MINIMAX_USAGE_URLS.items() if region in regions
+            ] or urls
+        for url in urls:
+            _open_in_browser(url)
+
+    def _build_account_family_page(self, spec: ProviderSpec) -> QWidget:
+        """The Settings page of a multi-account provider.
+
+        Enable checkbox and hint, then a group box with the spec's hint, an
+        optional "Open usage in browser" button and the account rows, which
+        _rebuild_browser_account_rows() fills.
+        """
+        accounts = QGroupBox(f"{spec.display_name} Accounts")
+        accounts_layout = QVBoxLayout(accounts)
+        accounts_layout.setSpacing(8)
+        accounts_layout.addWidget(_hint_label(spec.settings_hint))
+        if spec.usage_url:
+            usage_btn = QPushButton("Open usage in browser")
+            usage_btn.setObjectName(f"{spec.id}_open_usage_btn")
+            usage_btn.setToolTip(
+                f"Open {spec.display_name}'s usage page in your default browser."
+            )
+            usage_btn.clicked.connect(
+                lambda _checked=False, spec=spec: self._open_usage(spec)
+            )
+            accounts_layout.addWidget(
+                usage_btn,
+                alignment=Qt.AlignmentFlag.AlignLeft,
+            )
+        rows_layout = QVBoxLayout()
+        # API-key rows have a second line for the key, so sit further apart.
+        rows_layout.setSpacing(8 if spec.auth == "api_key" else 6)
+        accounts_layout.addLayout(rows_layout)
+        self._account_layouts[spec.id] = rows_layout
+
+        page = QWidget()
+        page_layout = QVBoxLayout(page)
+        page_layout.setContentsMargins(10, 10, 10, 10)
+        page_layout.setSpacing(10)
+        _add_provider_enable_row(
+            page_layout, self._provider_checkboxes[spec.id], spec.id
+        )
+        page_layout.addWidget(accounts)
+        page_layout.addStretch(1)
+        return page
 
     def page_keys(self) -> list[str]:
         return list(self._page_rows)
@@ -1692,7 +1686,7 @@ class SettingsDialog(QDialog):
         return f"Account {count + 1}"
 
     def _add_browser_account(self, kind: str) -> None:
-        self._capture_opencode_key_drafts()
+        self._capture_api_key_drafts()
         self._browser_accounts = self._current_browser_accounts()
         self._browser_accounts.append(
             BrowserAccount(
@@ -1705,7 +1699,7 @@ class SettingsDialog(QDialog):
         self._rebuild_browser_account_rows()
 
     def _remove_browser_account(self, account_id: str) -> None:
-        self._capture_opencode_key_drafts()
+        self._capture_api_key_drafts()
         removed = next(
             (account for account in self._browser_accounts if account.id == account_id),
             None,
@@ -1717,14 +1711,15 @@ class SettingsDialog(QDialog):
         ]
         if removed is not None:
             self._removed_browser_accounts[account_id] = removed.kind
-        self._opencode_key_drafts.pop(account_id, None)
+        self._api_key_drafts.pop(account_id, None)
         self._rebuild_browser_account_rows()
 
-    def _capture_opencode_key_drafts(self) -> None:
+    def _capture_api_key_drafts(self) -> None:
         for row in self._browser_account_rows:
-            if row.kind != "opencode_go" or row.api_key_edit is None:
+            # Only API-key rows have a key field.
+            if row.api_key_edit is None:
                 continue
-            self._opencode_key_drafts[row.account_id] = (
+            self._api_key_drafts[row.account_id] = (
                 row.api_key_edit.text(),
                 bool(
                     row.clear_api_key_cb is not None
@@ -1733,22 +1728,14 @@ class SettingsDialog(QDialog):
             )
 
     def _rebuild_browser_account_rows(self) -> None:
-        for layout in (
-            self._claude_accounts_layout,
-            self._codex_accounts_layout,
-            self._opencode_go_accounts_layout,
-        ):
+        for layout in self._account_layouts.values():
             while layout.count():
                 item = layout.takeAt(0)
                 widget = item.widget()
                 if widget is not None:
                     widget.deleteLater()
         self._browser_account_rows = []
-        for kind, layout in (
-            ("claude", self._claude_accounts_layout),
-            ("codex", self._codex_accounts_layout),
-            ("opencode_go", self._opencode_go_accounts_layout),
-        ):
+        for kind, layout in self._account_layouts.items():
             for account in [a for a in self._browser_accounts if a.kind == kind]:
                 row = _BrowserAccountRow(
                     account,
@@ -1758,8 +1745,8 @@ class SettingsDialog(QDialog):
                 row.paste_cookie_clicked.connect(self.paste_cookie_clicked.emit)
                 row.clear_sign_in_clicked.connect(self.clear_sign_in_clicked.emit)
                 row.remove_clicked.connect(self._remove_browser_account)
-                if row.kind == "opencode_go" and row.api_key_edit is not None:
-                    draft = self._opencode_key_drafts.get(row.account_id)
+                if row.api_key_edit is not None:
+                    draft = self._api_key_drafts.get(row.account_id)
                     if draft is not None:
                         row.api_key_edit.setText(draft[0])
                         if row.clear_api_key_cb is not None:
@@ -1921,15 +1908,18 @@ class SettingsDialog(QDialog):
             log.info("Saved OpenRouter management key to system keychain.")
 
         for account_id, kind in self._removed_browser_accounts.items():
-            if kind != "opencode_go":
+            spec = provider_spec(kind)
+            if spec is None or spec.auth != "api_key":
                 continue
             if not self._write_secret(
                 None,
-                setter=lambda value, account_id=account_id: set_opencode_go_key(
-                    account_id, value
+                setter=lambda value, kind=kind, account_id=account_id: (
+                    set_account_api_key(kind, account_id, value)
                 ),
-                getter=lambda account_id=account_id: get_opencode_go_key(account_id),
-                title="OpenCode API key was not cleared",
+                getter=lambda kind=kind, account_id=account_id: (
+                    get_account_api_key(kind, account_id)
+                ),
+                title=f"{spec.display_name} API key was not cleared",
                 write_error=f"The saved key for {account_id} could not be cleared",
                 verify_error=(
                     f"The saved key for {account_id} still appears to be "
@@ -1939,8 +1929,10 @@ class SettingsDialog(QDialog):
                 return
 
         for row in self._browser_account_rows:
-            if row.kind != "opencode_go" or row.api_key_edit is None:
+            # Only API-key rows have a key field.
+            if row.api_key_edit is None:
                 continue
+            key_name = f"{provider_base_name(row.kind)} API key"
             new_key = row.api_key_edit.text().strip()
             clear_key = bool(
                 row.clear_api_key_cb is not None
@@ -1949,13 +1941,13 @@ class SettingsDialog(QDialog):
             if clear_key and not new_key:
                 if not self._write_secret(
                     None,
-                    setter=lambda value, account_id=row.account_id: (
-                        set_opencode_go_key(account_id, value)
+                    setter=lambda value, kind=row.kind, account_id=row.account_id: (
+                        set_account_api_key(kind, account_id, value)
                     ),
-                    getter=lambda account_id=row.account_id: (
-                        get_opencode_go_key(account_id)
+                    getter=lambda kind=row.kind, account_id=row.account_id: (
+                        get_account_api_key(kind, account_id)
                     ),
-                    title="OpenCode API key was not cleared",
+                    title=f"{key_name} was not cleared",
                     write_error="The saved key could not be cleared",
                     verify_error=(
                         "The key still appears to be available in the system keychain."
@@ -1965,13 +1957,13 @@ class SettingsDialog(QDialog):
             if new_key:
                 if not self._write_secret(
                     new_key,
-                    setter=lambda value, account_id=row.account_id: (
-                        set_opencode_go_key(account_id, value)
+                    setter=lambda value, kind=row.kind, account_id=row.account_id: (
+                        set_account_api_key(kind, account_id, value)
                     ),
-                    getter=lambda account_id=row.account_id: (
-                        get_opencode_go_key(account_id)
+                    getter=lambda kind=row.kind, account_id=row.account_id: (
+                        get_account_api_key(kind, account_id)
                     ),
-                    title="OpenCode API key was not saved",
+                    title=f"{key_name} was not saved",
                     write_error="The system keychain rejected the key",
                     verify_error=(
                         "The key could not be read back from the system keychain. "
@@ -1981,7 +1973,8 @@ class SettingsDialog(QDialog):
                 ):
                     return
                 log.info(
-                    "Saved OpenCode API key to system keychain for account=%s.",
+                    "Saved %s to system keychain for account=%s.",
+                    key_name,
                     row.account_id,
                 )
 
@@ -2065,30 +2058,27 @@ class SettingsDialog(QDialog):
         # so filter against what is actually being saved rather than persisting
         # a policy for an account that no longer exists.
         live_policy_ids = {account.id for account in accounts}
-        if self.copilot_cb.isChecked():
-            live_policy_ids.add("copilot")
-        if self.openrouter_cb.isChecked():
-            live_policy_ids.add("openrouter")
-        if self.antigravity_cb.isChecked():
-            live_policy_ids.add("antigravity")
+        live_policy_ids.update(
+            spec.id
+            for spec in single_specs()
+            if self._provider_checkboxes[spec.id].isChecked()
+        )
         config.mcp_pause_policies = {
             account_id: threshold.value()
             for account_id, (enabled, threshold) in self.mcp_policy_controls.items()
             if enabled.isChecked() and account_id in live_policy_ids
         }
         config.browser_accounts = accounts
-        config.providers.claude = self.claude_cb.isChecked()
-        config.providers.codex = self.codex_cb.isChecked()
-        config.providers.copilot = self.copilot_cb.isChecked()
-        config.providers.openrouter = self.openrouter_cb.isChecked()
-        config.providers.antigravity = self.antigravity_cb.isChecked()
-        config.providers.opencode_go = self.opencode_go_cb.isChecked()
+        for kind, checkbox in self._provider_checkboxes.items():
+            setattr(config.providers, kind, checkbox.isChecked())
         order = self.provider_order()
         config.provider_order = (
             [] if tuple(order) == DEFAULT_PROVIDER_ORDER else order
         )
         for account_id, kind in self._removed_browser_accounts.items():
-            if kind == "opencode_go":
+            spec = provider_spec(kind)
+            # API-key accounts have no browser session; _accept cleared the key.
+            if spec is not None and spec.auth == "api_key":
                 continue
             try:
                 clear_browser_session(account_id)

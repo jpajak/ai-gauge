@@ -22,6 +22,7 @@ from .gauge import (
     thresholds_for_provider,
 )
 from .models import SnapshotStatus, UsageSnapshot
+from .providers.registry import PROVIDER_SPECS, account_family
 
 # Layout constants in logical (pre-DPR) pixels.
 DOT_DIAMETER = 6
@@ -29,14 +30,7 @@ PROVIDER_GAP = 1
 PIXMAP_HEIGHT = 22  # macOS menu-bar standard height
 PIXMAP_WIDTH = 22
 SIDE_PADDING = (PIXMAP_WIDTH - DOT_DIAMETER) // 2
-PROVIDER_LABELS = {
-    "claude": "Cl",
-    "codex": "Cx",
-    "opencode_go": "Go",
-    "copilot": "Cp",
-    "openrouter": "OR",
-    "antigravity": "Ag",
-}
+PROVIDER_LABELS = {spec.id: spec.short_label for spec in PROVIDER_SPECS}
 
 OK_COLORS = {
     "low": "#22c55e",
@@ -49,13 +43,8 @@ ERROR_COLOR = OK_COLORS["high"]
 
 
 def _provider_label(provider: str) -> str:
-    if provider == "opencode_go" or provider.startswith("opencode_go-"):
-        return PROVIDER_LABELS["opencode_go"]
-    if provider == "claude" or provider.startswith("claude-"):
-        return PROVIDER_LABELS["claude"]
-    if provider == "codex" or provider.startswith("codex-"):
-        return PROVIDER_LABELS["codex"]
-    return PROVIDER_LABELS.get(provider, provider[:2].title())
+    kind = account_family(provider) or provider
+    return PROVIDER_LABELS.get(kind, provider[:2].title())
 
 
 def _provider_color(

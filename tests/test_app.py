@@ -359,7 +359,9 @@ def test_build_providers_creates_one_provider_per_opencode_account(monkeypatch):
         created.append((config, parent, account_id))
         return SimpleNamespace(account_id=account_id)
 
-    monkeypatch.setattr(app_module, "OpenCodeGoProvider", fake_opencode_provider)
+    monkeypatch.setattr(
+        "aigauge.providers.opencode_go.OpenCodeGoProvider", fake_opencode_provider
+    )
     app = App.__new__(App)
     app._config = config  # noqa: SLF001
     app._providers = {}  # noqa: SLF001
@@ -399,7 +401,9 @@ def test_build_providers_passes_per_account_fable_toggle(monkeypatch):
         created.append((account_id, show_fable))
         return SimpleNamespace(account_id=account_id)
 
-    monkeypatch.setattr(app_module, "ClaudeProvider", fake_claude_provider)
+    monkeypatch.setattr(
+        "aigauge.providers.claude.ClaudeProvider", fake_claude_provider
+    )
     app = App.__new__(App)
     app._config = config  # noqa: SLF001
     app._providers = {}  # noqa: SLF001
@@ -858,3 +862,114 @@ def test_schedule_pulls_stale_error_refresh_forward():
     assert app._timer.started_ms is not None  # noqa: SLF001
     scheduled_minutes = app._timer.started_ms / 60_000  # noqa: SLF001
     assert 0 < scheduled_minutes <= 1.2
+
+
+def test_unlimited_minimax_snapshot_goes_through_the_snapshot_pipeline(
+    qtbot, tmp_path, monkeypatch, caplog
+):
+    from aigauge.history import HistoryStore
+    from aigauge.ratio import RatioStore
+    from aigauge.usage_cache import read_usage_cache
+
+    monkeypatch.setattr("aigauge.usage_cache.app_data_dir", lambda: tmp_path)
+    config = Config(mcp_enabled=True)
+    config.providers.minimax = True
+    widget = UsageWidget(config)
+    qtbot.addWidget(widget)
+    app = App.__new__(App)
+    app._config = config  # noqa: SLF001
+    app._cleared_sessions = set()  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._cycle_signatures = {}  # noqa: SLF001
+    app._inflight = {"minimax"}  # noqa: SLF001
+    app._history = HistoryStore(base_dir=tmp_path)  # noqa: SLF001
+    app._ratio = RatioStore(base_dir=tmp_path)  # noqa: SLF001
+    app._local_usage = None  # noqa: SLF001
+    app._widget = widget  # noqa: SLF001
+    app._refresh_queue = []  # noqa: SLF001
+    app._cycle_changed = lambda: False  # noqa: SLF001
+    app._current_refresh_manual = True  # noqa: SLF001
+    app._last_cycle_signatures = None  # noqa: SLF001
+    app._update_tray = lambda: None  # noqa: SLF001
+    app._schedule_next_refresh = lambda: None  # noqa: SLF001
+    reset_at = datetime.now() + timedelta(hours=3)
+    snapshot = UsageSnapshot(
+        provider="minimax",
+        status=SnapshotStatus.OK,
+        metrics=[
+            UsageMetric("5h", 12.0, reset_at, window=timedelta(hours=5)),
+            UsageMetric("Weekly", None, reset_label="Unlimited"),
+        ],
+    )
+
+    with caplog.at_level("ERROR"):
+        app._on_snapshot(snapshot)  # noqa: SLF001
+        # The pipeline logs and swallows store failures, so call the stores
+        # directly as well to see any exception.
+        app._history.record_snapshot(snapshot)  # noqa: SLF001
+        app._ratio.record_snapshot(snapshot)  # noqa: SLF001
+
+    assert [r.getMessage() for r in caplog.records] == []
+    assert app._snapshots["minimax"] is snapshot  # noqa: SLF001
+    # History tracks the 5h row and skips the unlimited one.
+    assert [r.label for r in app._history.current_records()] == ["5h"]  # noqa: SLF001
+    cached = read_usage_cache()["accounts"]["minimax"]["metrics"]
+    assert [(m["label"], m["percent_used"]) for m in cached] == [
+        ("5h", 12.0),
+        ("Weekly", None),
+    ]
+    assert cached[1]["reset_label"] == "Unlimited"
+    assert app._ratio.history("minimax") == []  # noqa: SLF001
+    assert "minimax" in widget._tiles  # noqa: SLF001
+
+
+def test_build_providers_creates_one_minimax_provider_per_account():
+    from aigauge.providers.minimax import MiniMaxProvider
+
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="minimax", kind="minimax"),
+            BrowserAccount(id="minimax-work", kind="minimax", name="Work"),
+        ]
+    )
+    config.providers.claude = False
+    config.providers.codex = False
+    config.providers.copilot = False
+    config.providers.minimax = True
+    ensured = []
+    app = App.__new__(App)
+    app._config = config  # noqa: SLF001
+    app._providers = {}  # noqa: SLF001
+    app._snapshots = {}  # noqa: SLF001
+    app._widget = SimpleNamespace(  # noqa: SLF001
+        _tiles={},
+        ensure_tile=lambda account_id, name: ensured.append((account_id, name)),
+        remove_tile=lambda account_id: None,
+        apply_provider_order=lambda: None,
+    )
+
+    app._build_providers()  # noqa: SLF001
+
+    assert list(app._providers) == ["minimax", "minimax-work"]  # noqa: SLF001
+    assert all(
+        isinstance(p, MiniMaxProvider) for p in app._providers.values()  # noqa: SLF001
+    )
+    assert ensured == [("minimax", "MiniMax"), ("minimax-work", "MiniMax (Work)")]
+
+
+def test_minimax_auth_action_opens_account_key_settings():
+    draft = BrowserAccount(id="minimax-work", kind="minimax", name="Work")
+    captured = []
+    app = App.__new__(App)
+    app._config = Config()  # noqa: SLF001
+    app._settings_dialog = SimpleNamespace(  # noqa: SLF001
+        draft_browser_account=lambda account_id: (
+            draft if account_id == draft.id else None
+        ),
+        show_provider=lambda kind, account_id: captured.append((kind, account_id)),
+    )
+    app.open_settings = lambda: None
+
+    app.open_login("minimax-work")
+
+    assert captured == [("minimax", "minimax-work")]

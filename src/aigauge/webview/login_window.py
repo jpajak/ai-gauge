@@ -18,6 +18,7 @@ from PyQt6.QtWidgets import (
     QWidget,
 )
 
+from ..providers.registry import provider_spec, sign_in_hosts
 from .cookies import import_browser_cookies
 from .external_login import (
     BROWSER_LABELS,
@@ -80,19 +81,13 @@ QPushButton#linkButton:hover { color:#93c5fd; text-decoration:underline; }
 
 # Top-frame navigation in the embedded sign-in browser is restricted to these
 # host suffixes. The goal is defense in depth against an open-redirect bug on
-# either provider redirecting the embedded browser to an arbitrary URL.
+# a provider redirecting the embedded browser to an arbitrary URL.
 # Subresources (iframes, fonts, analytics, captchas) are not filtered — only
-# main-frame loads. If a real sign-in flow needs another host, add it here.
-AUTH_HOST_ALLOWLIST: tuple[str, ...] = (
-    # Anthropic / Claude
-    "claude.ai",
-    "anthropic.com",
-    # OpenAI / ChatGPT / Codex
-    "chatgpt.com",
-    "openai.com",
-    "oaistatic.com",
-    "oaiusercontent.com",
-    # Identity providers used by the above for SSO popups.
+# main-frame loads. A provider's own hosts come from its registry spec
+# (LoginSpec.hosts); if a real sign-in flow needs another identity provider,
+# add it to _IDENTITY_PROVIDER_HOSTS.
+_IDENTITY_PROVIDER_HOSTS: tuple[str, ...] = (
+    # Identity providers the providers' sign-in pages use for SSO popups.
     "auth0.com",
     "google.com",
     "github.com",
@@ -104,6 +99,7 @@ AUTH_HOST_ALLOWLIST: tuple[str, ...] = (
     "microsoft.com",
     "live.com",
 )
+AUTH_HOST_ALLOWLIST: tuple[str, ...] = sign_in_hosts() + _IDENTITY_PROVIDER_HOSTS
 
 
 def _host_allowed(host: str) -> bool:
@@ -567,10 +563,10 @@ class LoginWindow(QDialog):
         worker.start()
 
     def _provider_name(self) -> str:
-        return {
-            "claude": "Claude",
-            "codex": "ChatGPT",
-        }.get(self._provider, self._provider)
+        spec = provider_spec(self._provider)
+        if spec is None or spec.login is None:
+            return self._provider
+        return spec.login.prompt_name
 
     def _on_external_status(self, message: str) -> None:
         if self._closing:

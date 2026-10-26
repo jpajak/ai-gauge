@@ -11,6 +11,12 @@ import keyring
 from pydantic import BaseModel, Field
 
 from .platforms import APP_NAME, get_platform
+from .providers.registry import (
+    PROVIDER_SPECS,
+    account_family,
+    account_kinds,
+    provider_spec,
+)
 
 log = logging.getLogger("aigauge.config")
 
@@ -33,30 +39,26 @@ WINDOW_COLLAPSED_MIN_HEIGHT = 32
 # be stuck with a mostly-empty 340px strip (issue #7).
 WINDOW_COLLAPSED_MIN_WIDTH = 150
 
-# Per-provider session cookie names (HttpOnly cookies you can't read via JS).
-# COOKIE_NAMES is the primary name shown in the UI. COOKIE_NAME_ALIASES covers
-# provider auth migrations and split cookies copied from browser DevTools.
-COOKIE_NAMES = {
-    "claude": "sessionKey",
-    "codex": "next-auth.session-token",
-}
-
 SnapCorner = Literal["top_left", "top_right", "bottom_left", "bottom_right"]
 
+# Per-provider session cookie names (HttpOnly cookies you can't read via JS),
+# derived from the provider registry. COOKIE_NAMES is the primary name shown
+# in the UI. COOKIE_NAME_ALIASES covers provider auth migrations and split
+# cookies copied from browser DevTools.
+COOKIE_NAMES = {
+    spec.id: spec.cookies.name
+    for spec in PROVIDER_SPECS
+    if spec.cookies is not None and spec.cookies.name
+}
 COOKIE_NAME_ALIASES = {
-    "claude": ("sessionKey",),
-    "codex": (
-        "next-auth.session-token",
-        "__Secure-next-auth.session-token",
-        "next-auth.session-token.0",
-        "next-auth.session-token.1",
-        "__Secure-next-auth.session-token.0",
-        "__Secure-next-auth.session-token.1",
-    ),
+    spec.id: spec.cookies.aliases
+    for spec in PROVIDER_SPECS
+    if spec.cookies is not None
 }
 COOKIE_DOMAINS = {
-    "claude": ".claude.ai",
-    "codex": ".chatgpt.com",
+    spec.id: spec.cookies.domain
+    for spec in PROVIDER_SPECS
+    if spec.cookies is not None
 }
 
 
@@ -110,23 +112,21 @@ class WindowState(BaseModel):
     ui_scale: float = Field(default=1.0, ge=0.75, le=4.0)
 
 
-DEFAULT_PROVIDER_ORDER: tuple[str, ...] = (
-    "claude",
-    "codex",
-    "opencode_go",
-    "copilot",
-    "openrouter",
-    "antigravity",
-)
+# PROVIDER_SPECS is sorted by each spec's default_order.
+DEFAULT_PROVIDER_ORDER: tuple[str, ...] = tuple(spec.id for spec in PROVIDER_SPECS)
 
 
 class ProviderToggles(BaseModel):
+    # Explicit fields, one per registry spec, so the config schema and its
+    # migrations stay static. tests/test_provider_registry.py checks the two
+    # stay in step.
     claude: bool = True
     codex: bool = True
     copilot: bool = True
     openrouter: bool = False
     antigravity: bool = False
     opencode_go: bool = False
+    minimax: bool = False
 
 
 class ColorThresholds(BaseModel):
@@ -154,6 +154,11 @@ class BrowserAccount(BaseModel):
     # not appear rather than showing a wrong value. Only Claude accounts read
     # this; it is inert on other kinds.
     show_fable: bool = True
+    # MiniMax serves each region from its own API host, and a key only works on
+    # its own region's host. This is per account, and the account's key is sent
+    # only to that region's host. Only MiniMax accounts read this; it is inert
+    # on other kinds.
+    region: Literal["international", "china"] = "international"
 
 
 class CopilotConfig(BaseModel):
@@ -223,16 +228,12 @@ class Config(BaseModel):
     ] = "ask"
     providers: ProviderToggles = Field(default_factory=ProviderToggles)
     browser_accounts: list[BrowserAccount] = Field(
+        # One default account per multi-account provider; its id is the kind.
         default_factory=lambda: [
-            BrowserAccount(id="claude", kind="claude"),
-            BrowserAccount(id="codex", kind="codex"),
-            BrowserAccount(
-                id="opencode_go",
-                kind="opencode_go",
-            ),
+            BrowserAccount(id=kind, kind=kind) for kind in account_kinds()
         ]
     )
-    browser_accounts_version: int = 2
+    browser_accounts_version: int = 3
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
     antigravity: AntigravityConfig = Field(default_factory=AntigravityConfig)
@@ -326,6 +327,23 @@ class Config(BaseModel):
                     account["colors"] = colors
                 accounts.append(account)
             data["browser_accounts_version"] = 2
+            accounts_version = 2
+        if accounts_version < 3:
+            accounts = data.get("browser_accounts")
+            if isinstance(accounts, list) and not any(
+                item.get("kind") == "minimax"
+                for item in accounts
+                if isinstance(item, dict)
+            ):
+                accounts.append(
+                    {
+                        "id": "minimax",
+                        "kind": "minimax",
+                        "name": None,
+                        "enabled": True,
+                    }
+                )
+            data["browser_accounts_version"] = 3
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")
@@ -384,12 +402,8 @@ def qt_scale_factor_env(config: Config) -> str | None:
 
 
 def provider_base_name(kind: str) -> str:
-    return {
-        "claude": "Claude",
-        "codex": "Codex",
-        "opencode_go": "OpenCode",
-        "antigravity": "Antigravity",
-    }.get(kind, kind.title())
+    spec = provider_spec(kind)
+    return spec.display_name if spec is not None else kind.title()
 
 
 def account_display_name(account: BrowserAccount) -> str:
@@ -416,10 +430,11 @@ def browser_accounts(
     kind: str | None = None,
     enabled_only: bool = False,
 ) -> list[BrowserAccount]:
+    kinds = account_kinds()
     accounts = [
         account
         for account in getattr(config, "browser_accounts", [])
-        if account.kind in ("claude", "codex", "opencode_go")
+        if account.kind in kinds
     ]
     if kind is not None:
         accounts = [account for account in accounts if account.kind == kind]
@@ -439,29 +454,15 @@ def account_kind(config: Config, account_id: str) -> str | None:
     account = browser_account(config, account_id)
     if account is not None:
         return account.kind
-    if account_id in ("claude", "codex"):
-        return account_id
-    if account_id.startswith("claude-"):
-        return "claude"
-    if account_id.startswith("codex-"):
-        return "codex"
-    if account_id == "opencode_go" or account_id.startswith("opencode_go-"):
-        return "opencode_go"
-    return None
+    return account_family(account_id)
 
 
 def display_name_for_account(config: Config, account_id: str) -> str:
     account = browser_account(config, account_id)
     if account is not None:
         return account_display_name(account)
-    return {
-        "claude": "Claude",
-        "codex": "Codex",
-        "copilot": "Copilot",
-        "openrouter": "OpenRouter",
-        "antigravity": "Antigravity",
-        "opencode_go": "OpenCode",
-    }.get(account_id, account_id)
+    spec = provider_spec(account_id)
+    return spec.display_name if spec is not None else account_id
 
 
 def generate_browser_account_id(config: Config, kind: str) -> str:
@@ -573,17 +574,42 @@ def set_provider_cookie(provider: str, value: str | None) -> None:
     get_platform().save_secret(_cookie_key(provider), value)
 
 
-def _opencode_go_key_key(account_id: str) -> str:
-    return f"opencode-go-key-{account_id}"
+def _api_key_entry(kind: str, account_id: str) -> str:
+    spec = provider_spec(kind)
+    if spec is None or spec.api_key_entry is None:
+        raise ValueError(f"{kind!r} is not an API-key provider")
+    return spec.api_key_entry.format(account_id=account_id)
+
+
+def get_account_api_key(kind: str, account_id: str) -> str | None:
+    """Load one API-key account's key from the system keychain.
+
+    The keyring entry name comes from the kind's registry spec, so keys saved
+    before the registry existed still load.
+    """
+    entry = _api_key_entry(kind, account_id)
+    try:
+        key = keyring.get_password(KEYRING_SERVICE, entry)
+        return key or None
+    except keyring.errors.KeyringError:
+        return None
+
+
+def set_account_api_key(kind: str, account_id: str, value: str | None) -> None:
+    """Save, or clear when ``value`` is empty, one account's API key."""
+    entry = _api_key_entry(kind, account_id)
+    if value:
+        keyring.set_password(KEYRING_SERVICE, entry, value)
+    else:
+        try:
+            keyring.delete_password(KEYRING_SERVICE, entry)
+        except keyring.errors.KeyringError:
+            pass
 
 
 def get_opencode_go_key(account_id: str = "opencode_go") -> str | None:
     """Load one OpenCode account's API key from the system keychain."""
-    try:
-        key = keyring.get_password(KEYRING_SERVICE, _opencode_go_key_key(account_id))
-        return key or None
-    except keyring.errors.KeyringError:
-        return None
+    return get_account_api_key("opencode_go", account_id)
 
 
 def set_opencode_go_key(
@@ -591,11 +617,4 @@ def set_opencode_go_key(
     value: str | None,
 ) -> None:
     """Save or clear one OpenCode account's API key in the system keychain."""
-    key_name = _opencode_go_key_key(account_id)
-    if value:
-        keyring.set_password(KEYRING_SERVICE, key_name, value)
-    else:
-        try:
-            keyring.delete_password(KEYRING_SERVICE, key_name)
-        except keyring.errors.KeyringError:
-            pass
+    set_account_api_key("opencode_go", account_id, value)

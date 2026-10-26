@@ -1,8 +1,10 @@
+import pytest
 from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, Qt
 from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
-from PyQt6.QtWidgets import QApplication, QGroupBox, QLabel, QPushButton
+from PyQt6.QtWidgets import QApplication, QComboBox, QGroupBox, QLabel, QPushButton
 
 from aigauge import settings_dialog
+from aigauge.providers import registry
 from aigauge.config import BrowserAccount, ColorThresholds, Config
 from aigauge.settings_dialog import SettingsDialog
 
@@ -43,6 +45,32 @@ def test_paste_cookie_button_emits_paste_cookie_signal(qtbot):
         _button(dialog, "codex_paste_cookie_btn").click()
 
     assert signal.args == ["codex"]
+
+
+def test_paste_cookie_button_follows_the_spec_flag(qtbot, monkeypatch):
+    spec = registry.ProviderSpec(
+        id="no_paste",
+        display_name="No Paste",
+        settings_label="No Paste",
+        short_label="Np",
+        auth="browser_session",
+        multi_account=True,
+        default_enabled=False,
+        default_order=99,
+        make=lambda config, account, parent: None,
+        paste_cookie=False,
+    )
+    monkeypatch.setitem(registry._SPECS_BY_ID, "no_paste", spec)  # noqa: SLF001
+
+    row = settings_dialog._BrowserAccountRow(  # noqa: SLF001
+        BrowserAccount(id="no_paste", kind="no_paste"), removable=False
+    )
+    qtbot.addWidget(row)
+
+    assert row.findChild(QPushButton, "no_paste_paste_cookie_btn") is None
+    # The other browser-session buttons are unaffected.
+    assert row.findChild(QPushButton, "no_paste_signin_btn") is not None
+    assert row.findChild(QPushButton, "no_paste_clear_signin_btn") is not None
 
 
 def test_clear_sign_in_button_emits_account_signal(qtbot):
@@ -105,7 +133,9 @@ def test_mcp_integration_defaults_off_and_gates_policies(qtbot, monkeypatch):
 def test_opencode_go_uses_masked_api_key_field_instead_of_browser_buttons(
     qtbot, monkeypatch
 ):
-    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
 
@@ -124,13 +154,13 @@ def test_opencode_go_accept_saves_key_to_account_secret(qtbot, monkeypatch):
     secrets = {}
     monkeypatch.setattr(
         settings_dialog,
-        "get_opencode_go_key",
-        lambda account_id: secrets.get(account_id),
+        "get_account_api_key",
+        lambda kind, account_id: secrets.get(account_id),
     )
     monkeypatch.setattr(
         settings_dialog,
-        "set_opencode_go_key",
-        lambda account_id, value: (
+        "set_account_api_key",
+        lambda kind, account_id, value: (
             secrets.__setitem__(account_id, value)
             if value
             else secrets.pop(account_id, None)
@@ -154,13 +184,13 @@ def test_opencode_go_existing_key_can_be_cleared(qtbot, monkeypatch):
     secrets = {"opencode_go": "saved-key"}
     monkeypatch.setattr(
         settings_dialog,
-        "get_opencode_go_key",
-        lambda account_id: secrets.get(account_id),
+        "get_account_api_key",
+        lambda kind, account_id: secrets.get(account_id),
     )
     monkeypatch.setattr(
         settings_dialog,
-        "set_opencode_go_key",
-        lambda account_id, value: (
+        "set_account_api_key",
+        lambda kind, account_id, value: (
             secrets.__setitem__(account_id, value)
             if value
             else secrets.pop(account_id, None)
@@ -183,7 +213,9 @@ def test_opencode_go_existing_key_can_be_cleared(qtbot, monkeypatch):
 
 
 def test_opencode_go_key_draft_survives_adding_an_account(qtbot, monkeypatch):
-    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
     first_row = next(
@@ -207,13 +239,13 @@ def test_removing_opencode_account_clears_its_key_on_accept(qtbot, monkeypatch):
     secrets = {"opencode_go": "saved-key"}
     monkeypatch.setattr(
         settings_dialog,
-        "get_opencode_go_key",
-        lambda account_id: secrets.get(account_id),
+        "get_account_api_key",
+        lambda kind, account_id: secrets.get(account_id),
     )
     monkeypatch.setattr(
         settings_dialog,
-        "set_opencode_go_key",
-        lambda account_id, value: (
+        "set_account_api_key",
+        lambda kind, account_id, value: (
             secrets.__setitem__(account_id, value)
             if value
             else secrets.pop(account_id, None)
@@ -230,7 +262,9 @@ def test_removing_opencode_account_clears_its_key_on_accept(qtbot, monkeypatch):
 
 def test_opencode_go_settings_apply_multiple_accounts(qtbot, monkeypatch):
     monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
-    monkeypatch.setattr(settings_dialog, "get_opencode_go_key", lambda account_id: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
     config = Config()
     dialog = SettingsDialog(config)
     qtbot.addWidget(dialog)
@@ -505,7 +539,7 @@ def test_mcp_policy_for_removed_account_is_not_saved(qtbot, monkeypatch):
 
 
 _PAGE_KEYS = [
-    "general", "claude", "codex", "opencode_go", "copilot",
+    "general", "claude", "codex", "opencode_go", "minimax", "copilot",
     "openrouter", "antigravity", "mcp", "local_usage",
 ]
 
@@ -519,8 +553,8 @@ def test_settings_pages_are_listed_in_order_and_general_is_selected(qtbot):
     assert [
         dialog.nav_list.item(i).text() for i in range(dialog.nav_list.count())
     ] == [
-        "General", "PROVIDERS", "Claude", "Codex", "OpenCode", "GitHub Copilot",
-        "OpenRouter", "Antigravity", "TOOLS", "MCP", "Local usage",
+        "General", "PROVIDERS", "Claude", "Codex", "OpenCode", "MiniMax",
+        "GitHub Copilot", "OpenRouter", "Antigravity", "TOOLS", "MCP", "Local usage",
     ]
 
 
@@ -598,7 +632,10 @@ def test_show_provider_lands_on_each_provider_page(qtbot):
 
 # ----- provider enable checkboxes, sidebar state and order -----
 
-_PROVIDER_KINDS = ["claude", "codex", "opencode_go", "copilot", "openrouter", "antigravity"]
+_PROVIDER_KINDS = [
+    "claude", "codex", "opencode_go", "minimax", "copilot", "openrouter",
+    "antigravity",
+]
 
 
 def _nav_keys(dialog: SettingsDialog) -> list:
@@ -715,11 +752,12 @@ def test_sidebar_follows_saved_provider_order(qtbot):
     qtbot.addWidget(dialog)
 
     assert dialog.provider_order() == [
-        "openrouter", "claude", "codex", "opencode_go", "copilot", "antigravity",
+        "openrouter", "claude", "codex", "opencode_go", "minimax", "copilot",
+        "antigravity",
     ]
     assert _nav_keys(dialog) == [
         "general", None, "openrouter", "claude", "codex", "opencode_go",
-        "copilot", "antigravity", None, "mcp", "local_usage",
+        "minimax", "copilot", "antigravity", None, "mcp", "local_usage",
     ]
     assert sorted(dialog.page_keys()) == sorted(_PAGE_KEYS)
     for kind in _PROVIDER_KINDS:
@@ -746,7 +784,8 @@ def test_move_provider_reorders_clamps_and_keeps_other_rows(qtbot):
 
     dialog.move_provider("antigravity", 0)
     assert dialog.provider_order() == [
-        "antigravity", "claude", "codex", "opencode_go", "copilot", "openrouter",
+        "antigravity", "claude", "codex", "opencode_go", "minimax", "copilot",
+        "openrouter",
     ]
     dialog.move_provider("antigravity", 99)
     assert dialog.provider_order() == _PROVIDER_KINDS
@@ -754,14 +793,15 @@ def test_move_provider_reorders_clamps_and_keeps_other_rows(qtbot):
     assert dialog.provider_order() == _PROVIDER_KINDS
     dialog.move_provider("claude", 3)
     assert dialog.provider_order() == [
-        "codex", "opencode_go", "copilot", "claude", "openrouter", "antigravity",
+        "codex", "opencode_go", "minimax", "claude", "copilot", "openrouter",
+        "antigravity",
     ]
     # Non-provider rows never move, and asking to move one does nothing.
     dialog.move_provider("mcp", 0)
     dialog.move_provider("general", 3)
     keys = _nav_keys(dialog)
     assert keys[0] == "general" and keys[1] is None
-    assert keys[8] is None and keys[9:] == ["mcp", "local_usage"]
+    assert keys[9] is None and keys[10:] == ["mcp", "local_usage"]
     # The page that was shown stays shown and its row stays selected.
     assert dialog.current_page_key() == "codex"
     assert dialog.pages.currentWidget() is dialog.page_widget("codex")
@@ -773,9 +813,9 @@ def test_show_page_lands_on_the_right_page_after_a_move(qtbot):
     qtbot.addWidget(dialog)
 
     dialog.move_provider("openrouter", 0)
-    dialog.move_provider("claude", 5)
+    dialog.move_provider("claude", 6)
     assert dialog.page_keys() == [
-        "general", "openrouter", "codex", "opencode_go", "copilot",
+        "general", "openrouter", "codex", "opencode_go", "minimax", "copilot",
         "antigravity", "claude", "mcp", "local_usage",
     ]
     for key in dialog.page_keys():
@@ -809,23 +849,26 @@ def test_drop_inside_provider_section_reorders_without_losing_rows(qtbot):
 
     assert event.dropAction() == Qt.DropAction.IgnoreAction
     assert dialog.provider_order() == [
-        "codex", "opencode_go", "copilot", "claude", "openrouter", "antigravity",
+        "codex", "opencode_go", "minimax", "copilot", "claude", "openrouter",
+        "antigravity",
     ]
     keys = _nav_keys(dialog)
     assert sorted(k for k in keys if k in _PROVIDER_KINDS) == sorted(_PROVIDER_KINDS)
-    assert dialog.nav_list.count() == 11
+    assert dialog.nav_list.count() == 12
     assert dialog.current_page_key() == "claude"
 
     # Upper half of Codex: Antigravity lands right before it.
     _drop(dialog, "antigravity", "codex", below=False)
     assert dialog.provider_order() == [
-        "antigravity", "codex", "opencode_go", "copilot", "claude", "openrouter",
+        "antigravity", "codex", "opencode_go", "minimax", "copilot", "claude",
+        "openrouter",
     ]
     # Dropping a row on its own edges changes nothing.
     _drop(dialog, "codex", "codex", below=True)
     _drop(dialog, "codex", "codex", below=False)
     assert dialog.provider_order() == [
-        "antigravity", "codex", "opencode_go", "copilot", "claude", "openrouter",
+        "antigravity", "codex", "opencode_go", "minimax", "copilot", "claude",
+        "openrouter",
     ]
 
 
@@ -837,14 +880,14 @@ def test_drop_outside_provider_section_changes_nothing(qtbot):
 
     rects = [
         dialog.nav_list.visualItemRect(dialog.nav_list.item(row))
-        for row in (0, 1, 8, 9, 10)  # General, PROVIDERS, TOOLS, MCP, Local usage
+        for row in (0, 1, 9, 10, 11)  # General, PROVIDERS, TOOLS, MCP, Local usage
     ]
     for rect in rects:
         dialog.show_page("claude")
         event = _drop_at(dialog, QPointF(rect.center()))
         assert event.dropAction() == Qt.DropAction.IgnoreAction
         assert _nav_keys(dialog) == before
-        assert dialog.nav_list.count() == 11
+        assert dialog.nav_list.count() == 12
     assert dialog.nav_list.drop_position(QPoint(5, 5000)) is None
 
 
@@ -884,7 +927,8 @@ def test_alt_arrows_move_the_current_provider_row(qtbot):
     for _ in range(3):  # the third press is at the top and does nothing
         qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier)
     assert dialog.provider_order() == [
-        "codex", "claude", "opencode_go", "copilot", "openrouter", "antigravity",
+        "codex", "claude", "opencode_go", "minimax", "copilot", "openrouter",
+        "antigravity",
     ]
     assert dialog.current_page_key() == "codex"
 
@@ -923,10 +967,11 @@ def test_apply_to_writes_the_provider_order(qtbot):
     dialog.move_provider("antigravity", 0)
     dialog.apply_to(config)
     assert config.provider_order == [
-        "antigravity", "claude", "codex", "opencode_go", "copilot", "openrouter",
+        "antigravity", "claude", "codex", "opencode_go", "minimax", "copilot",
+        "openrouter",
     ]
 
-    dialog.move_provider("antigravity", 5)
+    dialog.move_provider("antigravity", 6)
     dialog.apply_to(config)
     assert config.provider_order == []
 
@@ -1059,3 +1104,207 @@ def test_clicking_the_grip_still_shows_the_provider_page(qtbot):
     )
 
     assert dialog.current_page_key() == "copilot"
+
+
+# ----- MiniMax (API key, several accounts) -----
+
+
+def _minimax_rows(dialog: SettingsDialog) -> list:
+    return [
+        row
+        for row in dialog._browser_account_rows  # noqa: SLF001
+        if row.kind == "minimax"
+    ]
+
+
+def test_minimax_page_has_a_masked_key_field_and_no_browser_buttons(
+    qtbot, monkeypatch
+):
+    opened = []
+    monkeypatch.setattr(
+        settings_dialog, "_open_in_browser", lambda url: opened.append(url)
+    )
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    (row,) = _minimax_rows(dialog)
+    assert row.api_key_edit is not None
+    assert row.api_key_edit.echoMode() == row.api_key_edit.EchoMode.Password
+    assert row.api_key_edit.placeholderText() == "sk-cp-..."
+    for name in ("signin", "paste_cookie", "clear_signin"):
+        assert dialog.findChild(QPushButton, f"minimax_{name}_btn") is None
+    usage = _button(dialog, "minimax_open_usage_btn")
+    assert usage.text() == "Open usage in browser"
+    usage.click()
+    assert opened == ["https://platform.minimax.io/console/usage"]
+
+
+def test_minimax_keys_are_saved_per_account(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    secrets = {}
+    calls = []
+    monkeypatch.setattr(
+        settings_dialog,
+        "get_account_api_key",
+        lambda kind, account_id: secrets.get(account_id),
+    )
+
+    def fake_set(kind, account_id, value):
+        calls.append((kind, account_id, value))
+        secrets[account_id] = value
+
+    monkeypatch.setattr(settings_dialog, "set_account_api_key", fake_set)
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    dialog.minimax_cb.setChecked(True)
+    (first,) = _minimax_rows(dialog)
+    first.api_key_edit.setText("sk-cp-one")
+    dialog._add_browser_account("minimax")  # noqa: SLF001
+    first, second = _minimax_rows(dialog)
+    assert first.account_id == "minimax"
+    assert second.account_id.startswith("minimax-")
+    assert second.account_id != "minimax-"
+    # The first row's unsaved draft survives the rebuild.
+    assert first.api_key_edit.text() == "sk-cp-one"
+    second.api_key_edit.setText("sk-cp-two")
+
+    dialog._accept()  # noqa: SLF001
+
+    assert calls == [
+        ("minimax", "minimax", "sk-cp-one"),
+        ("minimax", second.account_id, "sk-cp-two"),
+    ]
+    assert secrets == {"minimax": "sk-cp-one", second.account_id: "sk-cp-two"}
+
+
+def test_minimax_row_has_a_region_combo_set_from_the_account(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="minimax", kind="minimax"),
+            BrowserAccount(id="minimax-cn", kind="minimax", region="china"),
+        ]
+    )
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    intl, cn = _minimax_rows(dialog)
+    for row in (intl, cn):
+        combo = dialog.findChild(QComboBox, f"{row.account_id}_region_combo")
+        assert combo is row.region_combo
+        assert [combo.itemText(i) for i in range(combo.count())] == [
+            "International (api.minimax.io)",
+            "China (api.minimax.cn)",
+        ]
+        assert combo.toolTip() == (
+            "The API key is sent only to this region's MiniMax host."
+        )
+    assert intl.region_combo.currentData() == "international"
+    assert cn.region_combo.currentData() == "china"
+
+
+@pytest.mark.parametrize(
+    "regions,expected",
+    [
+        (["china"], ["https://platform.minimax.cn/console/usage"]),
+        (
+            ["china", "international", "china"],
+            [
+                "https://platform.minimax.io/console/usage",
+                "https://platform.minimax.cn/console/usage",
+            ],
+        ),
+        ([], ["https://platform.minimax.io/console/usage"]),
+    ],
+)
+def test_minimax_open_usage_follows_the_selected_regions(
+    qtbot, monkeypatch, regions, expected
+):
+    opened = []
+    monkeypatch.setattr(
+        settings_dialog, "_open_in_browser", lambda url: opened.append(url)
+    )
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id=f"minimax-{i}", kind="minimax", name=f"M{i}")
+            for i in range(len(regions))
+        ]
+    )
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+    # Unsaved choices count: the button reads the rows, not the config.
+    for row, region in zip(_minimax_rows(dialog), regions):
+        row.region_combo.setCurrentIndex(row.region_combo.findData(region))
+
+    _button(dialog, "minimax_open_usage_btn").click()
+
+    assert opened == expected
+
+
+def test_minimax_region_choice_is_saved(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    config = Config()
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    (row,) = _minimax_rows(dialog)
+    row.region_combo.setCurrentIndex(row.region_combo.findData("china"))
+    dialog.apply_to(config)
+
+    saved = {a.id: a.region for a in config.browser_accounts}
+    assert saved["minimax"] == "china"
+
+
+def test_non_minimax_rows_have_no_region_combo_and_keep_their_region(
+    qtbot, monkeypatch
+):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    config = Config(
+        browser_accounts=[
+            BrowserAccount(id="claude", kind="claude", region="china"),
+            BrowserAccount(id="codex", kind="codex"),
+        ]
+    )
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    rows = {row.account_id: row for row in dialog._browser_account_rows}  # noqa: SLF001
+    assert rows["claude"].region_combo is None
+    assert rows["codex"].region_combo is None
+    assert dialog.findChild(QComboBox, "claude_region_combo") is None
+    dialog.apply_to(config)
+    assert {a.id: a.region for a in config.browser_accounts}["claude"] == "china"
+
+
+def test_unsaved_minimax_region_survives_a_row_rebuild(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    monkeypatch.setattr(
+        settings_dialog, "get_account_api_key", lambda kind, account_id: None
+    )
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    (first,) = _minimax_rows(dialog)
+    first.region_combo.setCurrentIndex(first.region_combo.findData("china"))
+    dialog._add_browser_account("minimax")  # noqa: SLF001
+
+    first, second = _minimax_rows(dialog)
+    assert first.region_combo.currentData() == "china"
+    assert second.region_combo.currentData() == "international"

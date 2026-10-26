@@ -64,6 +64,13 @@ from .config import (
 from .gauge import color_for_percent, thresholds_for_provider
 from .icons import app_icon
 from .models import SnapshotStatus, UsageSnapshot
+from .providers.registry import (
+    account_family,
+    account_kinds,
+    api_key_kinds,
+    browser_session_kinds,
+    provider_spec,
+)
 from .ratio import (
     MIN_SAMPLES,
     MIN_SESSION_DELTA,
@@ -113,13 +120,12 @@ def _clamp_height(value: int) -> int:
 
 
 def _provider_family(provider: str) -> str:
-    if provider == "claude" or provider.startswith("claude-"):
-        return "claude"
-    if provider == "codex" or provider.startswith("codex-"):
-        return "codex"
-    if provider == "opencode_go" or provider.startswith("opencode_go-"):
-        return "opencode_go"
-    return provider
+    """The account kind of a tile id, or the id itself for single providers."""
+    return account_family(provider) or provider
+
+
+def _is_api_key_tile(provider: str) -> bool:
+    return _provider_family(provider) in api_key_kinds()
 
 
 def _claude_weekly_limit_hit(snapshot: UsageSnapshot | None) -> bool:
@@ -1195,7 +1201,8 @@ class _ProviderTile(QFrame):
             self.set_snapshot(self._latest_snapshot)
 
     def _supports_compact_collapse(self) -> bool:
-        return _provider_family(self.provider) in ("claude", "codex", "opencode_go")
+        spec = provider_spec(_provider_family(self.provider))
+        return spec is not None and spec.compact_collapse
 
     def _compact_metrics_from(self, snapshot: UsageSnapshot) -> list:
         metrics = [
@@ -1258,17 +1265,17 @@ class _ProviderTile(QFrame):
             return
 
         if snapshot.status == SnapshotStatus.AUTH_REQUIRED:
-            is_opencode = _provider_family(self.provider) == "opencode_go"
-            self.status.setText("API key needed" if is_opencode else "not signed in")
+            is_api_key = _is_api_key_tile(self.provider)
+            self.status.setText("API key needed" if is_api_key else "not signed in")
             self.status.setStyleSheet(
                 "color: #f59e0b; font-size: 10px; font-style: normal;"
             )
             self.status.setToolTip(snapshot.error or "")
             self.status.setCursor(Qt.CursorShape.ArrowCursor)
             self.action_btn.setVisible(
-                _provider_family(self.provider) in ("claude", "codex", "opencode_go")
+                _provider_family(self.provider) in account_kinds()
             )
-            self.action_btn.setText("Add key" if is_opencode else "Sign in")
+            self.action_btn.setText("Add key" if is_api_key else "Sign in")
             self.expand_btn.setVisible(False)
             self.ratio_label.setVisible(False)
             self._hide_compact_metrics()
@@ -1899,10 +1906,11 @@ class UsageWidget(QWidget):
         return thresholds_for_provider(self._config, provider)
 
     def _tile_sort_key(self, provider: str) -> tuple[int, int, str]:
+        kinds = account_kinds()
         accounts = [
             account
             for account in getattr(self._config, "browser_accounts", [])
-            if account.kind in ("claude", "codex", "opencode_go")
+            if account.kind in kinds
         ]
         account_ids = [account.id for account in accounts]
         order = provider_order(self._config)
@@ -2372,11 +2380,7 @@ class UsageWidget(QWidget):
         if snapshot is None:
             return f"{display} --"
         if snapshot.status == SnapshotStatus.AUTH_REQUIRED:
-            suffix = (
-                "add key"
-                if _provider_family(provider) == "opencode_go"
-                else "sign in"
-            )
+            suffix = "add key" if _is_api_key_tile(provider) else "sign in"
             return f"{display} {suffix}"
         if snapshot.status == SnapshotStatus.ERROR:
             metric = next(
@@ -2449,10 +2453,12 @@ class UsageWidget(QWidget):
 
     def _summary_chip(self, provider: str) -> _SummaryChip:
         account = browser_account(self._config, provider)
+        # A named account shows only its name, except the default account of a
+        # browser-session kind (id == kind), which keeps the provider name.
         display = (
             account.name.strip()
             if account is not None
-            and provider not in ("claude", "codex")
+            and provider not in browser_session_kinds()
             and account.name
             and account.name.strip()
             else display_name_for_account(self._config, provider)
@@ -2466,10 +2472,10 @@ class UsageWidget(QWidget):
         if snapshot is None:
             tooltip = "Waiting for first refresh."
         elif snapshot.status == SnapshotStatus.AUTH_REQUIRED:
-            is_opencode = _provider_family(provider) == "opencode_go"
-            text = f"{display} {'add key' if is_opencode else 'sign in'}"
+            is_api_key = _is_api_key_tile(provider)
+            text = f"{display} {'add key' if is_api_key else 'sign in'}"
             tooltip = snapshot.error or (
-                "API key required." if is_opencode else "Sign in required."
+                "API key required." if is_api_key else "Sign in required."
             )
             kind = "auth"
         elif snapshot.status == SnapshotStatus.ERROR:

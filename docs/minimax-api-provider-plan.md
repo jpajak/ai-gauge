@@ -1,6 +1,10 @@
 # MiniMax Coding Plan provider: plan
 
-**Status:** built (62bf4b3..c94f430), unreleased.
+**Status:** built (62bf4b3..c94f430), merged in #15 on 2026-10-26 and included
+in the 0.8.6 release preparation. MiniMax remains experimental and off by
+default. The complete Settings/key-storage flow with a real subscribed key
+is a follow-up rather than a release prerequisite. Live quota readings were
+compared with the console across a reset; Settings was checked with a dummy key.
 
 Assessed 2026-10-19 against `main` at `f87036c` (0.8.5), issue #13 and draft
 PR #14 by innoscoutpro (head `32c00e9`).

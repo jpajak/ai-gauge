@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## 0.8.6 - 2026-10-26
+
 ### Added
 
 - Optional MiniMax Coding Plan tile showing the 5-hour and weekly limits. It is off by default; turn it on from its Settings page and enter each account's Coding Plan API key and region (International or China). The key is sent only to that region's API host. ([#13](https://github.com/jpajak/ai-gauge/issues/13), thanks [@innoscoutpro](https://github.com/innoscoutpro).)
@@ -14,6 +16,12 @@
 ### Fixed
 
 - Help text under Settings fields is no longer cut off, and a page taller than the window now scrolls.
+
+### Known limitations
+
+- MiniMax is experimental. Live quota readings have been compared with the console across a reset, and Settings has been checked with a dummy key; the complete Settings/key-storage flow with a real subscribed key still needs testing.
+- Claude API credit rollover and Console session renewal have not yet been checked live. Purchased-credit, pooled Team, and non-USD responses also remain unverified.
+- OpenRouter's management-key totals cover the default workspace; keys in other workspaces are not counted.
 
 ## 0.8.5 - 2026-10-08
 

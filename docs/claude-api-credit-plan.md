@@ -1,7 +1,8 @@
 # Plan: show the monthly Claude API credit (Max and Team plans)
 
-**Status:** built and manually checked on 2026-10-23, ready for its PR after
-#15. The manual check (the last bullet of [Test strategy](#test-strategy))
+**Status:** built and manually checked on 2026-10-23, included in the 0.8.6
+release preparation through #16. Its dependency #15 merged on 2026-10-26.
+The manual check (the last bullet of [Test strategy](#test-strategy))
 found nothing to fix, so commit 5 is complete. P1 and P2 are recorded. What
 is still open is under [Not verified](#not-verified). First
 written 2026-10-08; revised 2026-10-23 after an outside review, whose points

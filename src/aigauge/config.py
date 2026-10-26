@@ -127,6 +127,7 @@ class ProviderToggles(BaseModel):
     antigravity: bool = False
     opencode_go: bool = False
     minimax: bool = False
+    claude_api: bool = False
 
 
 class ColorThresholds(BaseModel):
@@ -233,7 +234,7 @@ class Config(BaseModel):
             BrowserAccount(id=kind, kind=kind) for kind in account_kinds()
         ]
     )
-    browser_accounts_version: int = 3
+    browser_accounts_version: int = 4
     copilot: CopilotConfig = Field(default_factory=CopilotConfig)
     openrouter: OpenRouterConfig = Field(default_factory=OpenRouterConfig)
     antigravity: AntigravityConfig = Field(default_factory=AntigravityConfig)
@@ -344,6 +345,23 @@ class Config(BaseModel):
                     }
                 )
             data["browser_accounts_version"] = 3
+            accounts_version = 3
+        if accounts_version < 4:
+            accounts = data.get("browser_accounts")
+            if isinstance(accounts, list) and not any(
+                item.get("kind") == "claude_api"
+                for item in accounts
+                if isinstance(item, dict)
+            ):
+                accounts.append(
+                    {
+                        "id": "claude_api",
+                        "kind": "claude_api",
+                        "name": None,
+                        "enabled": True,
+                    }
+                )
+            data["browser_accounts_version"] = 4
         window = data.get("window")
         if isinstance(window, dict):
             width = window.get("width")

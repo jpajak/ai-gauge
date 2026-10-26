@@ -1,3 +1,5 @@
+import dataclasses
+
 import pytest
 from PyQt6.QtCore import QEvent, QMimeData, QPoint, QPointF, QRect, Qt
 from PyQt6.QtGui import QColor, QDragMoveEvent, QDropEvent, QImage, QMouseEvent
@@ -538,9 +540,50 @@ def test_mcp_policy_for_removed_account_is_not_saved(qtbot, monkeypatch):
     assert "codex" not in config.mcp_pause_policies
 
 
+def test_usage_guard_false_hides_pause_rows_and_drops_policies(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    spec = registry.provider_spec("codex")
+    monkeypatch.setitem(
+        registry._SPECS_BY_ID, "codex", dataclasses.replace(spec, usage_guard=False)
+    )
+    config = Config(mcp_enabled=True)
+    config.mcp_pause_policies = {"codex": 80, "claude": 70}
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert "codex" not in dialog.mcp_policy_controls
+    assert "claude" in dialog.mcp_policy_controls
+
+    dialog.apply_to(config)
+
+    assert config.mcp_pause_policies == {"claude": 70}
+
+
+def test_usage_guard_false_hides_single_spec_pause_row(qtbot, monkeypatch):
+    monkeypatch.setattr(settings_dialog, "set_start_at_login", lambda enabled: None)
+    specs = tuple(
+        dataclasses.replace(spec, usage_guard=False) if spec.id == "openrouter" else spec
+        for spec in registry.PROVIDER_SPECS
+    )
+    monkeypatch.setattr(registry, "PROVIDER_SPECS", specs)
+    config = Config(mcp_enabled=True)
+    config.providers.openrouter = True
+    config.providers.copilot = True
+    config.mcp_pause_policies = {"openrouter": 80, "copilot": 70}
+    dialog = SettingsDialog(config)
+    qtbot.addWidget(dialog)
+
+    assert "openrouter" not in dialog.mcp_policy_controls
+    assert "copilot" in dialog.mcp_policy_controls
+
+    dialog.apply_to(config)
+
+    assert config.mcp_pause_policies == {"copilot": 70}
+
+
 _PAGE_KEYS = [
-    "general", "claude", "codex", "opencode_go", "minimax", "copilot",
-    "openrouter", "antigravity", "mcp", "local_usage",
+    "general", "claude", "claude_api", "codex", "opencode_go", "minimax",
+    "copilot", "openrouter", "antigravity", "mcp", "local_usage",
 ]
 
 
@@ -553,8 +596,9 @@ def test_settings_pages_are_listed_in_order_and_general_is_selected(qtbot):
     assert [
         dialog.nav_list.item(i).text() for i in range(dialog.nav_list.count())
     ] == [
-        "General", "PROVIDERS", "Claude", "Codex", "OpenCode", "MiniMax",
-        "GitHub Copilot", "OpenRouter", "Antigravity", "TOOLS", "MCP", "Local usage",
+        "General", "PROVIDERS", "Claude", "Claude API", "Codex", "OpenCode",
+        "MiniMax", "GitHub Copilot", "OpenRouter", "Antigravity", "TOOLS", "MCP",
+        "Local usage",
     ]
 
 
@@ -633,8 +677,8 @@ def test_show_provider_lands_on_each_provider_page(qtbot):
 # ----- provider enable checkboxes, sidebar state and order -----
 
 _PROVIDER_KINDS = [
-    "claude", "codex", "opencode_go", "minimax", "copilot", "openrouter",
-    "antigravity",
+    "claude", "claude_api", "codex", "opencode_go", "minimax", "copilot",
+    "openrouter", "antigravity",
 ]
 
 
@@ -696,7 +740,7 @@ def test_enable_checkbox_sits_above_hint_and_group_box(qtbot):
     dialog = SettingsDialog(Config())
     qtbot.addWidget(dialog)
 
-    layout = dialog.page_widget("codex").layout()
+    layout = dialog.page_content("codex").layout()
     assert layout.itemAt(0).widget() is dialog.codex_cb
     hint = layout.itemAt(1).widget()
     assert "does not poll Codex" in hint.text()
@@ -752,12 +796,13 @@ def test_sidebar_follows_saved_provider_order(qtbot):
     qtbot.addWidget(dialog)
 
     assert dialog.provider_order() == [
-        "openrouter", "claude", "codex", "opencode_go", "minimax", "copilot",
-        "antigravity",
+        "openrouter", "claude", "claude_api", "codex", "opencode_go", "minimax",
+        "copilot", "antigravity",
     ]
     assert _nav_keys(dialog) == [
-        "general", None, "openrouter", "claude", "codex", "opencode_go",
-        "minimax", "copilot", "antigravity", None, "mcp", "local_usage",
+        "general", None, "openrouter", "claude", "claude_api", "codex",
+        "opencode_go", "minimax", "copilot", "antigravity", None, "mcp",
+        "local_usage",
     ]
     assert sorted(dialog.page_keys()) == sorted(_PAGE_KEYS)
     for kind in _PROVIDER_KINDS:
@@ -784,24 +829,24 @@ def test_move_provider_reorders_clamps_and_keeps_other_rows(qtbot):
 
     dialog.move_provider("antigravity", 0)
     assert dialog.provider_order() == [
-        "antigravity", "claude", "codex", "opencode_go", "minimax", "copilot",
-        "openrouter",
+        "antigravity", "claude", "claude_api", "codex", "opencode_go", "minimax",
+        "copilot", "openrouter",
     ]
     dialog.move_provider("antigravity", 99)
     assert dialog.provider_order() == _PROVIDER_KINDS
     dialog.move_provider("claude", -5)
     assert dialog.provider_order() == _PROVIDER_KINDS
-    dialog.move_provider("claude", 3)
+    dialog.move_provider("claude", 4)
     assert dialog.provider_order() == [
-        "codex", "opencode_go", "minimax", "claude", "copilot", "openrouter",
-        "antigravity",
+        "claude_api", "codex", "opencode_go", "minimax", "claude", "copilot",
+        "openrouter", "antigravity",
     ]
     # Non-provider rows never move, and asking to move one does nothing.
     dialog.move_provider("mcp", 0)
     dialog.move_provider("general", 3)
     keys = _nav_keys(dialog)
     assert keys[0] == "general" and keys[1] is None
-    assert keys[9] is None and keys[10:] == ["mcp", "local_usage"]
+    assert keys[10] is None and keys[11:] == ["mcp", "local_usage"]
     # The page that was shown stays shown and its row stays selected.
     assert dialog.current_page_key() == "codex"
     assert dialog.pages.currentWidget() is dialog.page_widget("codex")
@@ -813,10 +858,10 @@ def test_show_page_lands_on_the_right_page_after_a_move(qtbot):
     qtbot.addWidget(dialog)
 
     dialog.move_provider("openrouter", 0)
-    dialog.move_provider("claude", 6)
+    dialog.move_provider("claude", 7)
     assert dialog.page_keys() == [
-        "general", "openrouter", "codex", "opencode_go", "minimax", "copilot",
-        "antigravity", "claude", "mcp", "local_usage",
+        "general", "openrouter", "claude_api", "codex", "opencode_go", "minimax",
+        "copilot", "antigravity", "claude", "mcp", "local_usage",
     ]
     for key in dialog.page_keys():
         dialog.show_page(key)
@@ -849,26 +894,26 @@ def test_drop_inside_provider_section_reorders_without_losing_rows(qtbot):
 
     assert event.dropAction() == Qt.DropAction.IgnoreAction
     assert dialog.provider_order() == [
-        "codex", "opencode_go", "minimax", "copilot", "claude", "openrouter",
-        "antigravity",
+        "claude_api", "codex", "opencode_go", "minimax", "copilot", "claude",
+        "openrouter", "antigravity",
     ]
     keys = _nav_keys(dialog)
     assert sorted(k for k in keys if k in _PROVIDER_KINDS) == sorted(_PROVIDER_KINDS)
-    assert dialog.nav_list.count() == 12
+    assert dialog.nav_list.count() == 13
     assert dialog.current_page_key() == "claude"
 
     # Upper half of Codex: Antigravity lands right before it.
     _drop(dialog, "antigravity", "codex", below=False)
     assert dialog.provider_order() == [
-        "antigravity", "codex", "opencode_go", "minimax", "copilot", "claude",
-        "openrouter",
+        "claude_api", "antigravity", "codex", "opencode_go", "minimax", "copilot",
+        "claude", "openrouter",
     ]
     # Dropping a row on its own edges changes nothing.
     _drop(dialog, "codex", "codex", below=True)
     _drop(dialog, "codex", "codex", below=False)
     assert dialog.provider_order() == [
-        "antigravity", "codex", "opencode_go", "minimax", "copilot", "claude",
-        "openrouter",
+        "claude_api", "antigravity", "codex", "opencode_go", "minimax", "copilot",
+        "claude", "openrouter",
     ]
 
 
@@ -880,14 +925,14 @@ def test_drop_outside_provider_section_changes_nothing(qtbot):
 
     rects = [
         dialog.nav_list.visualItemRect(dialog.nav_list.item(row))
-        for row in (0, 1, 9, 10, 11)  # General, PROVIDERS, TOOLS, MCP, Local usage
+        for row in (0, 1, 10, 11, 12)  # General, PROVIDERS, TOOLS, MCP, Local usage
     ]
     for rect in rects:
         dialog.show_page("claude")
         event = _drop_at(dialog, QPointF(rect.center()))
         assert event.dropAction() == Qt.DropAction.IgnoreAction
         assert _nav_keys(dialog) == before
-        assert dialog.nav_list.count() == 12
+        assert dialog.nav_list.count() == 13
     assert dialog.nav_list.drop_position(QPoint(5, 5000)) is None
 
 
@@ -921,14 +966,16 @@ def test_alt_arrows_move_the_current_provider_row(qtbot):
     dialog.nav_list.setFocus()
 
     qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Down, Qt.KeyboardModifier.AltModifier)
-    assert dialog.provider_order()[:3] == ["claude", "opencode_go", "codex"]
+    assert dialog.provider_order()[:4] == [
+        "claude", "claude_api", "opencode_go", "codex",
+    ]
     assert dialog.current_page_key() == "codex"
 
-    for _ in range(3):  # the third press is at the top and does nothing
+    for _ in range(4):  # the fourth press is at the top and does nothing
         qtbot.keyClick(dialog.nav_list, Qt.Key.Key_Up, Qt.KeyboardModifier.AltModifier)
     assert dialog.provider_order() == [
-        "codex", "claude", "opencode_go", "minimax", "copilot", "openrouter",
-        "antigravity",
+        "codex", "claude", "claude_api", "opencode_go", "minimax", "copilot",
+        "openrouter", "antigravity",
     ]
     assert dialog.current_page_key() == "codex"
 
@@ -953,7 +1000,7 @@ def test_alt_arrows_work_when_the_arrow_key_carries_the_keypad_modifier(qtbot):
         Qt.KeyboardModifier.AltModifier | Qt.KeyboardModifier.KeypadModifier,
     )
 
-    assert dialog.provider_order()[:2] == ["codex", "claude"]
+    assert dialog.provider_order()[:2] == ["claude_api", "claude"]
 
 
 def test_apply_to_writes_the_provider_order(qtbot):
@@ -967,11 +1014,11 @@ def test_apply_to_writes_the_provider_order(qtbot):
     dialog.move_provider("antigravity", 0)
     dialog.apply_to(config)
     assert config.provider_order == [
-        "antigravity", "claude", "codex", "opencode_go", "minimax", "copilot",
-        "openrouter",
+        "antigravity", "claude", "claude_api", "codex", "opencode_go", "minimax",
+        "copilot", "openrouter",
     ]
 
-    dialog.move_provider("antigravity", 6)
+    dialog.move_provider("antigravity", 7)
     dialog.apply_to(config)
     assert config.provider_order == []
 
@@ -1308,3 +1355,145 @@ def test_unsaved_minimax_region_survives_a_row_rebuild(qtbot, monkeypatch):
     first, second = _minimax_rows(dialog)
     assert first.region_combo.currentData() == "china"
     assert second.region_combo.currentData() == "international"
+
+
+# ----- Hint labels and scrolling pages ----------------------------------------
+
+
+def _no_openrouter_keys(monkeypatch):
+    monkeypatch.setattr(settings_dialog, "get_openrouter_key", lambda: "")
+    monkeypatch.setattr(settings_dialog, "get_openrouter_mgmt_key", lambda: "")
+
+
+def _settled_dialog(qtbot, page: str, size: tuple[int, int] | None = None):
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+    if size is not None:
+        dialog.resize(*size)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    dialog.show_page(page)
+    for _ in range(3):
+        QApplication.processEvents()
+    qtbot.wait(20)
+    return dialog
+
+
+def _visible_hints(group: QGroupBox) -> list[QLabel]:
+    return [
+        label
+        for label in group.findChildren(QLabel)
+        if label.property("hint") and label.isVisible()
+    ]
+
+
+@pytest.mark.parametrize(
+    ("page", "field_attr"),
+    [("openrouter", "or_key_edit"), ("copilot", "gh_pat_edit")],
+)
+@pytest.mark.parametrize("size", [None, (1000, 890)])
+def test_provider_hints_are_not_clipped_and_span_the_field_column(
+    qtbot, monkeypatch, page, field_attr, size
+):
+    _no_openrouter_keys(monkeypatch)
+    dialog = _settled_dialog(qtbot, page, size)
+
+    edit = getattr(dialog, field_attr)
+    group = edit.parentWidget()
+    assert isinstance(group, QGroupBox)
+    hints = _visible_hints(group)
+    assert len(hints) >= 3
+    for hint in hints:
+        text = hint.text()[:40]
+        # Tall enough for every wrapped line, so nothing is cut off.
+        assert hint.height() >= hint.heightForWidth(hint.width()), text
+        # Wrapped at the field column's width, not at QLabel's narrow default.
+        assert hint.width() >= edit.width(), text
+        assert hint.width() > hint.sizeHint().width(), text
+
+
+def test_openrouter_management_key_comes_before_the_inference_key(qtbot, monkeypatch):
+    from PyQt6.QtWidgets import QFormLayout
+
+    _no_openrouter_keys(monkeypatch)
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    form = dialog.or_key_edit.parentWidget().layout()
+    assert isinstance(form, QFormLayout)
+    mgmt_row, _ = form.getWidgetPosition(dialog.or_mgmt_key_edit)
+    key_row, _ = form.getWidgetPosition(dialog.or_key_edit)
+    assert mgmt_row < key_row
+    assert dialog.or_mgmt_key_edit.placeholderText() == "sk-or-v1-... (recommended)"
+    assert (
+        dialog.or_key_edit.placeholderText()
+        == "sk-or-v1-... (not needed with a management key)"
+    )
+
+    # Keyboard order follows the visual order.
+    order = []
+    widget = dialog.or_mgmt_key_edit
+    while widget not in order:
+        order.append(widget)
+        widget = widget.nextInFocusChain()
+    assert order.index(dialog.or_mgmt_key_edit) < order.index(dialog.or_key_edit)
+    assert order.index(dialog.or_key_edit) < order.index(dialog.or_daily_budget)
+
+
+def test_openrouter_help_says_the_inference_key_is_not_needed_with_a_management_key(
+    qtbot, monkeypatch
+):
+    _no_openrouter_keys(monkeypatch)
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    group = dialog.or_key_edit.parentWidget()
+    texts = [label.text() for label in group.findChildren(QLabel)]
+    mgmt_help = next(t for t in texts if "provisioning-keys" in t)
+    key_help = next(t for t in texts if "openrouter.ai/keys" in t)
+    budget_help = next(t for t in texts if "Optional. If set" in t)
+    assert "you don't need the inference key" in mgmt_help
+    assert mgmt_help.startswith("<b>Recommended.</b>")
+    assert key_help.startswith("<b>Only needed without a management key.</b>")
+    assert "Today row" in budget_help
+    assert "Daily row" not in budget_help
+    for text in (mgmt_help, key_help, budget_help):
+        assert "—" not in text
+
+
+def test_every_settings_page_is_a_vertical_scroll_area(qtbot):
+    from PyQt6.QtWidgets import QScrollArea
+
+    dialog = SettingsDialog(Config())
+    qtbot.addWidget(dialog)
+
+    for key in _PAGE_KEYS:
+        scroll = dialog.page_widget(key)
+        assert isinstance(scroll, QScrollArea), key
+        assert scroll.widgetResizable(), key
+        if key != "local_usage":  # that one predates the wrapper and keeps its own
+            assert (
+                scroll.horizontalScrollBarPolicy()
+                == Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+            ), key
+        assert scroll.widget() is dialog.page_content(key), key
+
+
+def test_a_page_taller_than_the_window_scrolls_and_keeps_the_dark_background(qtbot):
+    dialog = _settled_dialog(qtbot, "openrouter", (800, 420))
+
+    scroll = dialog.page_widget("openrouter")
+    bar = scroll.verticalScrollBar()
+    assert bar.maximum() > 0
+    assert not scroll.horizontalScrollBar().isVisible()
+    # The content keeps its natural height instead of squeezing its rows.
+    content = dialog.page_content("openrouter")
+    assert content.height() >= content.layout().minimumSize().height()
+
+    bar.setValue(bar.maximum())
+    QApplication.processEvents()
+    image = scroll.viewport().grab().toImage()
+    # A pixel at the viewport's right edge, below any control, is the dialog's
+    # dark background, not the platform's light window color.
+    pixel = QColor(image.pixel(image.width() - 3, image.height() // 2))
+    assert pixel.lightness() < 90

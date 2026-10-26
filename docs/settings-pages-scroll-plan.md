@@ -1,6 +1,6 @@
 # Plan: let Settings pages scroll instead of clipping
 
-**Status:** proposed (not started)
+**Status:** built in 3b0b6c5 (unreleased). The mouse wheel over combo and spin boxes (see Risks) is not handled.
 **Found while:** moving the provider enable checkboxes onto their own pages
 (2026-10-08)
 **Size:** one commit

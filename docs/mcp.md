@@ -3,13 +3,16 @@
 AI Gauge includes an optional local stdio MCP server for tools and agents that
 want to inspect subscription usage before starting expensive work. The
 integration is disabled by default. Enable it under **Settings → MCP** and
-configure an optional pause percentage for each account.
+configure an optional pause percentage for each account. Claude API accounts
+have no pause setting: their credit is a balance, not a limit.
 
 Bind each MCP client or profile to the AI Gauge account it actually uses:
 
 ```text
 ai-gauge-mcp --account-id codex-work
 ```
+
+Each account's ID is shown beside its name in **Settings → MCP**.
 
 Source installations need the optional dependency first:
 
@@ -31,6 +34,8 @@ xattr -dr com.apple.quarantine ai-gauge-mcp
 Configure the client to call `check_current_account_usage` before costly work
 and stop whenever the returned `allowed` value is `false`. Other tools provide
 sanitized usage and recommend the account with the most configured headroom.
+Balance rows, such as a prepaid credit, are reported with
+`guard_eligible: false` and never count toward a pause.
 
 `--account-id` selects which account the guard applies to; it is not an access
 boundary. `get_ai_usage` and `recommend_ai_account` report every enabled

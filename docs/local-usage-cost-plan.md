@@ -1,6 +1,6 @@
 # Plan: local usage, API-equivalent cost, and allowance trends
 
-**Status:** implemented on branch `feature/local-usage-cost` (phases 1 to 5); not yet released.
+**Status:** released in 0.8.0 (phases 1 to 5).
 **Date:** 2026-09-14 (revised after a review against real logs on the author's machine)
 **Scope:** Claude Code and Codex usage read from local CLI logs, combined with AI Gauge's existing quota observations.
 

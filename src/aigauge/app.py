@@ -45,7 +45,6 @@ from .providers.registry import (
     account_family,
     account_kinds,
     api_key_kinds,
-    browser_session_kinds,
     provider_spec,
     single_specs,
 )
@@ -193,8 +192,10 @@ def _preserve_error_metrics(
 ) -> UsageSnapshot:
     if (
         snapshot.status == SnapshotStatus.ERROR
-        # A configuration error (a mis-set CLI path) will not heal on its own,
-        # so old numbers would sit there as "stale" for as long as it lasts.
+        # A configuration error (a mis-set CLI path) or an account state the
+        # user has to change (several Console organizations, no billing role)
+        # will not heal on its own, so old numbers would sit there as "stale"
+        # for as long as it lasts.
         and not snapshot.raw.get("config_error")
         and not snapshot.metrics
         and previous is not None
@@ -1036,7 +1037,9 @@ class App(QObject):
         accounts = [
             account
             for account in self._config.browser_accounts
-            if account.enabled and account.kind in browser_session_kinds()
+            # Ratio history and local usage exist for these two kinds only;
+            # Claude API is a browser-session kind with neither.
+            if account.enabled and account.kind in ("claude", "codex")
         ]
         if not accounts:
             empty = menu.addAction("No Claude or Codex accounts")

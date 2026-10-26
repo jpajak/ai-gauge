@@ -37,10 +37,12 @@ SRC = Path(__file__).resolve().parents[1] / "src"
 
 EXPECTED_COOKIE_NAMES = {
     "claude": "sessionKey",
+    "claude_api": "sessionKey",
     "codex": "next-auth.session-token",
 }
 EXPECTED_COOKIE_NAME_ALIASES = {
     "claude": ("sessionKey",),
+    "claude_api": ("sessionKey", "sessionKeyV3"),
     "codex": (
         "next-auth.session-token",
         "__Secure-next-auth.session-token",
@@ -52,10 +54,12 @@ EXPECTED_COOKIE_NAME_ALIASES = {
 }
 EXPECTED_COOKIE_DOMAINS = {
     "claude": ".claude.ai",
+    "claude_api": ".platform.claude.com",
     "codex": ".chatgpt.com",
 }
 EXPECTED_DEFAULT_PROVIDER_ORDER = (
     "claude",
+    "claude_api",
     "codex",
     "opencode_go",
     "minimax",
@@ -71,19 +75,26 @@ EXPECTED_TOGGLE_DEFAULTS = {
     "antigravity": False,
     "opencode_go": False,
     "minimax": False,
+    "claude_api": False,
 }
 EXPECTED_DEFAULT_ACCOUNTS = [
     ("claude", "claude"),
+    ("claude_api", "claude_api"),
     ("codex", "codex"),
     ("opencode_go", "opencode_go"),
     ("minimax", "minimax"),
 ]
 EXPECTED_LOGIN_URLS = {
     "claude": ("https://claude.ai/login", "Sign in to Claude"),
+    "claude_api": (
+        "https://platform.claude.com/login",
+        "Sign in to Claude Console",
+    ),
     "codex": ("https://chatgpt.com/auth/login", "Sign in to ChatGPT"),
 }
 EXPECTED_MENUBAR_LABELS = {
     "claude": "Cl",
+    "claude_api": "CA",
     "codex": "Cx",
     "opencode_go": "Go",
     "minimax": "Mm",
@@ -95,6 +106,7 @@ EXPECTED_NAV_ENTRIES = (
     ("general", "General"),
     (None, "PROVIDERS"),
     ("claude", "Claude"),
+    ("claude_api", "Claude API"),
     ("codex", "Codex"),
     ("opencode_go", "OpenCode"),
     ("minimax", "MiniMax"),
@@ -108,6 +120,7 @@ EXPECTED_NAV_ENTRIES = (
 EXPECTED_PROVIDER_PAGE_KEYS = frozenset(
     {
         "claude",
+        "claude_api",
         "codex",
         "opencode_go",
         "minimax",
@@ -119,6 +132,7 @@ EXPECTED_PROVIDER_PAGE_KEYS = frozenset(
 # provider_base_name's explicit map; any other kind falls back to kind.title().
 EXPECTED_BASE_NAMES = {
     "claude": "Claude",
+    "claude_api": "Claude API",
     "codex": "Codex",
     "opencode_go": "OpenCode",
     "minimax": "MiniMax",
@@ -127,6 +141,7 @@ EXPECTED_BASE_NAMES = {
 # display_name_for_account's fallback for ids that are not configured accounts.
 EXPECTED_DISPLAY_NAMES = {
     "claude": "Claude",
+    "claude_api": "Claude API",
     "codex": "Codex",
     "copilot": "Copilot",
     "openrouter": "OpenRouter",
@@ -134,13 +149,14 @@ EXPECTED_DISPLAY_NAMES = {
     "opencode_go": "OpenCode",
     "minimax": "MiniMax",
 }
-EXPECTED_ACCOUNT_KINDS = ("claude", "codex", "opencode_go", "minimax")
-EXPECTED_BROWSER_SESSION_KINDS = ("claude", "codex")
+EXPECTED_ACCOUNT_KINDS = ("claude", "claude_api", "codex", "opencode_go", "minimax")
+EXPECTED_BROWSER_SESSION_KINDS = ("claude", "claude_api", "codex")
 EXPECTED_API_KEY_KINDS = ("opencode_go", "minimax")
 EXPECTED_SINGLE_KINDS = ("copilot", "openrouter", "antigravity")
 EXPECTED_AUTH_HOST_ALLOWLIST = (
     "claude.ai",
     "anthropic.com",
+    "claude.com",
     "chatgpt.com",
     "openai.com",
     "oaistatic.com",
@@ -156,7 +172,11 @@ EXPECTED_AUTH_HOST_ALLOWLIST = (
     "microsoft.com",
     "live.com",
 )
-EXPECTED_SIGN_IN_PROMPT_NAMES = {"claude": "Claude", "codex": "ChatGPT"}
+EXPECTED_SIGN_IN_PROMPT_NAMES = {
+    "claude": "Claude",
+    "claude_api": "Claude Console",
+    "codex": "ChatGPT",
+}
 EXPECTED_OPENCODE_KEY_ENTRY = "opencode-go-key-{account_id}"
 
 
@@ -189,9 +209,12 @@ def test_browser_session_specs_have_login_cookies_and_keyed_tables():
         assert spec.login is not None, spec.id
         assert spec.login.hosts, spec.id
         assert spec.cookies is not None, spec.id
+        # A leading dot: cookies._set_cookie sets it as the cookie domain when a
+        # pasted cookie or the saved fallback is injected at start-up.
         assert spec.cookies.domain.startswith("."), spec.id
         assert spec.id in VERIFY_TARGETS, spec.id
-        assert spec.id in INSTRUCTIONS, spec.id
+        # Only the paste-cookie flow opens the instructions dialog.
+        assert (spec.id in INSTRUCTIONS) == spec.paste_cookie, spec.id
         assert spec.api_key_entry is None, spec.id
 
 
@@ -234,6 +257,12 @@ def test_usage_urls_match_the_provider_modules():
     from aigauge.providers.minimax import MINIMAX_USAGE_URL
 
     assert provider_spec("minimax").usage_url == MINIMAX_USAGE_URL
+    assert provider_spec("claude_api").usage_url == (
+        "https://platform.claude.com/settings/billing"
+    )
+    from aigauge.webview.targets import VERIFY_TARGETS
+
+    assert VERIFY_TARGETS["claude_api"][0] == provider_spec("claude_api").usage_url
 
 
 def test_registry_is_a_leaf_module():
@@ -317,6 +346,8 @@ def test_menubar_labels():
     )
     assert PROVIDER_LABELS == EXPECTED_MENUBAR_LABELS
     assert _provider_label("claude-1a2b") == "Cl"
+    assert _provider_label("claude_api") == "CA"
+    assert _provider_label("claude_api-work") == "CA"
     assert _provider_label("codex-1a2b") == "Cx"
     assert _provider_label("opencode_go-work") == "Go"
     assert _provider_label("minimax-work") == "Mm"
@@ -384,6 +415,9 @@ def test_account_kind_and_family_by_id_shape():
     cases = {
         "claude": "claude",
         "claude-1a2b": "claude",
+        "claude_api": "claude_api",
+        "claude_api-2": "claude_api",
+        "claude-2": "claude",
         "codex": "codex",
         "codex-1a2b": "codex",
         "opencode_go": "opencode_go",
@@ -405,6 +439,8 @@ def test_widget_provider_family():
     from aigauge.widget import _provider_family
 
     assert _provider_family("claude-1a2b") == "claude"
+    assert _provider_family("claude_api") == "claude_api"
+    assert _provider_family("claude_api-work") == "claude_api"
     assert _provider_family("codex") == "codex"
     assert _provider_family("opencode_go-work") == "opencode_go"
     assert _provider_family("minimax-work") == "minimax"
@@ -423,6 +459,10 @@ def test_auth_cookie_names():
         ("codex", ["__Secure-oai-is"], True),
         ("codex", ["sessionKey"], False),
         ("claude", ["__Secure-oai-is"], False),
+        ("claude_api", ["sessionKey"], True),
+        ("claude_api", ["sessionKeyV3"], True),
+        ("claude_api", ["sessionKeyLC"], False),
+        ("claude", ["sessionKeyV3"], False),
         ("opencode_go", ["sessionKey"], False),
         ("minimax", ["sessionKey"], False),
         ("copilot", ["sessionKey"], False),
@@ -439,7 +479,7 @@ def test_auth_cookie_names():
 def test_sign_in_host_allowlist():
     from aigauge.webview.login_window import AUTH_HOST_ALLOWLIST
 
-    assert sign_in_hosts() == EXPECTED_AUTH_HOST_ALLOWLIST[:6]
+    assert sign_in_hosts() == EXPECTED_AUTH_HOST_ALLOWLIST[:7]
     assert AUTH_HOST_ALLOWLIST == EXPECTED_AUTH_HOST_ALLOWLIST
 
 
@@ -571,7 +611,14 @@ COMPACT_COLLAPSIBLE_IDS = (
     "minimax",
     "minimax-work",
 )
-NOT_COMPACT_COLLAPSIBLE_IDS = ("copilot", "openrouter", "antigravity", "mystery")
+NOT_COMPACT_COLLAPSIBLE_IDS = (
+    "claude_api",
+    "claude_api-work",
+    "copilot",
+    "openrouter",
+    "antigravity",
+    "mystery",
+)
 
 
 def test_app_compact_collapse_memory_by_tile_id(monkeypatch):
@@ -650,6 +697,7 @@ def test_cookie_paste_is_offered_only_for_paste_cookie_kinds(monkeypatch):
             BrowserAccount(id="codex-x", kind="codex"),
             BrowserAccount(id="opencode_go", kind="opencode_go"),
             BrowserAccount(id="minimax", kind="minimax"),
+            BrowserAccount(id="claude_api", kind="claude_api"),
         ]
     )
     app._settings_dialog = None  # noqa: SLF001
@@ -662,6 +710,7 @@ def test_cookie_paste_is_offered_only_for_paste_cookie_kinds(monkeypatch):
         "codex-x",
         "opencode_go",
         "minimax",
+        "claude_api",
         "copilot",
         "nobody",
     ):
@@ -685,6 +734,9 @@ def test_settings_builds_one_account_page_per_multi_account_spec(qtbot, monkeypa
     qtbot.addWidget(dialog)
 
     assert reads == [("opencode_go", "opencode_go"), ("minimax", "minimax")]
+    claude_api_page = dialog.page_widget("claude_api")
+    assert claude_api_page.findChild(QPushButton, "claude_api_signin_btn") is not None
+    assert claude_api_page.findChild(QPushButton, "claude_api_paste_cookie_btn") is None
     for spec in PROVIDER_SPECS:
         page = dialog.page_widget(spec.id)
         assert page.isAncestorOf(getattr(dialog, f"{spec.id}_cb")), spec.id
@@ -708,7 +760,15 @@ def test_claude_auth_redirect_applies_to_every_claude_account_only():
     url = "https://claude.ai/login"
     for provider in ("claude", "claude-1a2b"):
         assert _claude_auth_redirect(url, provider) == {"logged_out": True, "url": url}
-    for provider in ("codex", "claudex", "opencode_go", "minimax", "copilot"):
+    for provider in (
+        "codex",
+        "claudex",
+        "opencode_go",
+        "minimax",
+        "copilot",
+        "claude_api",
+        "claude_api-2",
+    ):
         assert _claude_auth_redirect(url, provider) is None
 
 
@@ -725,3 +785,33 @@ def test_minimax_provider_is_built_for_the_accounts_region():
     assert cn._region == "china"  # noqa: SLF001
     assert MINIMAX_REGIONS[cn._region][1] == "https://api.minimax.cn"  # noqa: SLF001
     assert intl._region == "international"  # noqa: SLF001
+
+
+def test_claude_api_spec_matches_the_brief():
+    spec = provider_spec("claude_api")
+
+    assert (spec.display_name, spec.settings_label, spec.short_label) == (
+        "Claude API",
+        "Claude API",
+        "CA",
+    )
+    assert spec.auth == "browser_session"
+    assert spec.multi_account and not spec.default_enabled
+    assert not spec.usage_guard and not spec.paste_cookie
+    assert PROVIDER_SPECS[1] is spec
+    assert spec.login.hosts == ("claude.com", "anthropic.com")
+    assert "Owner, Admin or Billing role" in spec.settings_hint
+    assert "Claude API is enabled above" in spec.settings_hint
+    # Every other kind keeps its guard row.
+    assert [s.id for s in PROVIDER_SPECS if not s.usage_guard] == ["claude_api"]
+
+
+def test_claude_api_factory_builds_a_provider_for_the_account():
+    from aigauge.providers.claude_api import ClaudeApiProvider
+
+    provider = provider_spec("claude_api").make(
+        Config(), BrowserAccount(id="claude_api-work", kind="claude_api"), None
+    )
+
+    assert isinstance(provider, ClaudeApiProvider)
+    assert provider._account_id == "claude_api-work"  # noqa: SLF001

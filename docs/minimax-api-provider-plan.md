@@ -1,5 +1,7 @@
 # MiniMax Coding Plan provider: plan
 
+**Status:** built (62bf4b3..c94f430), unreleased.
+
 Assessed 2026-10-19 against `main` at `f87036c` (0.8.5), issue #13 and draft
 PR #14 by innoscoutpro (head `32c00e9`).
 

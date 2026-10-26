@@ -63,8 +63,9 @@ def write_usage_cache(snapshots: dict[str, UsageSnapshot]) -> None:
                         metric.resets_at.isoformat() if metric.resets_at else None
                     ),
                     "reset_label": metric.reset_label,
-                    # Tagged rows are presentation breakdowns, not limit gauges.
-                    "guard_eligible": metric.tag is None,
+                    # Tagged rows are presentation breakdowns, not limit
+                    # gauges, and balance rows opt out with guard_eligible.
+                    "guard_eligible": metric.tag is None and metric.guard_eligible,
                 }
                 for metric in snapshot.metrics
             ],

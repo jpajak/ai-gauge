@@ -5,13 +5,17 @@ from aigauge.config import Config
 from aigauge.models import SnapshotStatus
 from aigauge.providers.openrouter import (
     ACTIVITY_LABEL,
+    KEY_BREAKDOWN_TAG,
+    MAX_KEY_BREAKDOWN_ROWS,
     MAX_MODEL_BREAKDOWN_ROWS,
     MODEL_BREAKDOWN_TAG,
     MODEL_DISPLAY_MAX_LEN,
     OPENROUTER_API,
+    _account_usage,
     _activity_model_costs,
     _build_credits_metric,
     _build_daily_metric,
+    _build_key_metrics,
     _build_model_metrics,
     _build_snapshot,
     _build_summary_metric,
@@ -409,9 +413,9 @@ def test_management_key_helpers_roundtrip(monkeypatch):
 
 @responses.activate
 def test_refresh_uses_mgmt_key_for_credits_when_set(monkeypatch):
-    """When a management key is configured, /credits is called with it
-    (not the inference key), /activity is called with it, and /key still uses
-    the inference key."""
+    """When a management key is configured, /credits, /keys and /activity are
+    called with it (not the inference key), and /key is never called, even
+    though an inference key is saved."""
     from aigauge.providers.openrouter import OpenRouterProvider
     import aigauge.providers.openrouter as or_mod
 
@@ -426,8 +430,8 @@ def test_refresh_uses_mgmt_key_for_credits_when_set(monkeypatch):
     )
     responses.add(
         responses.GET,
-        f"{OPENROUTER_API}/key",
-        json={"data": {"usage_daily": 1.5}},
+        f"{OPENROUTER_API}/keys",
+        json={"data": [{"name": "a", "usage_daily": 1.5, "usage_monthly": 3.0}]},
         status=200,
     )
     responses.add(
@@ -455,14 +459,16 @@ def test_refresh_uses_mgmt_key_for_credits_when_set(monkeypatch):
         c for c in responses.calls if c.request.url.endswith("/credits")
     ]
     key_calls = [c for c in responses.calls if c.request.url.endswith("/key")]
+    keys_calls = [c for c in responses.calls if "/keys" in c.request.url]
     activity_calls = [c for c in responses.calls if "/activity" in c.request.url]
     assert credits_calls, "/credits should have been called"
     assert "Bearer mgmt-key" in credits_calls[0].request.headers["Authorization"]
     assert activity_calls, "/activity should have been called"
     assert "Bearer mgmt-key" in activity_calls[0].request.headers["Authorization"]
     assert "date=" not in activity_calls[0].request.url
-    assert key_calls, "/key should have been called"
-    assert "Bearer inference-key" in key_calls[0].request.headers["Authorization"]
+    assert keys_calls, "/keys should have been called"
+    assert "Bearer mgmt-key" in keys_calls[0].request.headers["Authorization"]
+    assert key_calls == []
 
 
 @responses.activate
@@ -556,8 +562,8 @@ def test_refresh_surfaces_activity_failure_as_visible_row(monkeypatch):
     )
     responses.add(
         responses.GET,
-        f"{OPENROUTER_API}/key",
-        json={"data": {"usage_daily": 1.0}},
+        f"{OPENROUTER_API}/keys",
+        json={"data": [{"name": "a", "usage_daily": 1.0, "usage_monthly": 1.0}]},
         status=200,
     )
     responses.add(
@@ -580,3 +586,350 @@ def test_refresh_surfaces_activity_failure_as_visible_row(monkeypatch):
     ]
     assert len(err_rows) == 1
     assert "500" in (err_rows[0].note or "")
+
+
+# ---------------------------------------------------------------------------
+# /keys: account-wide spend across every API key
+# ---------------------------------------------------------------------------
+
+
+def _key(name, monthly, daily=0.0, **extra):
+    return {
+        "hash": f"hash-{name}",
+        "name": name,
+        "label": "sk-or-v1-0e6...1c96",
+        "disabled": False,
+        "usage_daily": daily,
+        "usage_monthly": monthly,
+        **extra,
+    }
+
+
+def _run_refresh(monkeypatch, *, inference, mgmt, config=None):
+    from aigauge.providers.openrouter import OpenRouterProvider
+    import aigauge.providers.openrouter as or_mod
+
+    monkeypatch.setattr(or_mod, "get_openrouter_key", lambda: inference)
+    monkeypatch.setattr(or_mod, "get_openrouter_mgmt_key", lambda: mgmt)
+    provider = OpenRouterProvider(config or Config(), pool=None)
+    captured: list = []
+    monkeypatch.setattr(provider, "_run_async", lambda work, on_done: on_done(work()))
+    provider.refresh(captured.append)
+    assert len(captured) == 1
+    return captured[0]
+
+
+def _add_mgmt_endpoints(keys, *, activity=None):
+    responses.add(
+        responses.GET,
+        f"{OPENROUTER_API}/credits",
+        json={"data": {"total_credits": 100.0, "total_usage": 25.0}},
+        status=200,
+    )
+    responses.add(responses.GET, f"{OPENROUTER_API}/keys", json={"data": keys}, status=200)
+    responses.add(
+        responses.GET,
+        f"{OPENROUTER_API}/activity",
+        json={"data": activity or []},
+        status=200,
+    )
+
+
+def _urls(suffix):
+    return [c for c in responses.calls if c.request.url.split("?")[0].endswith(suffix)]
+
+
+@responses.activate
+def test_fetch_keys_sends_include_flags_and_auth():
+    from aigauge.providers.openrouter import _fetch_keys
+
+    responses.add(
+        responses.GET, f"{OPENROUTER_API}/keys", json={"data": [_key("a", 1.0)]}, status=200
+    )
+    keys = _fetch_keys("mgmt-key")
+    assert [k["name"] for k in keys] == ["a"]
+    req = responses.calls[0].request
+    assert "include_disabled=true" in req.url
+    assert "include_expired=true" in req.url
+    assert "offset=0" in req.url
+    assert req.headers["Authorization"] == "Bearer mgmt-key"
+
+
+@responses.activate
+def test_fetch_keys_paginates_until_short_page():
+    from aigauge.providers.openrouter import _fetch_keys
+
+    first = [_key(f"k{i}", 1.0) for i in range(100)]
+    second = [_key("last", 1.0)]
+    responses.add(responses.GET, f"{OPENROUTER_API}/keys", json={"data": first}, status=200)
+    responses.add(responses.GET, f"{OPENROUTER_API}/keys", json={"data": second}, status=200)
+    keys = _fetch_keys("mgmt-key")
+    assert len(keys) == 101
+    assert len(responses.calls) == 2
+    assert "offset=0" in responses.calls[0].request.url
+    assert "offset=100" in responses.calls[1].request.url
+
+
+@responses.activate
+def test_fetch_keys_stops_after_ten_pages():
+    from aigauge.providers.openrouter import _fetch_keys
+
+    page = [_key(f"k{i}", 1.0) for i in range(100)]
+    responses.add(responses.GET, f"{OPENROUTER_API}/keys", json={"data": page}, status=200)
+    keys = _fetch_keys("mgmt-key")
+    assert len(responses.calls) == 10
+    assert len(keys) == 1000
+
+
+@responses.activate
+def test_fetch_keys_ignores_bad_items_and_shapes():
+    from aigauge.providers.openrouter import _fetch_keys
+
+    responses.add(
+        responses.GET,
+        f"{OPENROUTER_API}/keys",
+        json={"data": [_key("a", 1.0), "junk", None, 3]},
+        status=200,
+    )
+    assert [k["name"] for k in _fetch_keys("m")] == ["a"]
+    responses.replace(responses.GET, f"{OPENROUTER_API}/keys", json={"data": "nope"}, status=200)
+    assert _fetch_keys("m") == []
+    responses.replace(responses.GET, f"{OPENROUTER_API}/keys", json=["x"], status=200)
+    assert _fetch_keys("m") == []
+
+
+@responses.activate
+def test_fetch_keys_raises_on_401():
+    import requests
+    from aigauge.providers.openrouter import _fetch_keys
+
+    responses.add(responses.GET, f"{OPENROUTER_API}/keys", status=401)
+    with pytest.raises(requests.HTTPError):
+        _fetch_keys("bad")
+
+
+def test_account_usage_sums_and_skips_bad_values():
+    totals = _account_usage(
+        [
+            {"usage_daily": 1.0, "usage_monthly": 10},
+            {"usage_daily": None, "usage_monthly": "2.5"},
+            {"usage_daily": "abc", "usage_monthly": [1]},
+            {"usage_daily": 0.25},
+        ]
+    )
+    assert totals == {"usage_daily": 1.25, "usage_monthly": 12.5}
+
+
+@responses.activate
+def test_refresh_mgmt_key_only_sums_across_keys_and_never_calls_key(monkeypatch):
+    _add_mgmt_endpoints([_key("a", 10.0, daily=1.0), _key("b", 5.5, daily=0.5)])
+    snap = _run_refresh(monkeypatch, inference=None, mgmt="mgmt-key")
+
+    assert snap.status == SnapshotStatus.OK
+    assert snap.metrics[0].label == "Balance $75.00 \u00b7 Today $1.50 \u00b7 Month $15.50"
+    assert "across all 2 API keys" in snap.metrics[0].note
+    assert _urls("/key") == []
+    assert snap.raw["usage_source"] == "all_keys"
+    assert snap.raw["key"] is None
+    assert snap.raw["keys"] == [
+        {"name": "a", "usage_daily": 1.0, "usage_monthly": 10.0, "disabled": False},
+        {"name": "b", "usage_daily": 0.5, "usage_monthly": 5.5, "disabled": False},
+    ]
+    # Neither the hash nor the (possibly masked-key) label leaks into raw.
+    assert "hash" not in repr(snap.raw["keys"])
+    assert "sk-or" not in repr(snap.raw["keys"])
+    # No "add a management key" row on this path.
+    assert not any(m.label == "Account balance" for m in snap.metrics)
+
+
+@responses.activate
+def test_refresh_with_both_keys_never_calls_key(monkeypatch):
+    _add_mgmt_endpoints([_key("a", 1.0)])
+    snap = _run_refresh(monkeypatch, inference="inference-key", mgmt="mgmt-key")
+    assert snap.status == SnapshotStatus.OK
+    assert _urls("/key") == []
+    assert snap.raw["usage_source"] == "all_keys"
+
+
+@responses.activate
+def test_refresh_inference_key_only_keeps_old_behavior(monkeypatch):
+    responses.add(
+        responses.GET,
+        f"{OPENROUTER_API}/key",
+        json={"data": {"usage_daily": 0.5, "usage_monthly": 2.0}},
+        status=200,
+    )
+    snap = _run_refresh(monkeypatch, inference="inference-key", mgmt=None)
+    assert snap.status == SnapshotStatus.OK
+    assert snap.metrics[0].label == "Today $0.50 \u00b7 Month $2.00"
+    assert "inference key only" in snap.metrics[0].note
+    balance_row = next(m for m in snap.metrics if m.label == "Account balance")
+    assert balance_row.note == (
+        "Add a management key in Settings to show the balance and spend across "
+        "all your keys."
+    )
+    assert not any(m.tag == KEY_BREAKDOWN_TAG for m in snap.metrics)
+    assert snap.raw["usage_source"] == "inference_key"
+    assert snap.raw["keys"] is None
+    assert snap.raw["key"] == {"usage_daily": 0.5, "usage_monthly": 2.0}
+    assert _urls("/keys") == []
+
+
+@responses.activate
+def test_refresh_with_no_keys_is_auth_required(monkeypatch):
+    snap = _run_refresh(monkeypatch, inference=None, mgmt=None)
+    assert snap.status == SnapshotStatus.AUTH_REQUIRED
+    assert snap.error == "Add an OpenRouter management key (or an inference key) in Settings."
+    assert len(responses.calls) == 0
+
+
+@responses.activate
+def test_refresh_keys_401_is_auth_required(monkeypatch):
+    responses.add(
+        responses.GET,
+        f"{OPENROUTER_API}/credits",
+        json={"data": {"total_credits": 1.0, "total_usage": 0.0}},
+        status=200,
+    )
+    responses.add(responses.GET, f"{OPENROUTER_API}/keys", status=401)
+    snap = _run_refresh(monkeypatch, inference="i", mgmt="m")
+    assert snap.status == SnapshotStatus.AUTH_REQUIRED
+    assert snap.error == "OpenRouter rejected the management key (401). Update or remove it in Settings."
+
+
+@responses.activate
+def test_refresh_keys_500_is_error(monkeypatch):
+    responses.add(
+        responses.GET,
+        f"{OPENROUTER_API}/credits",
+        json={"data": {"total_credits": 1.0, "total_usage": 0.0}},
+        status=200,
+    )
+    responses.add(responses.GET, f"{OPENROUTER_API}/keys", status=500)
+    snap = _run_refresh(monkeypatch, inference="i", mgmt="m")
+    assert snap.status == SnapshotStatus.ERROR
+    assert snap.error == "OpenRouter /keys 500"
+
+
+@responses.activate
+def test_refresh_keys_network_error_and_bad_json_are_errors(monkeypatch):
+    import requests
+
+    responses.add(
+        responses.GET,
+        f"{OPENROUTER_API}/credits",
+        json={"data": {"total_credits": 1.0, "total_usage": 0.0}},
+        status=200,
+    )
+    responses.add(
+        responses.GET, f"{OPENROUTER_API}/keys", body=requests.ConnectionError("boom")
+    )
+    snap = _run_refresh(monkeypatch, inference=None, mgmt="m")
+    assert snap.status == SnapshotStatus.ERROR
+    assert "boom" in snap.error
+
+    responses.replace(responses.GET, f"{OPENROUTER_API}/keys", body="<html>", status=200)
+    snap = _run_refresh(monkeypatch, inference=None, mgmt="m")
+    assert snap.status == SnapshotStatus.ERROR
+
+
+@responses.activate
+def test_refresh_budget_gauge_uses_summed_daily_total(monkeypatch):
+    _add_mgmt_endpoints([_key("a", 10.0, daily=1.0), _key("b", 5.0, daily=3.0)])
+    cfg = Config()
+    cfg.openrouter.daily_budget = 8.0
+    snap = _run_refresh(monkeypatch, inference="i", mgmt="m", config=cfg)
+    gauge = next(m for m in snap.metrics if m.label.startswith("Today ($"))
+    assert gauge.label == "Today ($4.00/$8.00)"
+    assert gauge.percent_used == pytest.approx(50.0)
+
+
+@responses.activate
+def test_refresh_snapshot_works_with_compact_text(monkeypatch):
+    from aigauge.widget import _openrouter_compact_text
+
+    _add_mgmt_endpoints([_key("a", 10.0, daily=1.0), _key("b", 5.0, daily=3.0)])
+    snap = _run_refresh(monkeypatch, inference=None, mgmt="m")
+    text, _tooltip = _openrouter_compact_text(snap)
+    assert text == "OpenRouter $75.00"
+
+
+def test_build_key_metrics_absent_with_one_spending_key():
+    # A second key with no monthly spend does not count.
+    assert _build_key_metrics([_key("a", 5.0), _key("b", 0.0)]) == []
+    assert _build_key_metrics([_key("a", 5.0), _key("b", None)]) == []
+    assert _build_key_metrics([]) == []
+
+
+def test_build_key_metrics_sorted_with_shares_and_dollars():
+    rows = _build_key_metrics(
+        [_key("small", 1.0, daily=0.1), _key("zero", 0.0), _key("big", 3.0, daily=0.5)]
+    )
+    assert [m.label for m in rows] == ["Keys: this month", "big", "small"]
+    assert all(m.tag == KEY_BREAKDOWN_TAG for m in rows)
+    header, big, small = rows
+    assert header.percent_used is None
+    assert header.note == (
+        "Spend per API key for the current UTC month. "
+        "Keys with no spend this month are not listed."
+    )
+    assert big.percent_used == pytest.approx(75.0)
+    assert small.percent_used == pytest.approx(25.0)
+    assert big.percent_used + small.percent_used == pytest.approx(100.0)
+    assert big.reset_label == "$3.00"
+    assert small.reset_label == "$1.00"
+    assert big.note == "big\nToday $0.50 \u00b7 Month $3.00"
+    assert big.resets_at is None and big.window is None
+
+
+def test_build_key_metrics_disabled_key_counts_and_is_flagged():
+    keys = [_key("live", 2.0), _key("old", 6.0, disabled=True)]
+    rows = _build_key_metrics(keys)
+    old = next(m for m in rows if m.label == "old")
+    assert old.note.splitlines()[-1] == "Disabled"
+    assert old.percent_used == pytest.approx(75.0)
+    assert _account_usage(keys)["usage_monthly"] == pytest.approx(8.0)
+    live = next(m for m in rows if m.label == "live")
+    assert "Disabled" not in live.note
+
+
+def test_build_key_metrics_name_fallbacks_and_truncation():
+    long_name = "x" * (MODEL_DISPLAY_MAX_LEN + 10)
+    keys = [
+        _key(long_name, 4.0),
+        {"name": None, "label": "sk-or-v1-abc...def", "usage_monthly": 3.0},
+        {"usage_monthly": 2.0},
+    ]
+    rows = _build_key_metrics(keys)[1:]
+    assert rows[0].label == "x" * (MODEL_DISPLAY_MAX_LEN - 1) + "\u2026"
+    assert len(rows[0].label) == MODEL_DISPLAY_MAX_LEN
+    assert rows[0].note.splitlines()[0] == long_name
+    assert rows[1].label == "sk-or-v1-abc...def"
+    assert rows[2].label == "Unnamed key"
+
+
+def test_build_key_metrics_caps_rows():
+    keys = [_key(f"k{i}", float(i + 1)) for i in range(MAX_KEY_BREAKDOWN_ROWS + 3)]
+    rows = _build_key_metrics(keys)
+    assert len(rows) == 1 + MAX_KEY_BREAKDOWN_ROWS
+    total = sum(float(i + 1) for i in range(MAX_KEY_BREAKDOWN_ROWS + 3))
+    # Shares are against every spending key, not just the listed ones.
+    assert rows[1].label == f"k{MAX_KEY_BREAKDOWN_ROWS + 2}"
+    assert rows[1].percent_used == pytest.approx((MAX_KEY_BREAKDOWN_ROWS + 3) / total * 100.0)
+
+
+def test_build_snapshot_orders_keys_before_models():
+    keys = [_key("a", 3.0, daily=1.0), _key("b", 1.0, daily=1.0)]
+    snap = _build_snapshot(
+        credits={"total_credits": 100.0, "total_usage": 25.0},
+        key_info=_account_usage(keys),
+        top_models=[("gpt-4o", 5.0)],
+        daily_budget=10.0,
+        mgmt_key_configured=True,
+        keys=keys,
+    )
+    labels = [m.label for m in snap.metrics]
+    assert labels[0].startswith("Balance $75.00")
+    assert labels[1] == "Today ($2.00/$10.00)"
+    assert labels[2] == "Keys: this month"
+    assert labels.index("Keys: this month") < labels.index("Models: last 30 completed UTC days")

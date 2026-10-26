@@ -47,4 +47,29 @@ VERIFY_TARGETS = {
           return false;
         })()""",
     ),
+    # The Console keeps its URL and title when signed out, so the page text
+    # proves nothing. The predicate asks the Console's own JSON route instead:
+    # a signed-out session answers 403 where a signed-in one lists its
+    # organizations. The first poll starts the fetch and later polls read the
+    # outcome, which lives on window under a namespaced key.
+    "claude_api": (
+        "https://platform.claude.com/settings/billing",
+        r"""(() => {
+          if (location.hostname !== 'platform.claude.com') return false;
+          const key = '__aigaugeClaudeApiVerify';
+          const state = window[key];
+          if (!state) {
+            window[key] = { done: false, ok: false };
+            const result = window[key];
+            fetch('/api/organizations', { headers: { accept: 'application/json' } })
+              .then(response => response.status === 200
+                ? response.json().then(body => Array.isArray(body))
+                : false)
+              .catch(() => false)
+              .then(ok => { result.ok = ok === true; result.done = true; });
+            return false;
+          }
+          return state.done === true && state.ok === true;
+        })()""",
+    ),
 }

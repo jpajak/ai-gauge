@@ -1507,6 +1507,98 @@ def test_error_snapshot_can_show_stale_metrics(qtbot):
     assert _collapsed_chip_texts(widget) == ["Claude 50% stale"]
 
 
+def _credit_metrics() -> list[UsageMetric]:
+    return [
+        UsageMetric("Credit", 12.4, None, note="$87.60 of $100.00 left."),
+        UsageMetric(
+            "$87.60 left · Other $1.20 <b>",
+            None,
+            note="Unused credit expires Nov 5.",
+            in_header=True,
+        ),
+    ]
+
+
+def test_in_header_metric_is_the_header_text_not_a_row(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude_api",
+            status=SnapshotStatus.OK,
+            metrics=_credit_metrics(),
+        ),
+        "Claude API",
+    )
+
+    tile = widget._tiles["claude_api"]  # noqa: SLF001
+    assert [row.label.text() for row in tile._rows] == ["Credit"]  # noqa: SLF001
+    # The label is escaped: the status label renders rich text.
+    assert tile.status.text() == "$87.60 left · Other $1.20 &lt;b&gt;"
+    assert tile.status.toolTip() == "Unused credit expires Nov 5."
+    assert "#9ca3af" in tile.status.styleSheet()
+
+
+def test_error_snapshot_keeps_stale_label_and_leaves_in_header_metrics_out_of_rows(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude_api",
+            status=SnapshotStatus.ERROR,
+            error="Couldn't read Console billing",
+            metrics=_credit_metrics(),
+        ),
+        "Claude API",
+    )
+
+    tile = widget._tiles["claude_api"]  # noqa: SLF001
+    assert "error · stale" in tile.status.text()
+    assert "left" not in tile.status.text()
+    assert [row.label.text() for row in tile._rows] == ["Credit"]  # noqa: SLF001
+
+
+def test_header_text_is_cleared_when_the_tile_needs_sign_in(qtbot):
+    widget = UsageWidget(Config())
+    qtbot.addWidget(widget)
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude_api",
+            status=SnapshotStatus.OK,
+            metrics=_credit_metrics(),
+        ),
+        "Claude API",
+    )
+    tile = widget._tiles["claude_api"]  # noqa: SLF001
+    assert "left" in tile.status.text()
+
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude_api",
+            status=SnapshotStatus.AUTH_REQUIRED,
+            error="Not signed in to Claude Console.",
+        ),
+        "Claude API",
+    )
+
+    assert tile.status.text() == "not signed in"
+    assert tile._rows == []  # noqa: SLF001
+
+    # And back to OK with no in_header metric: nothing is left behind.
+    widget.update_snapshot(
+        UsageSnapshot(
+            provider="claude_api",
+            status=SnapshotStatus.OK,
+            metrics=[UsageMetric("Credit", 12.4, None)],
+        ),
+        "Claude API",
+    )
+    assert tile.status.text() == ""
+    assert tile.status.toolTip() == ""
+
+
 def test_collapsed_mode_shows_openrouter_balance(qtbot):
     widget = UsageWidget(Config())
     qtbot.addWidget(widget)

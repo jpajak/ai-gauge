@@ -320,3 +320,127 @@ def test_closed_dialog_does_not_start_external_login():
     LoginWindow._start_external_login(dialog)
 
     assert dialog._external_worker is None
+
+
+_CLAUDE_API_HARNESS = """
+const fs = require('fs');
+const state = JSON.parse(fs.readFileSync(process.argv[2], 'utf8'));
+const fetchCalls = [];
+global.window = {};
+global.document = {
+  body: {innerText: 'Log in to Claude Console'}, title: 'Claude Console',
+  querySelectorAll: () => [],
+};
+global.location = state.location;
+global.fetch = (url, init) => {
+  fetchCalls.push([url, init]);
+  if (state.reject) return Promise.reject(new Error('network down'));
+  return Promise.resolve({
+    status: state.status,
+    json: () => state.html
+      ? Promise.reject(new SyntaxError('Unexpected token <'))
+      : Promise.resolve(state.body),
+  });
+};
+const script = fs.readFileSync(process.argv[3], 'utf8');
+(async () => {
+  const calls = [];
+  calls.push(eval(script));
+  for (let i = 0; i < 5; i++) {
+    await new Promise(resolve => setTimeout(resolve, 5));
+    calls.push(eval(script));
+  }
+  process.stdout.write(JSON.stringify({calls, fetchCalls}));
+})();
+"""
+
+
+def _run_claude_api_target(tmp_path, **state) -> dict:
+    if shutil.which("node") is None:
+        pytest.skip("Node.js not available")
+    state.setdefault(
+        "location", {"hostname": "platform.claude.com", "pathname": "/settings/billing"}
+    )
+    harness = tmp_path / "claude-api-harness.js"
+    script = tmp_path / "claude-api-target.js"
+    payload = tmp_path / "claude-api-state.json"
+    harness.write_text(_CLAUDE_API_HARNESS, encoding="utf-8")
+    script.write_text(VERIFY_TARGETS["claude_api"][1], encoding="utf-8")
+    payload.write_text(json.dumps(state), encoding="utf-8")
+    completed = subprocess.run(
+        ["node", str(harness), str(payload), str(script)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    return json.loads(completed.stdout)
+
+
+def test_claude_api_verification_targets_the_billing_page():
+    assert VERIFY_TARGETS["claude_api"][0] == (
+        "https://platform.claude.com/settings/billing"
+    )
+
+
+def test_claude_api_verification_is_false_off_the_console_and_never_fetches(tmp_path):
+    result = _run_claude_api_target(
+        tmp_path,
+        location={"hostname": "claude.ai", "pathname": "/settings/billing"},
+        status=200,
+        body=[{"uuid": "x"}],
+    )
+
+    assert result["calls"] == [False] * 6
+    assert result["fetchCalls"] == []
+
+
+def test_claude_api_verification_first_call_only_starts_the_fetch(tmp_path):
+    result = _run_claude_api_target(tmp_path, status=200, body=[{"uuid": "x"}])
+
+    assert result["calls"][0] is False
+    assert len(result["fetchCalls"]) == 1
+    url, init = result["fetchCalls"][0]
+    assert url == "/api/organizations"
+    assert init["headers"]["accept"] == "application/json"
+
+
+def test_claude_api_verification_is_true_on_a_later_call_for_a_200_array(tmp_path):
+    result = _run_claude_api_target(tmp_path, status=200, body=[{"uuid": "x"}])
+
+    assert result["calls"][0] is False
+    assert result["calls"][-1] is True
+    # One fetch only, however often the page is polled.
+    assert len(result["fetchCalls"]) == 1
+
+
+@pytest.mark.parametrize(
+    "state",
+    [
+        {"status": 403, "body": {"error": {"type": "permission_error"}}},
+        {"status": 401, "body": {"error": {"type": "authentication_error"}}},
+        {"status": 403, "body": [{"uuid": "x"}]},
+        {"status": 200, "body": {"organizations": []}},
+        {"status": 200, "body": None},
+        {"status": 200, "html": True},
+        {"status": 403, "html": True},
+        {"reject": True},
+    ],
+    ids=[
+        "403-json", "401-json", "403-array", "200-object", "200-null",
+        "200-html", "403-html", "network-error",
+    ],
+)
+def test_claude_api_verification_stays_false_unless_signed_in(tmp_path, state):
+    result = _run_claude_api_target(tmp_path, **state)
+
+    assert result["calls"] == [False] * 6
+    assert len(result["fetchCalls"]) == 1
+
+
+def test_claude_api_verification_ignores_login_text(tmp_path):
+    # The harness page text says "Log in to Claude Console"; only the JSON
+    # route decides, so a 200 array still verifies.
+    result = _run_claude_api_target(tmp_path, status=200, body=[])
+
+    assert result["calls"][-1] is True

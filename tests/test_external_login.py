@@ -243,3 +243,44 @@ def test_port_reservation_failure_removes_temporary_profile(monkeypatch, tmp_pat
     assert failures == ["Could not prepare the temporary browser: no ports available"]
     assert worker._profile_dir is None  # noqa: SLF001
     assert list((app_data / "browser-signin").iterdir()) == []
+
+
+def test_claude_api_domain_matches_only_the_console_host():
+    for domain in ("platform.claude.com", ".platform.claude.com"):
+        assert _domain_matches(domain, "claude_api"), domain
+    for domain in ("claude.ai", ".claude.ai", ".claude.com", "claude.com"):
+        assert not _domain_matches(domain, "claude_api"), domain
+    assert not _domain_matches("platform.claude.com.evil.test", "claude_api")
+    assert not _domain_matches("notplatform.claude.com", "claude_api")
+    # And the Claude kind does not take the Console's cookies.
+    assert not _domain_matches("platform.claude.com", "claude")
+
+
+def _claude_api_worker_ready(cookies: list[dict]) -> bool:
+    worker = ExternalLoginWorker(
+        "claude_api", "https://platform.claude.com/login", "claude_api"
+    )
+    return worker._session_is_ready(  # noqa: SLF001
+        _provider_cookies("claude_api", cookies)
+    )
+
+
+def test_claude_ai_session_key_does_not_make_a_claude_api_session_ready():
+    claude_ai = [{"name": "sessionKey", "value": "v", "domain": ".claude.ai"}]
+
+    assert not _claude_api_worker_ready(claude_ai)
+    # The same cookie is exactly what readies a Claude session.
+    assert _has_auth_cookie("claude", _provider_cookies("claude", claude_ai))
+
+
+def test_console_session_cookies_make_a_claude_api_session_ready():
+    v3 = [{"name": "sessionKeyV3", "value": "v", "domain": "platform.claude.com"}]
+    key = [{"name": "sessionKey", "value": "v", "domain": ".platform.claude.com"}]
+    only_light = [
+        {"name": "sessionKeyLC", "value": "v", "domain": "platform.claude.com"},
+        {"name": "__cf_bm", "value": "v", "domain": ".claude.com"},
+    ]
+
+    assert _claude_api_worker_ready(v3)
+    assert _claude_api_worker_ready(key)
+    assert not _claude_api_worker_ready(only_light)

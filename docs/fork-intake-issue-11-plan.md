@@ -281,12 +281,12 @@ weekly rows, but not the 5-hour rows that paid plans have. Those still need a
 capture from a paying user such as DraftingDreamer. This was not verified
 against Google's own pages.
 
-**Status 2026-10-08: built, on branch `feature/antigravity-english-profile`,
-not merged to `main`.** Nine commits (three cherry-picks authored by
-DraftingDreamer, six hand commits with a co-author trailer). Full suite passes
+**Status: shipped in 0.8.5, built on branch `feature/antigravity-english-profile`
+and merged to `main`.** Nine commits (three cherry-picks authored by
+DraftingDreamer, six hand commits with a co-author trailer). Full suite passed
 (668). The required changes below are all in, except the error-label rewrite
-and the two-row collapse, which were left out on purpose. Still owed before
-release:
+and the two-row collapse, which were left out on purpose. Still open after the
+release (each is listed below as it stood on 2026-10-08):
 
 - Done 2026-10-08: a run against the real `agy` on a free account. The
   provider's own call returned in 3.6 s with `num_turns` 0 and `total_tokens`
@@ -441,9 +441,9 @@ user agent only), so QtWebEngine sends the operating system's language.
    a user whose language is fixed some other way. It yields the percent but not
    the reset time.
 
-**Status 2026-10-08.** Step 1 is built on branch
+**Status: step 1 shipped in 0.8.5.** It was built on branch
 `feature/antigravity-english-profile` (one commit, set in `get_profile` so it
-applies to every scraped provider), not merged to `main`. A smoke check through
+applies to every scraped provider), now merged to `main`. A smoke check through
 QtWebEngine against a local server showed `Accept-Language: en-US,en` on the
 request and `navigator.language` as `en-US`. Still owed: a look at the real
 Codex tile from that branch. Step 2 is not started.

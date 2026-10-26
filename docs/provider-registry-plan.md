@@ -1,5 +1,7 @@
 # Provider registry: plan
 
+**Status:** built, unreleased. See As built.
+
 Assessed 2026-10-19 against `main` at `f87036c` (0.8.5), prompted by issue
 #12 (Langdock), issue #13 and PR #14 (MiniMax).
 
@@ -290,7 +292,8 @@ And two keyed tables:
 
 5. A `VERIFY_TARGETS` entry in `webview/targets.py`: the signed-in page
    URL and its predicate.
-6. A paste-cookie hint in `cookie_dialog.INSTRUCTIONS`.
+6. A paste-cookie hint in `cookie_dialog.INSTRUCTIONS`, only when the spec
+   has `paste_cookie=True` (the registry test requires the entry exactly then).
 
 If the sign-in flow uses an identity provider not yet allowed, add its host
 to `_IDENTITY_PROVIDER_HOSTS` in `webview/login_window.py`.

@@ -21,6 +21,11 @@ class UsageMetric:
     note: str | None = None
     window: timedelta | None = None
     tag: str | None = None
+    # True for a limit an agent should pause on; False for balances, which are
+    # reported but never count toward a pause.
+    guard_eligible: bool = True
+    # Shown as the tile header's right-side text instead of as a row.
+    in_header: bool = False
 
 
 @dataclass

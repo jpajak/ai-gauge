@@ -87,16 +87,23 @@ future rename show up.
 
 Read it with: `grep "session cookie" %APPDATA%\ai-gauge\ai-gauge.log`.
 
-- **`renewed ... name=sessionKey` lines during normal checks:** AI Gauge's
-  checks do renew. The October expiry then needs another cause. Look for
-  where the renewed lines stop.
-- **Only `seen` for `sessionKey` after 48 hours:** the checks do not renew.
-  Build the fix.
+The `loadAllCookies()` baseline in `get_profile` emits nothing in practice.
+The first source run (2026-11-02 21:19) logged no `sessionKey` line, although
+the Console check succeeded with it. So the watcher only logs cookies a server
+sets after launch, and any `sessionKey` line means the server re-issued it.
+
+- **No `sessionKey` line for `claude_api` after 48 hours:** the checks do not
+  renew. Build the fix.
+- **A `sessionKey` line with an expiry about 7 days after it:** the checks do
+  renew. The October expiry then needs another cause. Look for where the
+  lines stop.
 - **Two `sessionKey` entries with different domains:** a duplicate cookie.
   Note which one the server keeps setting.
 
-The `claude` and `codex` profiles get the same lines, which shows whether
-their sessions slide too.
+The `claude` and `codex` profiles get the same lines. On the first run,
+ChatGPT re-issued `__Secure-next-auth.session-token.0` and `.1` with a 90-day
+expiry on a single page load, which is why the Codex tile never signs out.
+claude.ai did not re-issue `sessionKey`.
 
 ## Recommended fix
 

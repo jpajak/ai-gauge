@@ -1,12 +1,28 @@
 from aigauge.webview import profile as profile_module
 
 
+class FakeSignal:
+    def connect(self, slot):
+        pass
+
+
+class FakeCookieStore:
+    cookieAdded = FakeSignal()
+    cookieRemoved = FakeSignal()
+
+    def loadAllCookies(self):
+        pass
+
+
 class FakeProfile:
     PersistentCookiesPolicy = profile_module.QWebEngineProfile.PersistentCookiesPolicy
 
     def __init__(self, name):
         self.name = name
         self.calls = []
+
+    def cookieStore(self):
+        return FakeCookieStore()
 
     def __getattr__(self, attr):
         if attr.startswith("set"):

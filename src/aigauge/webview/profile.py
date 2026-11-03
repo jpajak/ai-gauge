@@ -11,6 +11,7 @@ from PyQt6.QtWebEngineCore import (
 )
 
 from ..config import webview_profile_dir
+from .session_cookies import SessionCookieWatcher
 
 log = logging.getLogger("aigauge.webview.profile")
 
@@ -21,6 +22,8 @@ _REALISTIC_UA = (
 )
 
 _profiles: dict[str, QWebEngineProfile] = {}
+# Held so a watcher is not garbage collected while its profile lives.
+_cookie_watchers: dict[str, SessionCookieWatcher] = {}
 
 
 def get_profile(provider: str) -> QWebEngineProfile:
@@ -58,6 +61,14 @@ def get_profile(provider: str) -> QWebEngineProfile:
         qWebEngineChromiumVersion(),
         qWebEngineChromiumSecurityPatchVersion(),
     )
+
+    watcher = SessionCookieWatcher(provider)
+    store = profile.cookieStore()
+    store.cookieAdded.connect(watcher.on_cookie_added)
+    store.cookieRemoved.connect(watcher.on_cookie_removed)
+    _cookie_watchers[provider] = watcher
+    # Emits the cookies already on disk through cookieAdded, once, as a baseline.
+    store.loadAllCookies()
 
     _profiles[provider] = profile
     return profile

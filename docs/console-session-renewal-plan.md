@@ -202,6 +202,26 @@ Build in order and stop at the first step that makes the watcher log a
      page cannot stand in for the Console. Next: restart and read the line.
      `event_logging_requests` above 0 with no `sessionKey` line within the
      hour means activity is not enough: step 2.
+   - **Fair-visit result (restart 2026-11-05 21:28):** `keep-alive end
+     visibility=visible has_focus=True raf_ticks=3241 viewport=1280x900
+     event_logging_requests=1`, with the billing page's full call set
+     (`invoices`, `prepaid/credit_expiry`, `contracts/postpaid`,
+     `payment_methods` and more, plus `/api/v2/rum`), matching the user's
+     Chrome tab. No `claude_api` `sessionKey` line by 22:30, while claude.ai
+     re-issued its own at 21:33. **Activity on the billing page does not
+     renew the Console session.** Hypothesis 1 is ruled out, and so is the
+     billing-page half of hypothesis 2. The keep-alive stays until step 2 is
+     measured, in case renewal needs both the cookies and activity; remove it
+     if step 2 renews without it.
+
+**Before step 2, a one-minute check in Chrome.** In DevTools on the
+Console billing page, Application > Cookies > `https://platform.claude.com`:
+read the Expires of `sessionKey` and `sessionKeyV3`, and list the cookies
+whose domain is `.claude.com`. An expiry about 7 days from now means Chrome
+gets the cookie re-issued on a visit. An expiry fixed from an older sign-in
+means Chrome never renews it and instead signs in again silently through
+another cookie when it lapses, and that cookie is what step 2 must import.
+The extension cannot read HttpOnly cookies, so this needs a person.
 2. **Keep the `.claude.com` cookies at sign-in.** Import the Console-related
    cookies from `.claude.com` as well, without Cloudflare's `__cf_bm`. Tests
    the third hypothesis.

@@ -168,6 +168,26 @@ Build in order and stop at the first step that makes the watcher log a
      - Visible, but no `sessionKey` line within the hour: the visit is not
        enough. If `event_logging_requests=0`, the page sent no activity at
        all, which is worth a look before moving on. Then step 2.
+   - **Result (2026-11-05, restart 19:52):** the visit ran as designed
+     (`visibility=visible`, 60.2 s) but logged `event_logging_requests=0`,
+     and no `sessionKey` line appeared by 20:54. Checks kept returning `ok`.
+     Step 1 alone does not renew.
+   - **Chrome comparison (same evening):** the billing page in the user's
+     Chrome, visible, focused and untouched, sent
+     `/api/event_logging/v2/batch` at 3, 17 and 63 seconds, plus Datadog RUM
+     (`/api/v2/rum`). It had 188 resource entries at 7.5 s, so a 3-second
+     batch would have fitted in the app's default 250-entry buffer: the
+     app's zero is real. Its readable cookies include `anthropic-device-id`,
+     `ajs_anonymous_id`, `__ssid`, `_dd_s` and `intercom-device-id-lupk8zyo`
+     (domains not read).
+   - **Open before step 2:** the app's page differs from Chrome's in cookies
+     (hypothesis 3), focus (no window, so `document.hasFocus()` is false)
+     and drawing (the detached page may produce no animation frames). Next:
+     add `hasFocus`, an animation-frame tick count, total resource entries
+     and the `/api/` paths called (ids redacted) to the `keep-alive end`
+     line, restart once, and pick from the result. No frames: keep a sized
+     view attached, and check on real Windows that no window appears.
+     Frames but no focus: address focus. Both fine: build step 2.
 2. **Keep the `.claude.com` cookies at sign-in.** Import the Console-related
    cookies from `.claude.com` as well, without Cloudflare's `__cf_bm`. Tests
    the third hypothesis.

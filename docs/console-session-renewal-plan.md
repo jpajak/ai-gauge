@@ -188,6 +188,20 @@ Build in order and stop at the first step that makes the watcher log a
      line, restart once, and pick from the result. No frames: keep a sized
      view attached, and check on real Windows that no window appears.
      Frames but no focus: address focus. Both fine: build step 2.
+   - **Hosting fixed (`65b3a5d`, probe `9988621`):** Qt experiments on
+     2026-11-05 showed the detached page reports `visible` but draws nothing
+     on Claude's pages (0 animation frames, idle callbacks at the hidden
+     rate, 0x0 viewport), so the first visit was not a fair test. The
+     keep-alive now shows the view with `WA_DontShowOnScreen` (Qt treats it
+     as shown; no native window became visible on Windows) and sends a
+     synthetic `FocusIn` to its focus proxy, never `activateWindow()`, which
+     takes the foreground. The page then draws, is 1280x900 and has focus.
+     The `keep-alive end` line now carries `has_focus`, `raf_ticks`,
+     `idle_ticks`, `timer_ticks`, `viewport`, `resources` and `api_paths`.
+     On the signed-out login page no variant sent `event_logging`, so that
+     page cannot stand in for the Console. Next: restart and read the line.
+     `event_logging_requests` above 0 with no `sessionKey` line within the
+     hour means activity is not enough: step 2.
 2. **Keep the `.claude.com` cookies at sign-in.** Import the Console-related
    cookies from `.claude.com` as well, without Cloudflare's `__cf_bm`. Tests
    the third hypothesis.

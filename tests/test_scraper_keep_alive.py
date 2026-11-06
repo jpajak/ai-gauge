@@ -243,12 +243,32 @@ def test_linger_navigates_to_blank_then_hides_then_discards(monkeypatch, caplog)
     h.run_pending("_end_hold")
     with caplog.at_level(logging.INFO, logger="aigauge.scraper"):
         h.answer_js(
-            "event_logging", {"visibility": "visible", "event_logging_requests": 3}
+            "event_logging",
+            {
+                "visibility": "visible",
+                "has_focus": False,
+                "raf_ticks": 0,
+                "idle_ticks": 12,
+                "timer_ticks": 59,
+                "viewport_w": 1280,
+                "viewport_h": 900,
+                "resources": 41,
+                "event_logging_requests": 3,
+                "api_paths": [
+                    "/api/organizations/2f1c9a3e-1b2c-4d5e-8f90-a1b2c3d4e5f6/usage",
+                    "/api/event_logging/v2/batch",
+                    "/api/organizations/aaaaaaaa-1b2c-4d5e-8f90-a1b2c3d4e5f6/usage",
+                    "/api/v2/rum",
+                ],
+            },
         )
 
     assert (
-        "keep-alive end provider=claude_api visibility=visible "
-        "event_logging_requests=3 elapsed=60.0s"
+        "keep-alive end provider=claude_api visibility=visible has_focus=False "
+        "raf_ticks=0 idle_ticks=12 timer_ticks=59 viewport=1280x900 resources=41 "
+        "event_logging_requests=3 "
+        "api_paths=/api/event_logging/v2/batch,/api/organizations/{id}/usage,"
+        "/api/v2/rum elapsed=60.0s"
     ) in caplog.text
     assert "/api/event_logging" in scraper_module._END_PROBE_JS
     assert h.calls[-1] == ("page.load", "about:blank")
@@ -269,18 +289,63 @@ def test_linger_navigates_to_blank_then_hides_then_discards(monkeypatch, caplog)
     assert "view.stop" not in names
 
 
-def test_linger_end_proceeds_when_the_probe_never_answers(monkeypatch):
+def test_linger_end_proceeds_when_the_probe_never_answers(monkeypatch, caplog):
     h = _Harness(monkeypatch, linger_ms=60_000)
     h.extract_ok()
     h.run_pending("_begin_hold")
     h.run_pending("_end_hold")
 
     # The renderer never answers; the fallback timer moves on once.
-    h.run_pending("<lambda>")
+    with caplog.at_level(logging.INFO, logger="aigauge.scraper"):
+        h.run_pending("<lambda>")
+    assert (
+        "keep-alive end provider=claude_api visibility=None has_focus=None "
+        "raf_ticks=None idle_ticks=None timer_ticks=None viewport=NonexNone "
+        "resources=None event_logging_requests=None api_paths=None elapsed="
+    ) in caplog.text
     assert h.calls[-1] == ("page.load", "about:blank")
     # A late answer does not navigate a second time.
     h.answer_js("event_logging", {"visibility": "hidden", "event_logging_requests": 0})
     assert h.calls.count(("page.load", "about:blank")) == 1
+
+
+def test_hold_start_injects_counters_and_the_end_probe_reads_them(monkeypatch):
+    h = _Harness(monkeypatch, linger_ms=60_000)
+    h.extract_ok()
+    h.run_pending("_begin_hold")
+
+    start = [script for script, _ in h.page.js if "__aigaugeKeepAlive" in script]
+    assert len(start) == 1
+    for needle in (
+        "setResourceTimingBufferSize(2000)",
+        "requestAnimationFrame",
+        "requestIdleCallback",
+        "setTimeout",
+    ):
+        assert needle in start[0]
+    # The idle counter is guarded: some builds have no requestIdleCallback.
+    assert "if (window.requestIdleCallback)" in start[0]
+    assert "__aigaugeKeepAlive" in scraper_module._END_PROBE_JS
+    assert "hasFocus()" in scraper_module._END_PROBE_JS
+
+
+def test_api_paths_are_redacted_unique_sorted_and_capped():
+    redact = scraper_module._redact_api_paths
+
+    assert redact(None) is None
+    assert redact([]) == ""
+    assert redact(
+        [
+            "/api/b/1234567/x",
+            "/api/b/7654321/x",
+            "/api/a/12345/x",
+            "/api/c/2f1c9a3e-1b2c-4d5e-8f90-a1b2c3d4e5f6",
+            "/api/d?token=abcdef1234567",
+        ]
+    ) == "/api/a/12345/x,/api/b/{id}/x,/api/c/{id},/api/d"
+    capped = redact([f"/api/p{n:02d}" for n in range(30)]).split(",")
+    assert len(capped) == 20
+    assert capped[0] == "/api/p00" and capped[-1] == "/api/p19"
 
 
 def test_linger_error_path_does_not_hold(monkeypatch):

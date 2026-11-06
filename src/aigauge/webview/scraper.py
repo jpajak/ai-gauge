@@ -30,11 +30,65 @@ _NAVIGATE_AWAY_MS = 3000
 _PROBE_TIMEOUT_MS = 2000
 
 _VISIBILITY_JS = "document.visibilityState"
-_END_PROBE_JS = (
-    "({visibility: document.visibilityState, event_logging_requests: "
-    "performance.getEntriesByType('resource')"
-    ".filter(e => e.name.includes('/api/event_logging')).length})"
+# Runs at hold start. Counts what a visible, drawn, focused page would do on its
+# own: animation frames, idle callbacks and one-second timers. The resource
+# timing buffer is enlarged so the end probe can see the whole visit.
+_HOLD_START_JS = """
+(function () {
+  if (window.__aigaugeKeepAlive) { return; }
+  try { performance.setResourceTimingBufferSize(2000); } catch (e) {}
+  var s = window.__aigaugeKeepAlive = {raf: 0, idle: 0, timer: 0};
+  function raf() { s.raf++; window.requestAnimationFrame(raf); }
+  function idle() { s.idle++; window.requestIdleCallback(idle); }
+  function tick() { s.timer++; window.setTimeout(tick, 1000); }
+  if (window.requestAnimationFrame) { window.requestAnimationFrame(raf); }
+  if (window.requestIdleCallback) { window.requestIdleCallback(idle); }
+  window.setTimeout(tick, 1000);
+})()
+"""
+_END_PROBE_JS = """
+(function () {
+  var s = window.__aigaugeKeepAlive || {};
+  var res = performance.getEntriesByType('resource');
+  var seen = {};
+  res.forEach(function (e) {
+    try {
+      var p = new URL(e.name).pathname;
+      if (p.indexOf('/api/') !== -1) { seen[p] = true; }
+    } catch (x) {}
+  });
+  return {
+    visibility: document.visibilityState,
+    has_focus: document.hasFocus(),
+    raf_ticks: s.raf,
+    idle_ticks: s.idle,
+    timer_ticks: s.timer,
+    viewport_w: window.innerWidth,
+    viewport_h: window.innerHeight,
+    resources: res.length,
+    event_logging_requests: res.filter(
+      function (e) { return e.name.indexOf('/api/event_logging') !== -1; }).length,
+    api_paths: Object.keys(seen)
+  };
+})()
+"""
+
+_UUID_RE = re.compile(
+    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
 )
+_LONG_DIGITS_RE = re.compile(r"\d{6,}")
+_API_PATHS_CAP = 20
+
+
+def _redact_api_paths(paths: Any) -> str | None:
+    """Unique, sorted API pathnames with ids masked, as one comma-joined field."""
+    if not isinstance(paths, list):
+        return None
+    redacted = {
+        _LONG_DIGITS_RE.sub("{id}", _UUID_RE.sub("{id}", str(path).split("?")[0]))
+        for path in paths
+    }
+    return ",".join(sorted(redacted)[:_API_PATHS_CAP])
 
 
 def _enum_name(value: Any) -> str:
@@ -406,6 +460,7 @@ class HeadlessScraper(QObject):
         elapsed_ms = (time.monotonic() - self._started_at) * 1000
         remaining_ms = max(0, int(self._linger_ms - elapsed_ms))
         self._page.runJavaScript(_VISIBILITY_JS, self._on_hold_start_probe)
+        self._page.runJavaScript(_HOLD_START_JS)
         QTimer.singleShot(remaining_ms, self._end_hold)
 
     def _on_hold_start_probe(self, visibility: Any) -> None:
@@ -427,11 +482,20 @@ class HeadlessScraper(QObject):
         self._navigated_away = True
         probe = probe if isinstance(probe, dict) else {}
         log.info(
-            "keep-alive end provider=%s visibility=%s event_logging_requests=%s "
-            "elapsed=%.1fs",
+            "keep-alive end provider=%s visibility=%s has_focus=%s raf_ticks=%s "
+            "idle_ticks=%s timer_ticks=%s viewport=%sx%s resources=%s "
+            "event_logging_requests=%s api_paths=%s elapsed=%.1fs",
             self._provider,
             probe.get("visibility"),
+            probe.get("has_focus"),
+            probe.get("raf_ticks"),
+            probe.get("idle_ticks"),
+            probe.get("timer_ticks"),
+            probe.get("viewport_w"),
+            probe.get("viewport_h"),
+            probe.get("resources"),
             probe.get("event_logging_requests"),
+            _redact_api_paths(probe.get("api_paths")),
             time.monotonic() - self._started_at,
         )
         # Navigating away runs pagehide / visibilitychange handlers, which is

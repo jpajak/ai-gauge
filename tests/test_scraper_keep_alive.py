@@ -62,6 +62,13 @@ class _FakePage:
 class _FakeView:
     def __init__(self, calls):
         self.calls = calls
+        self.proxy = "proxy"
+
+    def activateWindow(self):
+        self.calls.append(("view.activateWindow",))
+
+    def raise_(self):
+        self.calls.append(("view.raise_",))
 
     def setPage(self, page):
         self.calls.append(("view.setPage", None if page is None else "page"))
@@ -81,8 +88,17 @@ class _FakeView:
     def show(self):
         self.calls.append(("view.show",))
 
+    def hide(self):
+        self.calls.append(("view.hide",))
+
     def setVisible(self, visible):
         self.calls.append(("view.setVisible", visible))
+
+    def setAttribute(self, attribute, on=True):
+        self.calls.append(("view.setAttribute", attribute.name, on))
+
+    def focusProxy(self):
+        return self.proxy
 
     def deleteLater(self):
         self.calls.append(("view.deleteLater",))
@@ -125,6 +141,15 @@ class _Harness:
         )
         monkeypatch.setattr(scraper_module, "QWebEngineView", lambda: _FakeView(calls))
         monkeypatch.setattr(scraper_module, "QTimer", _FakeTimer)
+        monkeypatch.setattr(
+            scraper_module,
+            "QApplication",
+            SimpleNamespace(
+                sendEvent=lambda target, event: calls.append(
+                    ("focus", target, event.type().name, event.reason().name)
+                )
+            ),
+        )
         monkeypatch.setattr(
             scraper_module, "time", SimpleNamespace(monotonic=lambda: self.now[0])
         )
@@ -177,19 +202,45 @@ def _clear_lingering():
     scraper_module._LINGERING.clear()
 
 
-def test_linger_detaches_the_view_before_the_page_is_made_visible_or_loaded(monkeypatch):
+FOCUS_IN = ("focus", "proxy", "FocusIn", "ActiveWindowFocusReason")
+
+
+def test_linger_shows_the_view_without_a_window_before_the_first_load(monkeypatch):
     h = _Harness(monkeypatch, linger_ms=60_000)
 
     names = h.call_names()
-    detach = names.index("view.setPage", names.index("view.setPage") + 1)
-    assert h.calls[detach] == ("view.setPage", None)
-    assert detach < names.index("page.load")
-    assert detach < names.index("page.setVisible")
-    assert ("page.setVisible", True) in h.calls
+    attribute = h.calls.index(("view.setAttribute", "WA_DontShowOnScreen", True))
+    assert attribute < names.index("view.show") < names.index("page.load")
+    # The view keeps its page: never detached.
+    assert h.calls.count(("view.setPage", "page")) == 1
+    assert ("view.setPage", None) not in h.calls
     assert ("page.setLifecycleState", "Active") in h.calls
-    # The view widget itself is never shown or made visible.
-    assert "view.show" not in names
-    assert "view.setVisible" not in names
+    assert "page.setVisible" not in names
+    for forbidden in ("view.activateWindow", "view.raise_", "view.setVisible"):
+        assert forbidden not in names
+
+
+def test_linger_focuses_after_load_finished_and_at_hold_start(monkeypatch):
+    h = _Harness(monkeypatch, linger_ms=60_000)
+    assert FOCUS_IN not in h.calls
+
+    h.scraper._on_load_finished(True)
+    assert h.calls.count(FOCUS_IN) == 1
+    h.run_pending("_run_extractor")
+    h.page.js[-1][1]({"balance": 1})
+    h.run_pending("_begin_hold")
+    assert h.calls.count(FOCUS_IN) == 2
+    assert "view.activateWindow" not in h.call_names()
+    assert "view.raise_" not in h.call_names()
+
+
+def test_linger_focus_tolerates_a_missing_focus_proxy(monkeypatch):
+    h = _Harness(monkeypatch, linger_ms=60_000)
+    h.scraper._view.proxy = None
+    h.extract_ok()
+    h.run_pending("_begin_hold")
+
+    assert not [c for c in h.calls if c[0] == "focus"]
 
 
 def test_linger_holds_a_strong_reference_until_cleanup(monkeypatch):
@@ -223,7 +274,7 @@ def test_linger_delivers_done_before_the_hold_and_defers_cleanup(monkeypatch, ca
         in caplog.text
     )
     assert "page.deleteLater" not in h.call_names()
-    assert ("page.setVisible", False) not in h.calls
+    assert "view.hide" not in h.call_names()
 
 
 def test_linger_does_not_wait_when_the_scrape_already_took_longer(monkeypatch):
@@ -279,14 +330,13 @@ def test_linger_navigates_to_blank_then_hides_then_discards(monkeypatch, caplog)
     h.run_pending("_cleanup")
     names = h.call_names()
     blank = h.calls.index(("page.load", "about:blank"))
-    hide = h.calls.index(("page.setVisible", False))
+    hide = h.calls.index(("view.hide",))
+    stop = h.calls.index(("view.stop",))
+    detach = h.calls.index(("view.setPage", None))
     discard = h.calls.index(("page.setLifecycleState", "Discarded"))
-    assert blank < hide < discard
-    assert "page.deleteLater" in names
-    assert "view.show" not in names and "view.setVisible" not in names
-    # Stopping goes to the page: the view no longer holds it.
-    assert ("page.triggerAction", "Stop") in h.calls
-    assert "view.stop" not in names
+    assert blank < hide < stop < detach < discard
+    assert "page.deleteLater" in names and "view.deleteLater" in names
+    assert "view.setVisible" not in names
 
 
 def test_linger_end_proceeds_when_the_probe_never_answers(monkeypatch, caplog):
@@ -357,22 +407,23 @@ def test_linger_error_path_does_not_hold(monkeypatch):
     assert "_cleanup" in h.pending_names()
 
     h.run_pending("_cleanup")
-    hide = h.calls.index(("page.setVisible", False))
+    hide = h.calls.index(("view.hide",))
     discard = h.calls.index(("page.setLifecycleState", "Discarded"))
     assert hide < discard
     assert ("page.load", "about:blank") not in h.calls
 
 
-def test_linger_retry_stops_the_page_not_the_view(monkeypatch):
+def test_linger_retry_stops_the_view_and_activates_once(monkeypatch):
     h = _Harness(monkeypatch, linger_ms=60_000)
     h.scraper._max_attempts = 2
     h.scraper._on_load_finished(False)
 
-    assert ("page.triggerAction", "Stop") in h.calls
-    assert "view.stop" not in h.call_names()
+    assert "view.stop" in h.call_names()
+    assert "page.triggerAction" not in h.call_names()
     assert h.calls.count(("page.load", BILLING)) == 2
-    # Visibility is set once, not per attempt.
-    assert h.calls.count(("page.setVisible", True)) == 1
+    # The view is shown and the page activated once, not per attempt.
+    assert h.calls.count(("view.show",)) == 1
+    assert h.calls.count(("page.setLifecycleState", "Active")) == 1
 
 
 def test_zero_linger_keeps_todays_call_sequence(monkeypatch):
@@ -380,6 +431,7 @@ def test_zero_linger_keeps_todays_call_sequence(monkeypatch):
 
     assert h.calls == [("view.setPage", "page"), ("page.load", BILLING)]
     assert h.scraper not in scraper_module._LINGERING
+    assert "view.show" not in h.call_names()
 
     h.extract_ok()
     assert h.pending_names() == ["_cleanup"]

@@ -6,8 +6,10 @@ import time
 from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
 
-from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
+from PyQt6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, pyqtSignal
+from PyQt6.QtGui import QFocusEvent
 from PyQt6.QtWebEngineWidgets import QWebEngineView
+from PyQt6.QtWidgets import QApplication
 
 from ..providers.registry import account_family
 from .page import QuietWebEnginePage
@@ -146,8 +148,9 @@ class HeadlessScraper(QObject):
     reference until `done` fires; the callback delivers either the JS result or
     an error string.
 
-    ``linger_ms > 0`` turns the check into a keep-alive visit: the page is made
-    visible to the Page Visibility API, kept until ``linger_ms`` has passed
+    ``linger_ms > 0`` turns the check into a keep-alive visit: the view is shown
+    with ``WA_DontShowOnScreen`` (no native window) so the page draws, is
+    visible to the Page Visibility API and can be given focus, kept until ``linger_ms`` has passed
     since the scrape started, then navigated away so pagehide work runs. The
     result is still delivered as soon as it is extracted.
     """
@@ -194,20 +197,23 @@ class HeadlessScraper(QObject):
         self._render_terminated = False
         self._extractor_reruns = 0
         self._linger_ms = max(0, linger_ms)
-        self._made_visible = False
+        self._activated = False
         self._navigated_away = False
 
         profile = get_profile(provider)
         self._page = QuietWebEnginePage(profile, self, provider=provider)
         self._view = QWebEngineView()
         self._view.setPage(self._page)
-        # Offscreen — never .show()
+        # A normal check never shows the view, so the page reads "hidden".
         self._view.resize(1280, 900)
         if self._linger_ms > 0:
-            # A page that has a view can have its visibility forwarded to the
-            # view widget, which could pop the offscreen view up as a window.
-            # Detach it so `setVisible` on the page never reaches the widget.
-            self._view.setPage(None)
+            # WA_DontShowOnScreen makes Qt treat the view as shown, so the page
+            # draws, has a real 1280x900 viewport and can take a synthetic
+            # focus, while no native window becomes visible (measured on
+            # Windows and offscreen on 2026-11-05). A page detached from its
+            # view reported "visible" but drew nothing on the Claude page.
+            self._view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
+            self._view.show()
             _LINGERING.add(self)
 
         self._timeout = QTimer(self)
@@ -259,23 +265,22 @@ class HeadlessScraper(QObject):
         self._timeout.stop()
         self._timeout.start(self._timeout_ms)
         self._page.load(QUrl(self._url))
-        if self._linger_ms > 0 and not self._made_visible:
-            self._make_page_visible()
+        if self._linger_ms > 0 and not self._activated:
+            self._activated = True
+            self._page.setLifecycleState(self._page.LifecycleState.Active)
 
-    def _make_page_visible(self) -> None:
-        # Qt ignores setVisible on a page whose web contents does not exist
-        # yet (isVisible stays False and the document reads "hidden"), and the
-        # first load() creates them. So this is the earliest call that works.
-        self._made_visible = True
-        self._page.setVisible(True)
-        self._page.setLifecycleState(self._page.LifecycleState.Active)
-
-    def _stop_loading(self) -> None:
-        if self._linger_ms > 0:
-            # The view no longer holds the page, so stopping the view is a no-op.
-            self._page.triggerAction(self._page.WebAction.Stop)
-        else:
-            self._view.stop()
+    def _focus_view(self) -> None:
+        # Gives the web contents focus without a native window: a FocusIn on
+        # the view's focus proxy. activateWindow(), raise_() and
+        # requestActivate() are never used, they take the foreground from the
+        # user's own application. Focus can be lost, so this runs more than once.
+        proxy = self._view.focusProxy()
+        if proxy is None:
+            return
+        QApplication.sendEvent(
+            proxy,
+            QFocusEvent(QEvent.Type.FocusIn, Qt.FocusReason.ActiveWindowFocusReason),
+        )
 
     def _on_load_progress(self, progress: int) -> None:
         self._max_progress = max(self._max_progress, progress)
@@ -346,6 +351,8 @@ class HeadlessScraper(QObject):
             else:
                 self._finish(None, "page failed to load")
             return
+        if self._linger_ms > 0:
+            self._focus_view()
         # Page DOM may render asynchronously — give React a moment, then evaluate.
         QTimer.singleShot(self._wait_ms, self._run_extractor)
 
@@ -401,7 +408,7 @@ class HeadlessScraper(QObject):
                 self._max_progress,
                 self._last_load_status,
             )
-            self._stop_loading()
+            self._view.stop()
             self._begin_attempt()
             return
         self._finished = True
@@ -459,6 +466,7 @@ class HeadlessScraper(QObject):
     def _begin_hold(self) -> None:
         elapsed_ms = (time.monotonic() - self._started_at) * 1000
         remaining_ms = max(0, int(self._linger_ms - elapsed_ms))
+        self._focus_view()
         self._page.runJavaScript(_VISIBILITY_JS, self._on_hold_start_probe)
         self._page.runJavaScript(_HOLD_START_JS)
         QTimer.singleShot(remaining_ms, self._end_hold)
@@ -520,15 +528,13 @@ class HeadlessScraper(QObject):
             except (TypeError, RuntimeError):
                 pass
         if self._linger_ms > 0:
-            # Qt refuses to discard a visible page.
+            # Qt refuses to discard a visible page; hiding the view hides it.
             try:
-                self._page.setVisible(False)
+                self._view.hide()
             except RuntimeError:
                 pass
-            self._stop_loading()
-        else:
-            self._view.stop()
-            self._view.setPage(None)
+        self._view.stop()
+        self._view.setPage(None)
         try:
             self._page.setLifecycleState(self._page.LifecycleState.Discarded)
         except RuntimeError:

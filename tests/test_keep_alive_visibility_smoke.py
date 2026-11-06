@@ -1,17 +1,20 @@
-"""Real-Qt smoke for the keep-alive approach.
+"""Real-Qt smoke for the keep-alive page hosting.
 
 Runs in a subprocess because Chromium aborts the whole process on a machine
 with no usable GL (issue #7); a crash there must skip this test, not kill the
-suite. It checks the two facts the keep-alive relies on, against the installed
-QtWebEngine:
+suite. It drives the real ``HeadlessScraper(linger_ms=...)`` against a
+``data:`` page, with an off-the-record profile in place of ``get_profile``, and
+checks the facts the keep-alive relies on from its ``keep-alive end`` line:
 
-* a page detached from its view and made visible reads
-  ``document.visibilityState === "visible"``, and
-* doing so leaves no top-level widget visible (the view is never shown).
+* the page reads ``visibilityState === "visible"`` and draws (rAF ticks),
+* it has a real 1280x900 viewport and ``document.hasFocus()`` is true,
+* no native top-level window owned by the process is ever visible (checked on
+  Windows only, by polling ``EnumWindows``), and no Qt top-level widget is left
+  visible once the visit has been cleaned up.
 
-``setVisible`` only takes effect once the first ``load()`` has created the web
-contents; called before it, the document reads ``hidden``. HeadlessScraper
-therefore calls it right after the first ``load()``, which is what this does.
+The view is shown with ``WA_DontShowOnScreen``: Qt treats it as shown, but no
+native window appears. A page detached from its view reported "visible" while
+drawing nothing on the Claude page, which is why it is not used.
 """
 
 from __future__ import annotations
@@ -24,59 +27,104 @@ import sys
 import pytest
 
 _SCRIPT = r"""
-import json, sys
-from PyQt6.QtCore import QTimer, QUrl
-from PyQt6.QtWebEngineCore import QWebEnginePage, QWebEngineProfile
-from PyQt6.QtWebEngineWidgets import QWebEngineView
+import json, logging, os, re, sys, threading, time
+from PyQt6.QtCore import QTimer
+from PyQt6.QtWebEngineCore import QWebEngineProfile
 from PyQt6.QtWidgets import QApplication
 
+from aigauge.webview import scraper as scraper_module
+
 app = QApplication(sys.argv)
+app.setQuitOnLastWindowClosed(False)
 profile = QWebEngineProfile(app)  # off the record: nothing on disk
-page = QWebEnginePage(profile, app)
-view = QWebEngineView()
-view.setPage(page)
-view.resize(1280, 900)
-view.setPage(None)
+scraper_module.get_profile = lambda provider: profile
+
+lines = []
+class Capture(logging.Handler):
+    def emit(self, record):
+        lines.append(record.getMessage())
+logging.getLogger("aigauge.scraper").addHandler(Capture())
+logging.getLogger("aigauge.scraper").setLevel(logging.INFO)
+
+visible_windows = []
+stop = threading.Event()
+
+def poll_windows():
+    import ctypes
+    from ctypes import wintypes
+    user32 = ctypes.windll.user32
+    pid = os.getpid()
+    Enum = ctypes.WINFUNCTYPE(wintypes.BOOL, wintypes.HWND, wintypes.LPARAM)
+    def cb(hwnd, _):
+        owner = wintypes.DWORD()
+        user32.GetWindowThreadProcessId(hwnd, ctypes.byref(owner))
+        if owner.value == pid and user32.IsWindowVisible(hwnd):
+            buf = ctypes.create_unicode_buffer(128)
+            user32.GetClassNameW(hwnd, buf, 128)
+            visible_windows.append(buf.value)
+        return True
+    while not stop.is_set():
+        user32.EnumWindows(Enum(cb), 0)
+        time.sleep(0.05)
+
+if sys.platform == "win32" and os.environ.get("QT_QPA_PLATFORM") != "offscreen":
+    threading.Thread(target=poll_windows, daemon=True).start()
+
+done = []
+scraper = scraper_module.HeadlessScraper(
+    "claude_api",
+    "data:text/html,<p>hi</p>",
+    "1",
+    wait_ms=300,
+    linger_ms=4000,
+)
+scraper.done.connect(lambda result, error: done.append(error))
 out = {}
 
-
 def finish():
+    stop.set()
+    out["done"] = done
+    out["lingering_left"] = len(scraper_module._LINGERING)
     out["top_level_visible"] = [
         type(w).__name__ for w in QApplication.topLevelWidgets() if w.isVisible()
     ]
-    out["view_visible"] = view.isVisible()
+    out["visible_native_windows"] = sorted(set(visible_windows))
+    end = [m for m in lines if m.startswith("keep-alive end ")]
+    out["end"] = end[-1] if end else None
     print("RESULT " + json.dumps(out), flush=True)
     app.quit()
 
-
-def on_loaded(ok):
-    out["loaded"] = ok
-    out["page_visible"] = page.isVisible()
-
-    def got(value):
-        out["visibility"] = value
+def check():
+    if scraper_module._LINGERING:
+        QTimer.singleShot(200, check)
+    else:
         finish()
 
-    page.runJavaScript("document.visibilityState", got)
-
-
-page.loadFinished.connect(on_loaded)
-page.load(QUrl("data:text/html,<p>hi</p>"))
-page.setVisible(True)
-page.setLifecycleState(QWebEnginePage.LifecycleState.Active)
-QTimer.singleShot(20000, app.quit)
+QTimer.singleShot(200, check)
+QTimer.singleShot(30000, finish)
 app.exec()
 """
 
 
-def test_detached_visible_page_reads_visible_and_shows_no_window():
+def _field(line: str, name: str) -> str:
+    for part in line.split():
+        if part.startswith(name + "="):
+            return part.split("=", 1)[1]
+    raise AssertionError(f"{name} missing from {line!r}")
+
+
+def test_keep_alive_page_is_visible_drawing_focused_and_shows_no_window():
     try:
         proc = subprocess.run(
-            [sys.executable, "-I", "-c", _SCRIPT],
+            [sys.executable, "-c", _SCRIPT],
             capture_output=True,
             text=True,
             timeout=60,
-            env={**os.environ, "QT_QPA_PLATFORM": "offscreen"},
+            env={
+                **os.environ,
+                "QT_QPA_PLATFORM": os.environ.get("QT_QPA_PLATFORM", "offscreen"),
+                "PYTHONPATH": os.pathsep.join(p for p in sys.path if p),
+            },
         )
     except subprocess.TimeoutExpired:
         pytest.skip("WebEngine smoke timed out")
@@ -85,8 +133,13 @@ def test_detached_visible_page_reads_visible_and_shows_no_window():
         pytest.skip(f"WebEngine unavailable here (exit {proc.returncode})")
     result = json.loads(lines[-1][len("RESULT "):])
 
-    assert result["loaded"] is True
-    assert result["visibility"] == "visible", result
-    assert result["page_visible"] is True
-    assert result["view_visible"] is False
+    assert result["done"] == [""], result
+    end = result["end"]
+    assert end is not None, result
+    assert _field(end, "visibility") == "visible", end
+    assert _field(end, "has_focus") == "True", end
+    assert int(_field(end, "raf_ticks")) > 0, end
+    assert _field(end, "viewport") == "1280x900", end
+    assert result["lingering_left"] == 0
     assert result["top_level_visible"] == []
+    assert result["visible_native_windows"] == [], result

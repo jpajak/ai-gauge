@@ -11,7 +11,7 @@ from datetime import datetime, timedelta, timezone
 
 import pytest
 
-from aigauge.models import SnapshotStatus
+from aigauge.models import SnapshotStatus, UsageSnapshot
 from aigauge.providers import claude_api
 from aigauge.providers.claude_api import (
     ClaudeApiProvider,
@@ -920,3 +920,82 @@ def test_provider_drives_a_scrape_runner_on_the_billing_page(monkeypatch):
     assert snap.provider == "claude_api-2"
     assert snap.status == SnapshotStatus.AUTH_REQUIRED
     assert ClaudeApiProvider()._account_id == "claude_api"
+
+
+# --- daily keep-alive gate -------------------------------------------------
+
+
+class _FakeRunner:
+    instances: list["_FakeRunner"] = []
+
+    def __init__(self, **kwargs):
+        self.kwargs = kwargs
+        _FakeRunner.instances.append(self)
+
+    def run(self, on_done):
+        self.on_done = on_done
+
+
+class _Clock:
+    def __init__(self, now: float = 1_000_000.0):
+        self.now = now
+
+    def __call__(self) -> float:
+        return self.now
+
+
+@pytest.fixture
+def fake_runner(monkeypatch):
+    _FakeRunner.instances.clear()
+    monkeypatch.setattr(claude_api, "ScrapeRunner", _FakeRunner)
+    yield _FakeRunner
+    _FakeRunner.instances.clear()
+
+
+def _linger(runner) -> int:
+    return runner.kwargs["linger_ms"]
+
+
+def test_first_check_after_launch_is_a_keep_alive(fake_runner, caplog):
+    provider = ClaudeApiProvider(clock=_Clock())
+    with caplog.at_level(logging.INFO, logger="aigauge.providers.claude_api"):
+        provider.refresh(lambda snapshot: None)
+
+    assert _linger(fake_runner.instances[0]) == claude_api._KEEP_ALIVE_LINGER_MS == 60_000
+    assert "claude_api keep-alive due account=claude_api linger_s=60.0" in caplog.text
+
+
+def test_check_before_24_hours_does_not_linger_and_at_24_hours_does(fake_runner):
+    clock = _Clock()
+    provider = ClaudeApiProvider(clock=clock)
+    provider.refresh(lambda snapshot: None)
+
+    clock.now += 24 * 3600 - 60  # +23h59m
+    provider.refresh(lambda snapshot: None)
+    clock.now += 60  # +24h exactly
+    provider.refresh(lambda snapshot: None)
+    clock.now += 5 * 60  # five minutes after a keep-alive
+    provider.refresh(lambda snapshot: None)
+
+    assert [_linger(r) for r in fake_runner.instances] == [60_000, 0, 60_000, 0]
+
+
+def test_keep_alive_mark_is_set_when_the_run_starts_not_when_it_succeeds(fake_runner):
+    clock = _Clock()
+    provider = ClaudeApiProvider(clock=clock)
+    provider.refresh(lambda snapshot: None)
+    # The run fails: nothing ever calls on_done with a good snapshot.
+    fake_runner.instances[0].on_done(
+        UsageSnapshot(provider="claude_api", status=SnapshotStatus.ERROR, error="x")
+    )
+
+    clock.now += 5 * 60
+    provider.refresh(lambda snapshot: None)
+
+    assert _linger(fake_runner.instances[1]) == 0
+
+
+def test_default_clock_is_wall_clock_time():
+    import time
+
+    assert ClaudeApiProvider()._clock is time.time

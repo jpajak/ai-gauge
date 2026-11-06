@@ -49,6 +49,7 @@ class ScrapeRunner:
         transport_max_attempts: int = 1,
         build_max_attempts: int = 2,
         parent: QObject | None = None,
+        linger_ms: int = 0,
     ):
         self._account_id = account_id
         self._url = url
@@ -59,6 +60,7 @@ class ScrapeRunner:
         self._transport_max_attempts = max(1, transport_max_attempts)
         self._build_max_attempts = max(1, build_max_attempts)
         self._parent = parent
+        self._linger_ms = max(0, linger_ms)
         self._scraper: Any | None = None
 
     def run(self, on_done: Callable[[UsageSnapshot], None]) -> None:
@@ -131,6 +133,11 @@ class ScrapeRunner:
 
         def _start_scrape() -> None:
             attempts[0] += 1
+            extra: dict[str, Any] = {}
+            # Only the first scraper of a run lingers: a build retry must not
+            # start a second hold.
+            if attempts[0] == 1 and self._linger_ms > 0:
+                extra["linger_ms"] = self._linger_ms
             self._scraper = scraper_class(
                 provider=self._account_id,
                 url=self._url,
@@ -138,6 +145,7 @@ class ScrapeRunner:
                 wait_ms=self._wait_ms,
                 max_attempts=self._transport_max_attempts,
                 parent=self._parent,
+                **extra,
             )
             self._scraper.done.connect(_handle)
 

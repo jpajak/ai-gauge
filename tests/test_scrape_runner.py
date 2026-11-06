@@ -170,3 +170,34 @@ def test_scrape_runner_reports_error_when_webengine_is_unavailable(monkeypatch):
     assert len(received) == 1
     assert received[0].status == SnapshotStatus.ERROR
     assert "no GLX/EGL" in received[0].error
+
+
+def test_only_the_first_scraper_of_a_run_gets_linger_ms(fake_scraper):
+    rn = ScrapeRunner(
+        account_id="x",
+        url="http://example",
+        extractor_js="",
+        build=lambda payload: _err_snapshot(),
+        log=logging.getLogger("test"),
+        build_max_attempts=2,
+        linger_ms=60_000,
+    )
+    rn.run(lambda snapshot: None)
+    fake_scraper.instances[0].done.emit({"any": "payload"}, "")
+
+    assert len(fake_scraper.instances) == 2
+    assert fake_scraper.instances[0].kwargs["linger_ms"] == 60_000
+    assert "linger_ms" not in fake_scraper.instances[1].kwargs
+
+
+def test_scraper_gets_no_linger_ms_by_default(fake_scraper):
+    rn = ScrapeRunner(
+        account_id="x",
+        url="http://example",
+        extractor_js="",
+        build=lambda payload: _ok_snapshot(),
+        log=logging.getLogger("test"),
+    )
+    rn.run(lambda snapshot: None)
+
+    assert "linger_ms" not in fake_scraper.instances[0].kwargs

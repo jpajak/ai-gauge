@@ -105,16 +105,69 @@ ChatGPT re-issued `__Secure-next-auth.session-token.0` and `.1` with a 90-day
 expiry on a single page load, which is why the Codex tile never signs out.
 claude.ai did not re-issue `sessionKey`.
 
+### Result (source run 2026-11-02 21:19 to 2026-11-05 19:24)
+
+- **The run is valid.** One process for 70 hours (heartbeat `uptime_s`), and
+  the Windows System log has no sleep, hibernate or restart since the run
+  began (last boot 2026-10-26, only lock and unlock transitions). In the
+  surviving log, 156 of 157 `claude_api` checks returned `result=ok`. The one
+  `AbortError` (13:18) recovered on the next check.
+- **Log rotation lost the first 54 hours.** `ai-gauge.log` rotates at 512 KB
+  with two backups (`src/aigauge/logging_setup.py:33-36`), which holds about
+  16 hours at the current volume. The Codex page's console warnings are a
+  third of all lines. The surviving window is 2026-11-05 03:36 to 19:24.
+- **No `sessionKey` or `sessionKeyV3` line for `claude_api`.** The Console
+  set only `activitySessionId` (12-hour expiry, moved on every check) and
+  `intercom-session-lupk8zyo` (14 days, on `.claude.com`). Any renewal
+  cadence under 16 hours would have logged at least one line in the window.
+  A once-a-day renewal inside the lost hours cannot be ruled out from the
+  log alone, but the October timeline already rules it out: that session
+  died at sign-in plus 7 days after six days of checks.
+- **claude.ai now re-issues its `sessionKey`.** Profile `claude` logged
+  `sessionKey`, `sessionKeyLC`, `sessionKeyV3` and `sessionKeyV3LC` renewed
+  at 09:30 and 15:33, one re-issue each, each moving the expiry 6 hours to
+  about four weeks out. That differs from the first run's single page load,
+  and it shows the watcher does catch a `sessionKey` renewal when a server
+  sends one.
+- **Codex is unchanged.** `__Secure-next-auth.session-token.0` and `.1` and
+  `oai-client-session-epoch` move on every check, 90 days out.
+- **Verdict:** the checks do not renew the Console session. Build step 1.
+- **Prediction:** without a renewal, the current Console sign-in (2026-11-02,
+  just before the run) expires about 2026-11-09 in the evening.
+
 ## Recommended fix
 
 Build in order and stop at the first step that makes the watcher log a
 `sessionKey` renewal.
 
-1. **Daily keep-alive visit.** Once every 24 hours, the Claude API check
-   keeps the page alive for about 60 seconds with `page.setVisible(True)`
-   (available in the installed PyQt6) and lifecycle `Active`. It then
-   navigates to `about:blank` before discarding the page, so queued activity
-   is sent. Every other check stays as it is. Tests the first hypothesis.
+1. **Daily keep-alive visit (built, `5946d92`).** Once every 24 hours, the
+   Claude API check keeps the page alive for about 60 seconds with
+   `page.setVisible(True)` and lifecycle `Active`. It then navigates to
+   `about:blank` before discarding the page, so queued activity is sent.
+   Every other check stays as it is. Tests the first hypothesis.
+   - The gate is `ClaudeApiProvider._keep_alive_linger_ms`
+     (`src/aigauge/providers/claude_api.py`), in memory, so the first check
+     after launch is a keep-alive. The hold is `linger_ms` on
+     `HeadlessScraper` (`src/aigauge/webview/scraper.py`).
+   - Qt ignores `setVisible` until the first `load()` has created the web
+     contents, so it is called right after that load. The view is detached
+     first so the page's visibility can never reach the offscreen widget. On
+     the offscreen platform an attached page did not pop up a window either,
+     but the detach stays.
+   - **How to read it.** Restart from source on this branch without signing
+     in again, so the only `sessionKey` writer is the Console server. Then
+     `grep -E "keep-alive|profile=claude_api name=sessionKey" ai-gauge.log`.
+     Expect `claude_api keep-alive due`, `keep-alive start ...
+     visibility=visible` and, about 60 seconds later, `keep-alive end ...
+     visibility=visible event_logging_requests=N`.
+     - A `session cookie seen profile=claude_api name=sessionKey` (or
+       `sessionKeyV3`) line within the hour after `keep-alive end`, expiring
+       about 7 days later: the visit renews. Stop here.
+     - `visibility=hidden`: the page was not visible, so the hypothesis was
+       not tested. Fix that first.
+     - Visible, but no `sessionKey` line within the hour: the visit is not
+       enough. If `event_logging_requests=0`, the page sent no activity at
+       all, which is worth a look before moving on. Then step 2.
 2. **Keep the `.claude.com` cookies at sign-in.** Import the Console-related
    cookies from `.claude.com` as well, without Cloudflare's `__cf_bm`. Tests
    the third hypothesis.

@@ -329,3 +329,25 @@ def test_zero_linger_keeps_todays_call_sequence(monkeypatch):
         ("view.deleteLater",),
         ("page.deleteLater",),
     ]
+
+
+def test_scrape_start_drops_constants_and_profile_is_logged_once(monkeypatch, caplog):
+    monkeypatch.setattr(scraper_module, "_PROFILE_LOGGED", set())
+    with caplog.at_level(logging.INFO, logger="aigauge.scraper"):
+        _Harness(monkeypatch, linger_ms=0)
+        _Harness(monkeypatch, linger_ms=60_000)
+
+    lines = [r.getMessage() for r in caplog.records]
+    profiles = [m for m in lines if m.startswith("scrape profile ")]
+    starts = [m for m in lines if m.startswith("scrape start ")]
+    assert len(profiles) == 1
+    assert "provider=claude_api profile=profile" in profiles[0]
+    assert "user_agent='ua'" in profiles[0]
+    assert lines.index(profiles[0]) < lines.index(starts[0])
+    assert len(starts) == 2
+    for start in starts:
+        assert "profile=" not in start
+        assert "viewport=" not in start
+        assert "user_agent=" not in start
+    assert starts[0].endswith("max_attempts=1")
+    assert starts[1].endswith("max_attempts=1 linger_ms=60000")

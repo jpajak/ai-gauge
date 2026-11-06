@@ -19,6 +19,9 @@ log = logging.getLogger("aigauge.scraper")
 # own as soon as `done` fires, and the Qt parent may be None. Hold them here
 # until `_cleanup` runs.
 _LINGERING: set[Any] = set()
+# Providers whose profile path, viewport and user agent are already in the log.
+# They never change within a process, so they are logged once, not per check.
+_PROFILE_LOGGED: set[str] = set()
 
 # Time to let pagehide / visibilitychange handlers and queued beacons run after
 # navigating away, before the page is hidden and discarded.
@@ -165,18 +168,24 @@ class HeadlessScraper(QObject):
         if loading_changed is not None:
             loading_changed.connect(self._on_loading_changed)
 
+        if provider not in _PROFILE_LOGGED:
+            _PROFILE_LOGGED.add(provider)
+            log.info(
+                "scrape profile provider=%s profile=%s viewport=%sx%s user_agent=%r",
+                provider,
+                profile.persistentStoragePath(),
+                self._view.width(),
+                self._view.height(),
+                profile.httpUserAgent(),
+            )
         log.info(
-            "scrape start provider=%s url=%s profile=%s viewport=%sx%s "
-            "wait_ms=%s timeout_ms=%s max_attempts=%s user_agent=%r",
+            "scrape start provider=%s url=%s wait_ms=%s timeout_ms=%s max_attempts=%s%s",
             provider,
             _safe_url(url),
-            profile.persistentStoragePath(),
-            self._view.width(),
-            self._view.height(),
             wait_ms,
             timeout_ms,
             self._max_attempts,
-            profile.httpUserAgent(),
+            f" linger_ms={self._linger_ms}" if self._linger_ms > 0 else "",
         )
         self._begin_attempt()
 

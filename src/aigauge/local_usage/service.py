@@ -261,6 +261,7 @@ class LocalUsageService(QObject):
     def _run(self, kind: str) -> None:
         store = self.store
         results: list[ProviderImportResult] = []
+        failed = False
         try:
             importer = LogImporter(store, cancel=self._cancel, progress=self._on_progress)
             results = importer.run(self.sources())
@@ -272,12 +273,20 @@ class LocalUsageService(QObject):
             # Summaries first: they copy the usage of windows about to be pruned.
             store.prune()
         except Exception:  # noqa: BLE001
+            failed = True
             log.exception("local usage %s import failed", kind)
         finally:
             if threading.current_thread() is not threading.main_thread():
                 store.close_thread_connection()
         self._last_results = results
-        log.info(
+        # An import that found nothing new is the common case on every check:
+        # keep it out of the INFO log. Parsed rows, a cancel, an error or a
+        # failed run stay visible.
+        quiet = not failed and all(
+            r.parsed == 0 and not r.cancelled and not r.errors for r in results
+        )
+        log.log(
+            logging.DEBUG if quiet else logging.INFO,
             "local usage %s import finished %s",
             kind,
             ", ".join(

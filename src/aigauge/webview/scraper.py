@@ -9,6 +9,7 @@ from urllib.parse import urlparse, urlunparse
 from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 
+from ..providers.diagnostics import log_page_diagnosis
 from ..providers.registry import account_family
 from .page import QuietWebEnginePage
 from .profile import get_profile
@@ -254,6 +255,17 @@ class HeadlessScraper(QObject):
                 return
             self._extractor_reruns += 1
             if self._extractor_reruns > 5:
+                if account_family(self._provider) == "claude":
+                    # The extractor supplied page evidence, but transport retries
+                    # normally discard it. Log only the sanitized flags.
+                    log_page_diagnosis(
+                        log,
+                        provider=self._provider,
+                        classification="extractor_retry_exhausted",
+                        payload=result,
+                        expected_rows=("session", "weekly_all"),
+                        level=logging.WARNING,
+                    )
                 self._finish(None, "extractor retry limit exceeded")
                 return
             try:

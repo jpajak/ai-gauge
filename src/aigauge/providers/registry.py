@@ -185,7 +185,7 @@ _DECLARED_SPECS: tuple[ProviderSpec, ...] = (
             name="sessionKey",
             aliases=("sessionKey",),
         ),
-        usage_url="https://claude.ai/new#settings/usage",
+        usage_url="https://claude.ai/settings/usage",
         settings_hint=_BROWSER_SIGN_IN_HINT.format(name="Claude"),
         paste_cookie=True,
         compact_collapse=True,

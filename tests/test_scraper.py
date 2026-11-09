@@ -1,3 +1,4 @@
+import logging
 from typing import Any, cast
 
 from aigauge.webview.scraper import HeadlessScraper
@@ -55,3 +56,38 @@ def test_failed_load_on_other_page_remains_transport_failure():
 
 def test_extractor_retry_limit_is_retryable_transport_error():
     assert "extractor retry limit exceeded" in HeadlessScraper._RETRYABLE_ERRORS
+
+
+def test_claude_retry_exhaustion_logs_only_safe_page_flags(caplog):
+    class UsagePage:
+        def url(self):
+            return QUrl("https://claude.ai/settings/usage")
+
+        def title(self):
+            return "Claude"
+
+    class Scrape:
+        _finished = False
+        _provider = "claude"
+        _extractor_reruns = 5
+        _page = UsagePage()
+        result = None
+
+        def _finish(self, payload, error):
+            self.result = (payload, error)
+
+    scrape = Scrape()
+    with caplog.at_level(logging.WARNING, logger="aigauge.scraper"):
+        HeadlessScraper._on_js_result(cast(Any, scrape), {
+            "__retry_after_ms": 1200,
+            "url": "https://claude.ai/settings/usage?secret=do-not-log",
+            "title": "Claude",
+            "body_text": "Your usage Current session This week 25% used",
+            "session": None,
+            "weekly_all": None,
+        })
+    assert scrape.result == (None, "extractor retry limit exceeded")
+    assert "extractor_retry_exhausted" in caplog.text
+    assert "url_query=True" in caplog.text
+    assert "do-not-log" not in caplog.text
+    assert "Current session This week" not in caplog.text

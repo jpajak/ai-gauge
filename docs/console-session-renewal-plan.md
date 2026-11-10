@@ -371,6 +371,15 @@ wrong on this point. What the evidence now allows:
      lists more than the seven `platform.claude.com` names (`GAESA`,
      `_dd_s_v2`, `activitySessionId`, `anthropic-device-id`, `routingHint`,
      `sessionKey`, `sessionKeyLC`).
+   - **Test started 2026-11-09 22:05 EST** (frozen build from this branch,
+     launched 22:03). Restart logged `browser identity provider=claude_api
+     browser=chrome version=157.0.8103.39 applied=True` and `Chrome/157.0.0.0`
+     on `scrape profile`; no keep-alive. Sign-in captured 11 cookies, adding
+     `__cf_bm`, `__ssid`, `_cfuvid` and `ajs_anonymous_id`. `sessionKey`
+     expires 2026-11-17T03:05Z (Mon Nov 16 22:05 EST). Checks `ok` since.
+     Verdict: still signed in after that time, or a `session cookie renewed
+     profile=claude_api name=sessionKey` line, means it renews. The machine
+     must be awake with the app running for part of the last day.
    - **Known gaps.** `hydrate_all_from_keyring` re-sets stored cookies as
      `.platform.claude.com` domain cookies when a profile has no Cookies
      file, so the `.claude.com` ones lose their domain in that case only.

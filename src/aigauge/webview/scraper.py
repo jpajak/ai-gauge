@@ -6,10 +6,8 @@ import time
 from typing import Any, Callable
 from urllib.parse import urlparse, urlunparse
 
-from PyQt6.QtCore import QEvent, QObject, Qt, QTimer, QUrl, pyqtSignal
-from PyQt6.QtGui import QFocusEvent
+from PyQt6.QtCore import QObject, QTimer, QUrl, pyqtSignal
 from PyQt6.QtWebEngineWidgets import QWebEngineView
-from PyQt6.QtWidgets import QApplication
 
 from ..providers.registry import account_family
 from .page import QuietWebEnginePage
@@ -17,80 +15,9 @@ from .profile import get_profile
 
 log = logging.getLogger("aigauge.scraper")
 
-# Linger-mode scrapers outlive every caller's reference: the runner drops its
-# own as soon as `done` fires, and the Qt parent may be None. Hold them here
-# until `_cleanup` runs.
-_LINGERING: set[Any] = set()
 # Providers whose profile path, viewport and user agent are already in the log.
 # They never change within a process, so they are logged once, not per check.
 _PROFILE_LOGGED: set[str] = set()
-
-# Time to let pagehide / visibilitychange handlers and queued beacons run after
-# navigating away, before the page is hidden and discarded.
-_NAVIGATE_AWAY_MS = 3000
-# Give up waiting for the end-of-hold probe if the renderer never answers.
-_PROBE_TIMEOUT_MS = 2000
-
-_VISIBILITY_JS = "document.visibilityState"
-# Runs at hold start. Counts what a visible, drawn, focused page would do on its
-# own: animation frames, idle callbacks and one-second timers. The resource
-# timing buffer is enlarged so the end probe can see the whole visit.
-_HOLD_START_JS = """
-(function () {
-  if (window.__aigaugeKeepAlive) { return; }
-  try { performance.setResourceTimingBufferSize(2000); } catch (e) {}
-  var s = window.__aigaugeKeepAlive = {raf: 0, idle: 0, timer: 0};
-  function raf() { s.raf++; window.requestAnimationFrame(raf); }
-  function idle() { s.idle++; window.requestIdleCallback(idle); }
-  function tick() { s.timer++; window.setTimeout(tick, 1000); }
-  if (window.requestAnimationFrame) { window.requestAnimationFrame(raf); }
-  if (window.requestIdleCallback) { window.requestIdleCallback(idle); }
-  window.setTimeout(tick, 1000);
-})()
-"""
-_END_PROBE_JS = """
-(function () {
-  var s = window.__aigaugeKeepAlive || {};
-  var res = performance.getEntriesByType('resource');
-  var seen = {};
-  res.forEach(function (e) {
-    try {
-      var p = new URL(e.name).pathname;
-      if (p.indexOf('/api/') !== -1) { seen[p] = true; }
-    } catch (x) {}
-  });
-  return {
-    visibility: document.visibilityState,
-    has_focus: document.hasFocus(),
-    raf_ticks: s.raf,
-    idle_ticks: s.idle,
-    timer_ticks: s.timer,
-    viewport_w: window.innerWidth,
-    viewport_h: window.innerHeight,
-    resources: res.length,
-    event_logging_requests: res.filter(
-      function (e) { return e.name.indexOf('/api/event_logging') !== -1; }).length,
-    api_paths: Object.keys(seen)
-  };
-})()
-"""
-
-_UUID_RE = re.compile(
-    r"[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}"
-)
-_LONG_DIGITS_RE = re.compile(r"\d{6,}")
-_API_PATHS_CAP = 20
-
-
-def _redact_api_paths(paths: Any) -> str | None:
-    """Unique, sorted API pathnames with ids masked, as one comma-joined field."""
-    if not isinstance(paths, list):
-        return None
-    redacted = {
-        _LONG_DIGITS_RE.sub("{id}", _UUID_RE.sub("{id}", str(path).split("?")[0]))
-        for path in paths
-    }
-    return ",".join(sorted(redacted)[:_API_PATHS_CAP])
 
 
 def _enum_name(value: Any) -> str:
@@ -147,12 +74,6 @@ class HeadlessScraper(QObject):
     Lives on the GUI thread (QtWebEngine is GUI-thread-only). The owner keeps a
     reference until `done` fires; the callback delivers either the JS result or
     an error string.
-
-    ``linger_ms > 0`` turns the check into a keep-alive visit: the view is shown
-    with ``WA_DontShowOnScreen`` (no native window) so the page draws, is
-    visible to the Page Visibility API and can be given focus, kept until ``linger_ms`` has passed
-    since the scrape started, then navigated away so pagehide work runs. The
-    result is still delivered as soon as it is extracted.
     """
 
     done = pyqtSignal(object, str)  # (result_or_None, error_or_empty_string)
@@ -173,7 +94,6 @@ class HeadlessScraper(QObject):
         timeout_ms: int = 25000,
         max_attempts: int = 1,
         parent: QObject | None = None,
-        linger_ms: int = 0,
     ):
         super().__init__(parent)
         self._provider = provider
@@ -196,25 +116,13 @@ class HeadlessScraper(QObject):
         self._max_progress = 0
         self._render_terminated = False
         self._extractor_reruns = 0
-        self._linger_ms = max(0, linger_ms)
-        self._activated = False
-        self._navigated_away = False
 
         profile = get_profile(provider)
         self._page = QuietWebEnginePage(profile, self, provider=provider)
         self._view = QWebEngineView()
         self._view.setPage(self._page)
-        # A normal check never shows the view, so the page reads "hidden".
+        # Offscreen — never .show()
         self._view.resize(1280, 900)
-        if self._linger_ms > 0:
-            # WA_DontShowOnScreen makes Qt treat the view as shown, so the page
-            # draws, has a real 1280x900 viewport and can take a synthetic
-            # focus, while no native window becomes visible (measured on
-            # Windows and offscreen on 2026-11-05). A page detached from its
-            # view reported "visible" but drew nothing on the Claude page.
-            self._view.setAttribute(Qt.WidgetAttribute.WA_DontShowOnScreen, True)
-            self._view.show()
-            _LINGERING.add(self)
 
         self._timeout = QTimer(self)
         self._timeout.setSingleShot(True)
@@ -239,13 +147,12 @@ class HeadlessScraper(QObject):
                 profile.httpUserAgent(),
             )
         log.info(
-            "scrape start provider=%s url=%s wait_ms=%s timeout_ms=%s max_attempts=%s%s",
+            "scrape start provider=%s url=%s wait_ms=%s timeout_ms=%s max_attempts=%s",
             provider,
             _safe_url(url),
             wait_ms,
             timeout_ms,
             self._max_attempts,
-            f" linger_ms={self._linger_ms}" if self._linger_ms > 0 else "",
         )
         self._begin_attempt()
 
@@ -265,22 +172,6 @@ class HeadlessScraper(QObject):
         self._timeout.stop()
         self._timeout.start(self._timeout_ms)
         self._page.load(QUrl(self._url))
-        if self._linger_ms > 0 and not self._activated:
-            self._activated = True
-            self._page.setLifecycleState(self._page.LifecycleState.Active)
-
-    def _focus_view(self) -> None:
-        # Gives the web contents focus without a native window: a FocusIn on
-        # the view's focus proxy. activateWindow(), raise_() and
-        # requestActivate() are never used, they take the foreground from the
-        # user's own application. Focus can be lost, so this runs more than once.
-        proxy = self._view.focusProxy()
-        if proxy is None:
-            return
-        QApplication.sendEvent(
-            proxy,
-            QFocusEvent(QEvent.Type.FocusIn, Qt.FocusReason.ActiveWindowFocusReason),
-        )
 
     def _on_load_progress(self, progress: int) -> None:
         self._max_progress = max(self._max_progress, progress)
@@ -351,8 +242,6 @@ class HeadlessScraper(QObject):
             else:
                 self._finish(None, "page failed to load")
             return
-        if self._linger_ms > 0:
-            self._focus_view()
         # Page DOM may render asynchronously — give React a moment, then evaluate.
         QTimer.singleShot(self._wait_ms, self._run_extractor)
 
@@ -458,58 +347,7 @@ class HeadlessScraper(QObject):
         self.done.emit(result, error)
         # Release Chromium resources after connected callbacks have had a
         # chance to clear their Python references.
-        if self._linger_ms > 0 and not error:
-            QTimer.singleShot(0, self._begin_hold)
-        else:
-            QTimer.singleShot(0, self._cleanup)
-
-    def _begin_hold(self) -> None:
-        elapsed_ms = (time.monotonic() - self._started_at) * 1000
-        remaining_ms = max(0, int(self._linger_ms - elapsed_ms))
-        self._focus_view()
-        self._page.runJavaScript(_VISIBILITY_JS, self._on_hold_start_probe)
-        self._page.runJavaScript(_HOLD_START_JS)
-        QTimer.singleShot(remaining_ms, self._end_hold)
-
-    def _on_hold_start_probe(self, visibility: Any) -> None:
-        log.info(
-            "keep-alive start provider=%s visibility=%s linger_s=%s",
-            self._provider,
-            visibility,
-            self._linger_ms / 1000,
-        )
-
-    def _end_hold(self) -> None:
-        # The probe answers from the renderer; if it never does, move on.
-        self._page.runJavaScript(_END_PROBE_JS, self._on_hold_end_probe)
-        QTimer.singleShot(_PROBE_TIMEOUT_MS, lambda: self._on_hold_end_probe(None))
-
-    def _on_hold_end_probe(self, probe: Any) -> None:
-        if self._navigated_away:
-            return
-        self._navigated_away = True
-        probe = probe if isinstance(probe, dict) else {}
-        log.info(
-            "keep-alive end provider=%s visibility=%s has_focus=%s raf_ticks=%s "
-            "idle_ticks=%s timer_ticks=%s viewport=%sx%s resources=%s "
-            "event_logging_requests=%s api_paths=%s elapsed=%.1fs",
-            self._provider,
-            probe.get("visibility"),
-            probe.get("has_focus"),
-            probe.get("raf_ticks"),
-            probe.get("idle_ticks"),
-            probe.get("timer_ticks"),
-            probe.get("viewport_w"),
-            probe.get("viewport_h"),
-            probe.get("resources"),
-            probe.get("event_logging_requests"),
-            _redact_api_paths(probe.get("api_paths")),
-            time.monotonic() - self._started_at,
-        )
-        # Navigating away runs pagehide / visibilitychange handlers, which is
-        # when a page flushes queued activity events.
-        self._page.load(QUrl("about:blank"))
-        QTimer.singleShot(_NAVIGATE_AWAY_MS, self._cleanup)
+        QTimer.singleShot(0, self._cleanup)
 
     def _cleanup(self) -> None:
         try:
@@ -527,12 +365,6 @@ class HeadlessScraper(QObject):
                 loading_changed.disconnect(self._on_loading_changed)
             except (TypeError, RuntimeError):
                 pass
-        if self._linger_ms > 0:
-            # Qt refuses to discard a visible page; hiding the view hides it.
-            try:
-                self._view.hide()
-            except RuntimeError:
-                pass
         self._view.stop()
         self._view.setPage(None)
         try:
@@ -542,7 +374,6 @@ class HeadlessScraper(QObject):
         self._view.deleteLater()
         self._page.deleteLater()
         self.deleteLater()
-        _LINGERING.discard(self)
 
 
 def scrape(
@@ -553,7 +384,6 @@ def scrape(
     parent: QObject | None = None,
     wait_ms: int = 4000,
     max_attempts: int = 1,
-    linger_ms: int = 0,
 ) -> HeadlessScraper:
     """Convenience wrapper. Returns the scraper so the caller can keep a reference."""
     scraper = HeadlessScraper(
@@ -563,7 +393,6 @@ def scrape(
         wait_ms=wait_ms,
         max_attempts=max_attempts,
         parent=parent,
-        linger_ms=linger_ms,
     )
     scraper.done.connect(on_done)
     return scraper

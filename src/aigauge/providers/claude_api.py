@@ -16,7 +16,6 @@ from __future__ import annotations
 
 import logging
 import re
-import time
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from typing import Any, Callable
@@ -36,12 +35,6 @@ _SESSION_INVALID = "account_session_invalid"
 _REFUSAL_TYPE = "permission_error"
 _REFUSAL_CODE = "permission_denied"
 log = logging.getLogger("aigauge.providers.claude_api")
-
-# The Console never re-issues its sessionKey to a hidden page that is dropped
-# seconds after load. Once a day one check keeps a visible page for a minute so
-# it looks like a visit. See docs/console-session-renewal-plan.md.
-_KEEP_ALIVE_INTERVAL_S = 24 * 3600
-_KEEP_ALIVE_LINGER_MS = 60_000
 
 _READ_ERROR = "Couldn't read Console billing"
 _SIGNED_OUT_ERROR = "Not signed in to Claude Console."
@@ -669,32 +662,10 @@ class ClaudeApiProvider(Provider):
         self,
         parent: QObject | None = None,
         account_id: str = "claude_api",
-        clock: Callable[[], float] = time.time,
     ):
         self._parent = parent
         self._account_id = account_id
-        self._clock = clock
-        # Wall-clock time, so a machine asleep across the mark is due on wake.
-        self._last_keep_alive_at: float | None = None
         self._runner: ScrapeRunner | None = None  # held to prevent GC
-
-    def _keep_alive_linger_ms(self) -> int:
-        """Linger for this check, or 0. Marks the time when a keep-alive starts.
-
-        Marked at the start, not on success: a failed run then waits a day
-        instead of holding a page for a minute every check while signed out.
-        """
-        now = self._clock()
-        last = self._last_keep_alive_at
-        if last is not None and now - last < _KEEP_ALIVE_INTERVAL_S:
-            return 0
-        self._last_keep_alive_at = now
-        log.info(
-            "claude_api keep-alive due account=%s linger_s=%s",
-            self._account_id,
-            _KEEP_ALIVE_LINGER_MS / 1000,
-        )
-        return _KEEP_ALIVE_LINGER_MS
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
         def _build(payload: dict[str, Any]) -> UsageSnapshot:
@@ -712,6 +683,5 @@ class ClaudeApiProvider(Provider):
             transport_max_attempts=2,
             build_max_attempts=2,
             parent=self._parent,
-            linger_ms=self._keep_alive_linger_ms(),
         )
         self._runner.run(on_done)

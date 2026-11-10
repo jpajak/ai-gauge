@@ -3,9 +3,10 @@
 **Status:** step 2 measured (2026-11-09). The app's session ran its full 7
 days with no re-issue and died at 21:07 EST. Chrome's was renewed 12.6 hours
 before its end. Leading cause: the app replays Chrome's cookies under a
-different browser identity and cookie set (hypothesis 6). Next: one try
-(steps 3 and 5), then accept a weekly sign-in if it fails. No expiry on
-screen.
+different browser identity and cookie set (hypothesis 6). Steps 3 and 5 built
+2026-11-09 (`0e3e444`, `1797d5a`, `a41b27f`). Waiting on a restart and a
+fresh Console sign-in, then the watcher near the end of that session. If it
+does not renew, accept a weekly sign-in. No expiry on screen.
 
 **Trigger to build the fix:** met 2026-11-09 (step 2 result below).
 
@@ -349,7 +350,32 @@ wrong on this point. What the evidence now allows:
      full version list, platform `Windows`). Fall back to the current UA when
      nothing is stored. Leave `claude` alone: its session was born under the
      current identity and renews.
-   - Needs a fresh Console sign-in after it lands.
+   - **Built.** `0e3e444` adds `src/aigauge/webview/browser_identity.py`
+     (version from the highest dotted-quad folder beside the exe on Windows,
+     `Info.plist` on macOS, `--version` on Linux) and applies it in
+     `get_profile` for `_SIGNIN_IDENTITY_PROVIDERS` (`profile.py:26`). It
+     reads the installed browser at launch, so it needs no sign-in.
+     `1797d5a` adds `cookie_domain_in_scope` (`cookies.py:196`), used by both
+     `_provider_cookies` and `import_browser_cookies`: the importer had its
+     own copy of the old filter and would have dropped `.claude.com` again.
+     Only `claude_api` gains cookies (`claude` and `codex` sit on apex
+     domains). Storage is the DPAPI file `secrets.dat`, no size limit.
+   - **The cookie half needs a fresh sign-in**, since cookies are only
+     captured then. John signed in at 21:38 on 2026-11-09 with the old
+     filter, so: restart on this branch, sign out of the Claude API tile,
+     sign in again.
+   - **Check after restart:** `browser identity provider=claude_api
+     browser=chrome version=157... applied=True`, and the `scrape profile
+     provider=claude_api` line showing `Chrome/157.0.0.0`. **After the
+     sign-in:** `external sign-in captured provider=claude_api cookie_names=`
+     lists more than the seven `platform.claude.com` names (`GAESA`,
+     `_dd_s_v2`, `activitySessionId`, `anthropic-device-id`, `routingHint`,
+     `sessionKey`, `sessionKeyLC`).
+   - **Known gaps.** `hydrate_all_from_keyring` re-sets stored cookies as
+     `.platform.claude.com` domain cookies when a profile has no Cookies
+     file, so the `.claude.com` ones lose their domain in that case only.
+     Brave on macOS reports Brave's own version in `Info.plist`, not the
+     Chromium major. Neither applies to this machine.
    - **How to read it.** `grep -E "profile=claude_api name=sessionKey"
      ai-gauge.log` as the session's last day comes round, machine awake.
      Chrome renewed between 84 and 155 hours, so no line before 84 hours

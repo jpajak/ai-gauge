@@ -1,14 +1,16 @@
 # Console session renewal
 
-**Status:** measuring. The session cookie watcher is built; the fix waits on
-its log.
+**Status:** step 2 measured (2026-11-09). The app's session ran its full 7
+days with no re-issue and died at 21:07 EST. Chrome's was renewed 12.6 hours
+before its end. Leading cause: the app replays Chrome's cookies under a
+different browser identity and cookie set (hypothesis 6). Next: one try
+(steps 3 and 5), then accept a weekly sign-in if it fails. No expiry on
+screen.
 
-**Trigger to build the fix:** after a fresh Claude API sign-in, 48 hours of
-normal running log a `session cookie seen` line for `sessionKey` on the
-`claude_api` profile and no `session cookie renewed` line for it.
+**Trigger to build the fix:** met 2026-11-09 (step 2 result below).
 
-**Size:** 1 to 3 commits, one per step under "Recommended fix", each verified
-by the watcher before the next.
+**Size:** 2 commits, steps 3 and 5 under "Recommended fix". Step 3's verdict
+comes from the watcher near the end of the next session.
 
 ## Problem
 
@@ -213,26 +215,179 @@ Build in order and stop at the first step that makes the watcher log a
      billing-page half of hypothesis 2. The keep-alive stays until step 2 is
      measured, in case renewal needs both the cookies and activity; remove it
      if step 2 renews without it.
+   - **Overnight confirmation (same process, 2026-11-05 21:28 to 2026-11-06
+     08:28):** 79 `claude_api` checks, all `scrape ok` with `orgs_status=200`,
+     no warnings, and no `claude_api` `sessionKey` line in 11 hours. claude.ai
+     re-issued its `sessionKey` set again at 03:37, about 6 hours after 21:33.
+     Codex: 79 of 79 checks ok, no deferred sign-out.
 
-**Before step 2, a one-minute check in Chrome.** In DevTools on the
-Console billing page, Application > Cookies > `https://platform.claude.com`:
-read the Expires of `sessionKey` and `sessionKeyV3`, and list the cookies
-whose domain is `.claude.com`. An expiry about 7 days from now means Chrome
-gets the cookie re-issued on a visit. An expiry fixed from an older sign-in
-means Chrome never renews it and instead signs in again silently through
-another cookie when it lapses, and that cookie is what step 2 must import.
-The extension cannot read HttpOnly cookies, so this needs a person.
-2. **Keep the `.claude.com` cookies at sign-in.** Import the Console-related
-   cookies from `.claude.com` as well, without Cloudflare's `__cf_bm`. Tests
-   the third hypothesis.
-3. **Fallback if neither renews.** Show the sign-in expiry in the tile's note
-   and warn a day ahead. This makes the weekly sign-in visible rather than
-   fixing it.
+**Chrome check (DevTools, 2026-11-06 about 14:08Z): Chrome is not renewed
+either.**
+
+- Chrome's `sessionKey` and `sessionKeyLC` are on `.platform.claude.com`,
+  expiring 2026-11-10T01:59:44.821Z. That is exactly 7 days after
+  2026-11-03T01:59:44Z (2026-11-02 20:59 EST), when `routingHint` on
+  `.platform.claude.com` was set with the same millisecond (30-day expiry).
+  Billing-page visits at 13:33Z and 14:08Z, about 84 hours into the session,
+  did not move it. The visits did set `GAESA`, `activitySessionId`,
+  `lastActiveOrg` and the analytics cookies.
+- Chrome has no `sessionKeyV3` on the Console. The app's sign-in copy
+  (`_dd_s_v2`, `activitySessionId`, `anthropic-device-id`, `routingHint`,
+  `sessionKey`, `sessionKeyLC`, from the `cookie hydration
+  provider=claude_api` line) matches Chrome's auth cookies, so the V3 idea
+  is dead.
+- The only HttpOnly cookies on `.claude.com` are Cloudflare's `__cf_bm` and
+  `_cfuvid`, and `claude_visited` (a marketing-site marker). There is no auth
+  or refresh cookie there for sign-in to have dropped. A second, host-only
+  `routingHint` was set at 2026-11-03T02:55:24Z.
+- **Step 2 is rejected** (see Alternatives). Chrome, with every cookie and
+  real activity, gets no re-issue in the first 84 hours either.
+
+**The October timeline does not rule out a last-day renewal.** Sign-in
+2026-10-23 14:56, last check 2026-10-29 14:04, expiry 2026-10-30 14:56: the
+checks stopped 24 hours 52 minutes before expiry, 52 minutes before the final
+day began. The "already rules it out" line in the source-run result above is
+wrong on this point. What the evidence now allows:
+
+4. **Renewal only near expiry.** The server re-issues only when less than
+   about 3.5 days remain (nothing so far has had less). October's checks
+   never reached the last day because the machine went idle.
+5. **No renewal for anyone.** The Console caps sessions at 7 days. Chrome
+   "stays signed in" only by signing in again, either silently (for example
+   Google's automatic sign-in for returning users) or with a click nobody
+   remembers. Chrome's own session started 2026-11-02 20:59 EST, the same
+   evening the app's session died, which fits.
+
+2. **Watch the current session's last day (no code).** Separates 4 from 5.
+   Keep the source run going, machine awake, and do not sign in to the
+   Console again in the app before the session lapses: a fresh sign-in
+   resets the clock. The app's session expires about 2026-11-09 21:00 EST
+   (sign-in between the 20:28 403 and the 21:19 run start on Nov 2; its
+   cookie file is locked while the app runs, so the exact time is unread).
+   Chrome's expires 2026-11-09 20:59 EST.
+   - **App:** `grep -E "profile=claude_api name=sessionKey" ai-gauge.log`
+     from 2026-11-08 21:00 EST onward. Since `073da2a` the log keeps five
+     1 MB files, about 140 hours at the current volume, so the whole window
+     survives.
+   - **Chrome, during Nov 9 before 20:59 EST:** open the billing page and
+     read `sessionKey`'s Expires in DevTools. Moved from
+     2026-11-10T01:59:44Z means a near-expiry renewal.
+   - **Chrome, after 20:59 EST Nov 9 if not renewed:** open the Console.
+     Login page, or straight in with a new `sessionKey`?
+   - **Reading the outcome.** A `claude_api` `sessionKey` line in the last
+     day: hypothesis 4. The app already renews while the machine is awake,
+     and October was the idle machine. Remove the keep-alive and build step 3
+     for sessions that lapse while the machine is off. No line and Chrome
+     shows the login page: hypothesis 5 with a click. Build step 3 and
+     remove the keep-alive. No line and Chrome gets in without a click:
+     hypothesis 5, silent. Note which cookies changed. The app could only
+     copy it by keeping a Google session (rejected below), so build step 3.
+   - **Result (2026-11-09): the app is not renewed, Chrome is.**
+     - **App.** No `claude_api` `sessionKey` line in any of the five logs
+       (2026-11-05 onward). Last good check 21:02:08 EST, first 403
+       `account_session_invalid` at 21:07:32, so the session lasted 7 days to
+       within minutes of sign-in. The machine slept 2026-11-08 21:18 to
+       2026-11-09 08:20 EST (System log), then the app made 110 good checks
+       on Nov 9, the first at 08:22:13, plus keep-alive visits at 15:14 and
+       19:24. None re-issued anything but `activitySessionId` and
+       `intercom-session-lupk8zyo`.
+     - **Chrome.** At 21:16 EST it went straight into the billing page,
+       `/api/organizations` 200, no redirect. Its `sessionKeyLC` and a new
+       `sessionKeyV3LC` (absent on Nov 6) both expire
+       2026-11-16T08:22:37.741Z (read with `cookieStore.get`, which shows
+       expiry but not HttpOnly cookies). The machine was asleep until 08:20:56
+       EST, so the cookie was set after that, most likely at 08:22:37: 163
+       hours of life, where the Nov 2 sign-in got exactly 168. claude.ai's
+       renewals in the app have the same shape (28 days minus 6 hours, every
+       `renewed` line since Nov 5). So this was a renewal, not a sign-in,
+       24 seconds after an app check that had the same time left and got
+       nothing.
+     - **Not a sign-in (Chrome history).** No visit to any Claude or Google
+       sign-in page between 08:15 and 08:35, and no Anthropic email in Gmail
+       for Nov 7 to 10. Chrome's Console visits since Nov 6: billing 08:33
+       and dashboard 09:08 on Nov 6 (the DevTools check), then nothing until
+       a Google sign-in at 17:38 Nov 9 ending on
+       `platform.claude.com/oauth/code/callback`, the page Claude Code's login
+       shows its code on. That one set `GAESA` (expires 2026-12-09T22:38:14Z)
+       but not the session cookie. So the 08:22 renewal most likely came from
+       a Console tab left open since Nov 6, calling the API in the background
+       when the machine woke. Chrome restarted about 20:05 Nov 9, so its
+       session file cannot confirm the tab.
+     - **Verdict.** Hypothesis 5 is out: the Console does renew, near the end
+       (none at 84 hours, one at about 155). Hypothesis 4 holds for Chrome
+       but not for the app, so the app lacks something Chrome sends.
+
+6. **Browser identity.** The app sends a fixed
+   `Chrome/130.0.0.0` user agent (`src/aigauge/webview/profile.py:18-22`,
+   applied at `profile.py:47`) from a Chromium 140 engine (Qt WebEngine
+   6.11.1), so its user agent and its `Sec-CH-UA` client hints disagree, and
+   neither matches the Chrome 157 (`Google Chrome/157, Chromium/157`) the
+   Console session was signed in from (external sign-in, then
+   `import_browser_cookies`). Renewal may be refused for a request that does
+   not look like the browser that owns the session, while plain reads are
+   still served. It fits claude.ai, which renews in the app every 6 hours and
+   is the one provider signed in inside the app (`cookie hydration
+   provider=claude stored=False`), so its session was born under the identity
+   it is checked with. Codex renews on every load regardless.
+
+3. **Look like the sign-in Chrome on the `claude_api` profile.** One commit,
+   one try. It bundles the two differences left between the app and the
+   Chrome tab that renewed, so one session gives an answer. Splitting them
+   would cost a full session per variable, and the goal is renewal, not
+   knowing which part did it.
+   - **Cookies.** Keep the `.claude.com` cookies at sign-in
+     (`_provider_cookies`, `src/aigauge/webview/external_login.py:116-131`).
+     The Nov 6 rejection rested on Chrome holding no auth cookie there, but
+     a device or bot-check cookie can still gate renewal, and it costs a
+     filter change.
+   - **Identity.** At external sign-in, call `Browser.getVersion` on the CDP connection
+     that already reads the cookies (`src/aigauge/webview/external_login.py:327`)
+     and store `userAgent` with them.
+   - In `get_profile`, for `claude_api` only, set that user agent and the
+     matching client hints (`QWebEngineProfile.clientHints()`, Qt 6.8+:
+     brands `Google Chrome` and `Chromium` at the browser's major version,
+     full version list, platform `Windows`). Fall back to the current UA when
+     nothing is stored. Leave `claude` alone: its session was born under the
+     current identity and renews.
+   - Needs a fresh Console sign-in after it lands.
+   - **How to read it.** `grep -E "profile=claude_api name=sessionKey"
+     ai-gauge.log` as the session's last day comes round, machine awake.
+     Chrome renewed between 84 and 155 hours, so no line before 84 hours
+     says nothing. A line: done. No line by the end: stop trying, and
+     accept a weekly sign-in (see "If step 3 fails").
+4. **Expiry on the tile: dropped** (John, 2026-11-09: a sign-in expiry on
+   screen is not wanted). The signed-out state at expiry already exists
+   (`snapshot auth_required`) and stays the only signal. If a reminder is
+   ever wanted, the page can read the expiry with
+   `cookieStore.get('sessionKeyLC')`, which moves when the server renews.
+5. **Remove the keep-alive.** Step 1 showed activity does not renew, and its
+   24-hour gate fired twice on Nov 9 (15:14 and 19:24), so the in-memory
+   gate does not survive whatever re-created the provider. Removing it with
+   step 3 keeps that test to one variable.
+
+**If step 3 fails.** Accept a weekly sign-in, with nothing on screen until
+the tile signs out. The one change worth considering then is making that
+sign-in quicker: today the sign-in browser profile starts empty, so every
+sign-in is a full Google sign-in. Keeping that profile makes it one click,
+at the cost of a Google session stored in the app's folder (see
+Alternatives). John's call at that point.
 
 ## Alternatives considered
 
-- **Expiry warning only.** Leaves a weekly manual sign-in. Kept as the
-  fallback.
+- **Expiry warning on the tile.** Rejected by John 2026-11-09.
+- **Sign in to the Console inside the app (embedded window, email code).**
+  No code, and the session is born under the app's identity, as claude.ai's
+  is. Rejected as the main fix: Google sign-in does not work in an embedded
+  browser, and it would not help if the Console's gate is "looks like a
+  current Chrome" rather than "matches the sign-in browser". A cheap side
+  test if step 3 fails.
+- **Raise the UA for every profile.** Would change `claude`'s identity under
+  a session that renews today. Rejected: scope to `claude_api`.
+- **Keep the `.claude.com` cookies at sign-in (was step 2).** Rejected
+  2026-11-06 as a fix on its own: Chrome holds no auth cookie on `.claude.com`
+  (only Cloudflare's and `claude_visited` are HttpOnly there). Folded into
+  step 3 on 2026-11-09, since renewal only happens near the end and the
+  84-hour Chrome check could not test it.
 - **Keep the sign-in Chrome profile so re-signing in takes one click.** This
   stores a full Google session on disk to save a weekly click, and it is still
   manual. Rejected unless renewal turns out to be impossible.
@@ -249,6 +404,10 @@ The extension cannot read HttpOnly cookies, so this needs a person.
 - The keep-alive sends real activity events for the user's account, the same
   as a manual visit. The cost is about 60 seconds of a background page once a
   day.
+- **Hypothesis 6 rests on one Chrome renewal.** The missing ingredient could
+  instead be a cookie only Chrome holds or a long-open Console tab. Step 3's
+  verdict arrives only near the end of a session, so step 4 is built
+  regardless.
 - **Cookie rename.** The Console bundle has `consoleSessionKey`,
   `consoleSessionKeyLC` and `consoleSessionKeyV3LC` ready, behind a selector
   that still returns the old names. When the switch happens, the `claude_api`

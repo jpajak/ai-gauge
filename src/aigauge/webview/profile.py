@@ -10,7 +10,8 @@ from PyQt6.QtWebEngineCore import (
     qWebEngineVersion,
 )
 
-from ..config import webview_profile_dir
+from ..config import Config, webview_profile_dir
+from .browser_identity import apply_browser_identity, detect_browser_identity
 from .session_cookies import SessionCookieWatcher
 
 log = logging.getLogger("aigauge.webview.profile")
@@ -21,9 +22,33 @@ _REALISTIC_UA = (
     "Chrome/130.0.0.0 Safari/537.36"
 )
 
+# The Console is signed in through the user's own browser, so its profile sends
+# that browser's identity, not the fixed one (does the Console then renew?).
+_SIGNIN_IDENTITY_PROVIDERS = frozenset({"claude_api"})
+
 _profiles: dict[str, QWebEngineProfile] = {}
 # Held so a watcher is not garbage collected while its profile lives.
 _cookie_watchers: dict[str, SessionCookieWatcher] = {}
+
+
+def _apply_signin_identity(provider: str, profile: QWebEngineProfile) -> str | None:
+    """Send the sign-in browser's identity; return its user agent, or None."""
+    try:
+        identity = detect_browser_identity(Config.load().sign_in_browser)
+        if identity is None:
+            log.info("browser identity provider=%s applied=False reason=not found", provider)
+            return None
+        apply_browser_identity(profile, identity)
+    except Exception as exc:  # noqa: BLE001 - never break get_profile
+        log.info("browser identity provider=%s applied=False reason=%s", provider, exc)
+        return None
+    log.info(
+        "browser identity provider=%s browser=%s version=%s applied=True",
+        provider,
+        identity.browser_id,
+        identity.full_version,
+    )
+    return identity.user_agent
 
 
 def get_profile(provider: str) -> QWebEngineProfile:
@@ -44,7 +69,10 @@ def get_profile(provider: str) -> QWebEngineProfile:
     profile.setPersistentCookiesPolicy(
         QWebEngineProfile.PersistentCookiesPolicy.ForcePersistentCookies
     )
-    profile.setHttpUserAgent(_REALISTIC_UA)
+    user_agent = _REALISTIC_UA
+    profile.setHttpUserAgent(user_agent)
+    if provider in _SIGNIN_IDENTITY_PROVIDERS:
+        user_agent = _apply_signin_identity(provider, profile) or user_agent
     # Providers pick the page language from Accept-Language, which would
     # otherwise follow the OS language; the extractors match English labels.
     profile.setHttpAcceptLanguage("en-US,en")
@@ -55,7 +83,7 @@ def get_profile(provider: str) -> QWebEngineProfile:
         provider,
         storage_dir,
         storage_dir / "cache",
-        _REALISTIC_UA,
+        user_agent,
         QT_VERSION_STR,
         qWebEngineVersion(),
         qWebEngineChromiumVersion(),

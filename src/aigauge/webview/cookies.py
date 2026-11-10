@@ -193,6 +193,25 @@ def inject_session_cookie(
     return bool(pairs)
 
 
+def cookie_domain_in_scope(cookie_domain: str, provider: str) -> bool:
+    """Whether a browser would send a cookie of this domain to the provider host.
+
+    That is the provider's host itself and its subdomains, plus the domain
+    cookies (CDP marks them with a leading dot) of a parent domain that is not
+    a bare top-level domain: ``.claude.com`` for ``platform.claude.com``, but
+    not host-only ``claude.com``, ``.anthropic.com`` or ``.com``.
+    """
+    wanted = COOKIE_DOMAINS[provider].lstrip(".").lower()
+    actual = cookie_domain.lstrip(".").lower()
+    if actual == wanted or actual.endswith("." + wanted):
+        return True
+    return (
+        cookie_domain.startswith(".")
+        and "." in actual
+        and wanted.endswith("." + actual)
+    )
+
+
 def import_browser_cookies(
     provider: str,
     account_id: str,
@@ -202,18 +221,11 @@ def import_browser_cookies(
     domain = COOKIE_DOMAINS.get(provider)
     if not domain:
         return False
-    wanted = domain.lstrip(".").lower()
     matching = [
         item
         for item in cookies
         if isinstance(item, dict)
-        and (
-            str(item.get("domain", "")).lstrip(".").lower() == wanted
-            or str(item.get("domain", ""))
-            .lstrip(".")
-            .lower()
-            .endswith("." + wanted)
-        )
+        and cookie_domain_in_scope(str(item.get("domain", "")), provider)
         and item.get("name")
         and item.get("value") is not None
     ]

@@ -19,6 +19,7 @@ from PyQt6.QtCore import QThread, pyqtSignal
 
 from ..config import COOKIE_DOMAINS, app_data_dir
 from ..providers.registry import has_auth_cookie, provider_spec
+from .cookies import cookie_domain_in_scope
 
 log = logging.getLogger("aigauge.webview.external_login")
 
@@ -120,11 +121,12 @@ def _domain_matches(cookie_domain: str, provider: str) -> bool:
 
 
 def _provider_cookies(provider: str, cookies: list[dict]) -> list[dict]:
+    """Keep the cookies the browser would send to the provider's host."""
     return [
         cookie
         for cookie in cookies
         if isinstance(cookie, dict)
-        and _domain_matches(str(cookie.get("domain", "")), provider)
+        and cookie_domain_in_scope(str(cookie.get("domain", "")), provider)
         and cookie.get("name")
         and cookie.get("value") is not None
     ]

@@ -94,9 +94,10 @@ EXTRACTOR_JS = r"""
   }
 
   // A usage reading proper: a percentage tied to "used" or "remaining". Unlike
-  // hasUsageValue this rejects promo copy such as "Up to 30% off".
+  // hasUsageValue this rejects promo copy such as "Up to 30% off". No \b after
+  // "used": textContent glues the next node on ("22% usedLimit resets").
   function hasUsageReading(after) {
-    return /\d+(?:\.\d+)?\s*%\s*(?:used|remaining)\b/i.test(after) ||
+    return /\d+(?:\.\d+)?\s*%\s*(?:used|remaining)/i.test(after) ||
       /\b(?:used|remaining)\s*:?\s*\d+(?:\.\d+)?\s*%/i.test(after);
   }
 

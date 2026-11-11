@@ -656,3 +656,13 @@ def test_bare_fable_label_needs_a_usage_reading_not_a_promo_percentage(tmp_path)
         [(" ".join([wrapper, reading]), 900), (SESSION, 60), (ALL_MODELS, 60), (reading, 60)],
     )
     assert percents(result)["weekly_fable"] == 22
+
+
+def test_fable_row_glued_to_next_section_in_wrapper_only(tmp_path):
+    """textContent joins nodes, so "22% used" can run straight into "Limit resets"."""
+    result = run_extractor(
+        tmp_path,
+        [(EXPANDED_BODY, 900), (LIVE_SESSION, 60), (LIVE_WEEK, 60)],
+    )
+    assert percents(result) == {"session": 6, "weekly_all": 25, "weekly_fable": 22}
+    assert result["weekly_fable"]["reset_text"] == "Monday 5:00 PM"

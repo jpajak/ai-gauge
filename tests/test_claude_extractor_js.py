@@ -34,9 +34,9 @@ global.document = {
   querySelector: () => null,
 };
 global.location = {
-  href: 'https://claude.ai/new#settings/usage',
-  pathname: '/new',
-  hash: '#settings/usage',
+  href: 'https://claude.ai/settings/usage',
+  pathname: '/settings/usage',
+  hash: '',
   hostname: 'claude.ai',
 };
 const result = eval(fs.readFileSync(process.argv[3], 'utf8'));
@@ -100,9 +100,8 @@ def test_login_route_without_login_link_reports_signed_out(tmp_path):
     script = tmp_path / "extractor.js"
     nodes = tmp_path / "nodes.json"
     harness.write_text(
-        HARNESS.replace("https://claude.ai/new#settings/usage", "https://claude.ai/login")
-        .replace("pathname: '/new'", "pathname: '/login'")
-        .replace("hash: '#settings/usage'", "hash: ''"),
+        HARNESS.replace("https://claude.ai/settings/usage", "https://claude.ai/login")
+        .replace("pathname: '/settings/usage'", "pathname: '/login'"),
         encoding="utf-8",
     )
     script.write_text(EXTRACTOR_JS, encoding="utf-8")
@@ -408,3 +407,105 @@ def test_legacy_idle_panel_without_percentages_reports_zero_rows(tmp_path):
         "weekly_all": 0,
         "weekly_fable": None,
     }
+
+
+def test_legacy_new_page_redirects_to_direct_usage_route(tmp_path):
+    harness = tmp_path / "harness.js"
+    script = tmp_path / "extractor.js"
+    nodes = tmp_path / "nodes.json"
+    harness.write_text(
+        HARNESS.replace("https://claude.ai/settings/usage", "https://claude.ai/new")
+        .replace("pathname: '/settings/usage'", "pathname: '/new'"),
+        encoding="utf-8",
+    )
+    script.write_text(EXTRACTOR_JS, encoding="utf-8")
+    nodes.write_text(json.dumps([("New chat Projects Recents This week 80% used", 900)]), encoding="utf-8")
+    result = json.loads(subprocess.check_output(
+        ["node", str(harness), str(nodes), str(script)],
+        text=True,
+        encoding="utf-8",
+    ))
+    assert result["__retry_reason"] == "opened usage page"
+    assert result["url"] == "/settings/usage"
+
+
+def test_november_2026_ultra_empty_usage_without_session_row(tmp_path):
+    """Claude displays weekly 0% without any Current session row at idle."""
+    weekly = "This week Resets Sunday 6:00 AM 0% used"
+    empty = "No usage yet. 100% of your weekly limit is available."
+    wrapper = " ".join([
+        "Your usage Ultra", empty, weekly,
+        "Limit resets No resets right now",
+    ])
+    result = run_extractor(tmp_path, [(wrapper, 800), (weekly, 75)])
+    assert "__retry_after_ms" not in result
+    assert percents(result) == {
+        "session": 0, "weekly_all": 0, "weekly_fable": None,
+    }
+    assert result["session"]["kind"] == "used"
+    assert result["session"]["reset_text"] is None
+    assert result["weekly_all"]["reset_text"] == "Sunday 6:00 AM"
+
+
+def test_ultra_empty_message_does_not_mask_missing_weekly_row(tmp_path):
+    """Do not return a false success for a partly rendered usage panel."""
+    text = "Your usage Ultra No usage yet. 100% of your weekly limit is available."
+    result = run_extractor(tmp_path, [(text, 800)])
+    assert result["__retry_reason"] == "usage dialog not ready"
+
+
+def test_ultra_empty_message_does_not_override_nonzero_weekly_usage(tmp_path):
+    """Only an actual 0% weekly row is enough to infer a zero session."""
+    weekly = "This week Resets Sunday 6:00 AM 21% used"
+    text = "Your usage Ultra No usage yet. 100% of your weekly limit is available. " + weekly
+    result = run_extractor(tmp_path, [(text, 800), (weekly, 75)])
+    assert result["__retry_reason"] == "usage dialog not ready"
+
+
+
+def test_ultra_empty_usage_with_adjacent_dom_text_nodes(tmp_path):
+    """Real Claude textContent joins h2/span and button/span without spaces."""
+    # Reconstructed from the 9 November 2026 Ultra usage-page HTML.
+    # Key markup: <h2>Your usage</h2><span>Ultra</span>,
+    #            <button>This week<span>icon</span></button>,
+    #            <span>Resets Sunday 6:00 AM</span><span>0% used</span>.
+    weekly = "This week\ue027Resets Sunday 6:00 AM0% used"
+    body = (
+        "Your usageUltra"
+        "No usage yet. 100% of your weekly limit is available."
+        + weekly
+        + "Limit resetsNo resets right now"
+        + "Usage creditsBuy usage credits Up to 30% off"
+    )
+    result = run_extractor(tmp_path, [(body, 900), (weekly, 65)])
+    assert "__retry_after_ms" not in result
+    assert percents(result) == {
+        "session": 0,
+        "weekly_all": 0,
+        "weekly_fable": None,
+    }
+    assert result["weekly_all"]["reset_text"] == "Sunday 6:00 AM"
+
+
+
+def test_ultra_empty_usage_semantic_marker(tmp_path):
+    """Detect the usage root even when textContent merges heading nodes."""
+    harness = tmp_path / "harness.js"
+    script = tmp_path / "extractor.js"
+    nodes = tmp_path / "nodes.json"
+    marker_query = "querySelector: (sel) => (sel === '[data-usage-bars=\"usage_page\"]' ? {} : null),"
+    harness_text = HARNESS.replace("querySelector: () => null,", marker_query)
+    assert harness_text != HARNESS
+    harness.write_text(harness_text, encoding="utf-8")
+    script.write_text(EXTRACTOR_JS, encoding="utf-8")
+    weekly = "This week\ue027Resets Sunday 6:00 AM0% used"
+    body = "UltraNo usage yet. 100% of your weekly limit is available." + weekly
+    nodes.write_text(json.dumps([(body, 900), (weekly, 75)]), encoding="utf-8")
+    result = json.loads(subprocess.check_output(
+        ["node", str(harness), str(nodes), str(script)],
+        text=True,
+        encoding="utf-8",
+    ))
+    assert "__retry_after_ms" not in result
+    assert result["session"]["percent"] == 0
+    assert result["weekly_all"]["percent"] == 0

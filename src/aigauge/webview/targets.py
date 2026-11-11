@@ -12,7 +12,7 @@ from __future__ import annotations
 # either redirects to /login or shows an interstitial.
 VERIFY_TARGETS = {
     "claude": (
-        "https://claude.ai/new#settings/usage",
+        "https://claude.ai/settings/usage",
         r"""(() => {
           const text = ((document.body && document.body.innerText) || '').replace(/\s+/g, ' ').trim();
           const usageVisible = /Plan usage limits|Current session|All models/i.test(text);

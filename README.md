@@ -171,7 +171,7 @@ should work with the normal **Sign in** button.
    `chatgpt.com` request, and copy the full **Request Headers → Cookie:** value.
    This includes split session cookies plus companion auth cookies such as
    `__Secure-oai-is`.
-3. For Claude, press **F12** → **Network**, reload `https://claude.ai/new#settings/usage`,
+3. For Claude, press **F12** → **Network**, reload `https://claude.ai/settings/usage`,
    click a `claude.ai` request, and copy the full **Request Headers → Cookie:**
    value. It must include `sessionKey`.
 4. In the app, open the matching provider page in Settings, click **Paste cookie**, paste the header, and Save.

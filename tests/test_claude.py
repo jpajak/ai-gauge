@@ -2,6 +2,12 @@ from datetime import timedelta
 
 from aigauge.models import SnapshotStatus
 from aigauge.providers.claude import CLAUDE_USAGE_URL, _build_snapshot
+from aigauge.webview.targets import VERIFY_TARGETS
+
+
+def test_claude_usage_route_matches_session_verification():
+    assert CLAUDE_USAGE_URL == "https://claude.ai/settings/usage"
+    assert VERIFY_TARGETS["claude"][0] == CLAUDE_USAGE_URL
 
 
 def test_claude_cloudflare_payload_is_auth_required():

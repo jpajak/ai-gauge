@@ -22,7 +22,7 @@ from .base import Provider
 from .diagnostics import log_page_diagnosis
 from .idle import idle_reset_state
 
-CLAUDE_USAGE_URL = "https://claude.ai/new#settings/usage"
+CLAUDE_USAGE_URL = "https://claude.ai/settings/usage"
 _EXPECTED_ROWS = ("session", "weekly_all")
 log = logging.getLogger("aigauge.providers.claude")
 
@@ -203,6 +203,22 @@ EXTRACTOR_JS = r"""
   // accounts have no Fable row and would retry until timeout.
   const weeklyFable = readRow(ROW_LABEL_GROUPS[2]);
 
+  // Claude's empty-usage page can omit "Current session" entirely. Accept
+  // this as a zero session only with explicit idle text and a valid 0% weekly
+  // row on the usage route. Do not convert partially loaded panels into zeros.
+  // textContent joins adjacent elements without spaces: for example,
+  // <h2>Your usage</h2><span>Ultra</span> becomes 'Your usageUltra'.
+  // Prefer the usage component's semantic marker when present, but retain
+  // text matching for legacy layouts that do not expose that marker.
+  const usagePageVisible = !!document.querySelector('[data-usage-bars="usage_page"]') ||
+    /Your usage/i.test(bodyText);
+  const emptySession = !session && !!weeklyAll && weeklyAll.percent === 0 &&
+    weeklyAll.kind === 'used' && onUsageRoute() && usagePageVisible &&
+    /No usage yet\.\s*100%\s+of your weekly limit is available/i.test(bodyText);
+  const sessionResult = session || (emptySession ? {
+    raw: 'No usage yet', percent: 0, kind: 'used', reset_text: null
+  } : null);
+
   function onUsageRoute() {
     return /\/settings\/usage/.test(location.pathname) ||
       /settings\/usage/i.test(location.hash);
@@ -211,9 +227,10 @@ EXTRACTOR_JS = r"""
   function ensureUsageRoute() {
     if (onUsageRoute()) return null;
     if (location.hostname !== 'claude.ai') return null;
-    if (/Plan usage limits|Your usage|Current session|All models|This week/i.test(bodyText)) return null;
-    location.href = '/new#settings/usage';
-    return 'opened usage dialog';
+    if (session && weeklyAll) return null;
+    if (/Plan usage limits|Your usage/i.test(bodyText) && /Current session/i.test(bodyText)) return null;
+    location.href = '/settings/usage';
+    return 'opened usage page';
   }
 
   const routeReason = !isLoggedOut ? ensureUsageRoute() : null;
@@ -239,7 +256,7 @@ EXTRACTOR_JS = r"""
     /Current session/i.test(bodyText) &&
     /All models|This week/i.test(bodyText) &&
     !/%/.test(bodyText);
-  const requiredRowsReady = !!session && !!weeklyAll;
+  const requiredRowsReady = !!sessionResult && !!weeklyAll;
   if (!isLoggedOut && (onUsageRoute() || usagePanelSignals) && !requiredRowsReady && !idleUsagePanel) {
     return {
       __retry_after_ms: 1200,
@@ -256,7 +273,7 @@ EXTRACTOR_JS = r"""
 
   return {
     logged_out: isLoggedOut,
-    session: session,
+    session: sessionResult,
     weekly_all: weeklyAll,
     weekly_fable: weeklyFable,
     url: location.href,

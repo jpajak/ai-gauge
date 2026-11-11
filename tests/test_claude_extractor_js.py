@@ -509,3 +509,150 @@ def test_ultra_empty_usage_semantic_marker(tmp_path):
     assert "__retry_after_ms" not in result
     assert result["session"]["percent"] == 0
     assert result["weekly_all"]["percent"] == 0
+
+
+# Live Max-account page, 2026-11-11: the Fable row hides inside a collapsed
+# "This week" disclosure, and the credit card below it mentions Fable.
+LIVE_SESSION = "Current sessionResets at 2:30 PM6% used"
+LIVE_WEEK = "This weekResets Monday 5:00 PM25% used"
+LIVE_FABLE_ROW = "FableUp to 50% of your weekly limitResets Monday 5:00 PM22% used"
+LIVE_HEAD = (
+    "Your usageMaxOn track. You should reach Monday’s reset with room to spare."
+)
+LIVE_TAIL = (
+    "Limit resets4 availableFull resetExpires Dec 10, 5:00 PM ESTReset for free"
+    "Fable reset · 3All expire Mar 9, 2027, 2:59 AM ESTRefills your 5-hour limit "
+    "and your Fable allowance, and gives back what Fable used on your weekly "
+    "limit. It doesn’t reset your whole week.Reset for freeUsage credits"
+    "Available for any task. Promotional credits are used before purchased "
+    "credits.$0Turn on usage credits to keep using Claude if you hit a plan "
+    "limit. Learn more(opens in new tab)Buy usage credits · Up to 30% off"
+    "Monthly spend limit$0.00 of $50 this month · Auto-reload off"
+)
+COLLAPSED_BODY = LIVE_HEAD + LIVE_SESSION + LIVE_WEEK + LIVE_TAIL
+EXPANDED_BODY = LIVE_HEAD + LIVE_SESSION + LIVE_WEEK + LIVE_FABLE_ROW + LIVE_TAIL
+
+TOGGLE_HARNESS = (
+    HARNESS.replace(
+        "querySelector: () => null,",
+        "querySelector: (sel) => (sel === 'button[data-testid=\"pace-week-toggle\"]' "
+        "&& process.argv[4] ? toggle : null),",
+    )
+    .replace(
+        "global.document = {",
+        "const clicks = [];\n"
+        "const toggle = {\n"
+        "  textContent: 'This week',\n"
+        "  getAttribute: (name) => (name === 'aria-expanded' ? process.argv[4] : null),\n"
+        "  click: () => clicks.push('click'),\n"
+        "};\n"
+        "global.document = {",
+    )
+    .replace(
+        "const result = eval(fs.readFileSync(process.argv[3], 'utf8'));\n"
+        "process.stdout.write(JSON.stringify(result));",
+        "const src = fs.readFileSync(process.argv[3], 'utf8');\n"
+        "const results = [];\n"
+        "for (let i = 0; i < Number(process.argv[5]); i++) results.push(eval(src));\n"
+        "process.stdout.write(JSON.stringify({ results, clicks: clicks.length }));",
+    )
+)
+assert TOGGLE_HARNESS.count("process.argv[5]") == 1
+
+
+def run_with_toggle(tmp_path, rows, state: str, runs: int = 1) -> dict:
+    """Run the extractor `runs` times in one Node process, like the scraper's
+    reruns in one document. state is the toggle's aria-expanded ('' = no toggle).
+    """
+    harness = tmp_path / "toggle_harness.js"
+    script = tmp_path / "extractor.js"
+    nodes = tmp_path / "nodes.json"
+    harness.write_text(TOGGLE_HARNESS, encoding="utf-8")
+    script.write_text(EXTRACTOR_JS, encoding="utf-8")
+    nodes.write_text(json.dumps(rows), encoding="utf-8")
+    out = subprocess.run(
+        ["node", str(harness), str(nodes), str(script), state, str(runs)],
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    return json.loads(out.stdout)
+
+
+def test_collapsed_weekly_breakdown_without_toggle_has_no_fable(tmp_path):
+    """The credit card's Fable mention plus "Up to 30% off" is not a row."""
+    result = run_extractor(
+        tmp_path,
+        [(COLLAPSED_BODY, 900), (LIVE_SESSION, 60), (LIVE_WEEK, 60)],
+    )
+
+    assert percents(result) == {"session": 6, "weekly_all": 25, "weekly_fable": None}
+    assert "__retry_after_ms" not in result
+
+
+def test_collapsed_weekly_breakdown_is_expanded_once_and_retried(tmp_path):
+    out = run_with_toggle(
+        tmp_path,
+        [(COLLAPSED_BODY, 900), (LIVE_SESSION, 60), (LIVE_WEEK, 60)],
+        "false",
+    )
+
+    (result,) = out["results"]
+    assert result["__retry_reason"] == "expanded weekly breakdown"
+    assert result["__retry_after_ms"] == 600
+    assert out["clicks"] == 1
+
+
+def test_expanded_weekly_breakdown_reads_the_fable_row(tmp_path):
+    out = run_with_toggle(
+        tmp_path,
+        [
+            (EXPANDED_BODY, 900),
+            (LIVE_SESSION, 60),
+            (LIVE_WEEK, 60),
+            (LIVE_FABLE_ROW, 60),
+        ],
+        "true",
+    )
+
+    (result,) = out["results"]
+    assert percents(result) == {"session": 6, "weekly_all": 25, "weekly_fable": 22}
+    assert result["weekly_fable"]["kind"] == "used"
+    assert result["weekly_fable"]["reset_text"] == "Monday 5:00 PM"
+    assert "__retry_after_ms" not in result
+    assert out["clicks"] == 0
+
+
+def test_weekly_toggle_is_clicked_only_once_per_document(tmp_path):
+    """A second click would collapse the section again."""
+    out = run_with_toggle(
+        tmp_path,
+        [(COLLAPSED_BODY, 900), (LIVE_SESSION, 60), (LIVE_WEEK, 60)],
+        "false",
+        runs=2,
+    )
+
+    first, second = out["results"]
+    assert first["__retry_reason"] == "expanded weekly breakdown"
+    assert "__retry_after_ms" not in second
+    assert second["weekly_fable"] is None
+    assert percents(second)["weekly_all"] == 25
+    assert out["clicks"] == 1
+
+
+def test_bare_fable_label_needs_a_usage_reading_not_a_promo_percentage(tmp_path):
+    promo = "Fable reset · 3All expire Mar 9, 2027 Buy usage credits · Up to 30% off"
+    wrapper = " ".join(["Plan usage limits", SESSION, ALL_MODELS, promo])
+    result = run_extractor(
+        tmp_path,
+        [(wrapper, 900), (SESSION, 60), (ALL_MODELS, 60), (promo, 90)],
+    )
+    assert percents(result)["weekly_fable"] is None
+
+    reading = "Fable Up to 50% of your weekly limit Resets Monday 5:00 PM 22% used"
+    result = run_extractor(
+        tmp_path,
+        [(" ".join([wrapper, reading]), 900), (SESSION, 60), (ALL_MODELS, 60), (reading, 60)],
+    )
+    assert percents(result)["weekly_fable"] == 22

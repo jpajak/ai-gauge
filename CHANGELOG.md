@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+### Fixed
+
+- The Claude tile no longer times out on an account with no usage yet this week; it shows 0% for Session and Weekly. ([#17](https://github.com/jpajak/ai-gauge/pull/17), thanks [@mgleeson](https://github.com/mgleeson).)
+- The Claude tile's Fable bar shows the real Fable usage again, instead of a wrong figure picked up from the usage page's credits banner.
+
 ## 0.8.6 - 2026-10-26
 
 ### Added

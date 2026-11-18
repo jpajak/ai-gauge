@@ -28,6 +28,12 @@ _NOISY_CONSOLE_FRAGMENTS = (
     "font-size:0;color:transparent",
     "Failed to create WebGPU Context Provider",
     "QuotaExceededError",
+    # ChatGPT usage page: the chart library warns on every load because the
+    # offscreen page lays its chart container out at 0x0.
+    "of chart should be greater than 0",
+    # ChatGPT usage page: Statsig's cache write fails in the throwaway profile,
+    # on every Codex check.
+    "[Statsig] Caught error in _writeToCache",
 )
 
 

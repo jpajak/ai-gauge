@@ -322,3 +322,146 @@ def test_provider_refresh_uses_overview_url(monkeypatch):
     codex.CodexProvider().refresh(lambda snapshot: None)
 
     assert calls[0]["url"].startswith(CODEX_USAGE_URL + "&aigauge_ts=")
+
+
+# A page that had not rendered its signed-in content: the URL is still the
+# usage page, the body starts with an inline script, and the extractor's soft
+# sign-out clauses fired (seen on 2026-11-05, about 1 check in 85).
+UNRENDERED_BODY = (
+    '(() => { const key = "oai-epic-native-launch"; let launch = null; '
+    "try { launch = JSON.parse(sessionStorage.getItem(key) "
+)
+
+
+def unrendered_payload(**kwargs):
+    return usage_payload(
+        UNRENDERED_BODY,
+        logged_out=True,
+        url=CODEX_USAGE_URL + "&aigauge_ts=1",
+        has_percent_text=False,
+        has_usage_text=False,
+        has_plan_limits=False,
+        has_five_hour_heading=False,
+        **kwargs,
+    )
+
+
+def test_soft_signout_stands_when_not_asked_to_confirm():
+    snapshot = _build_snapshot(unrendered_payload())
+    assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
+
+
+def test_soft_signout_is_a_retryable_error_when_asked_to_confirm(caplog):
+    with caplog.at_level("INFO", logger=codex.log.name):
+        snapshot = _build_snapshot(unrendered_payload(), confirm_soft_signout=True)
+    assert snapshot.status == SnapshotStatus.ERROR
+    assert "not finished loading" in snapshot.error
+    assert "codex sign-out unconfirmed, reloading account=codex title='ChatGPT'" in caplog.text
+
+
+@pytest.mark.parametrize("url", [
+    "https://chatgpt.com/auth/login",
+    "https://chatgpt.com/logout",
+])
+def test_login_url_is_conclusive_even_when_asked_to_confirm(url):
+    snapshot = _build_snapshot(
+        usage_payload("Sign in", logged_out=True, url=url),
+        confirm_soft_signout=True,
+    )
+    assert snapshot.status == SnapshotStatus.AUTH_REQUIRED
+
+
+class _FakeRunner:
+    """Replays queued payloads through `build` the way ScrapeRunner does."""
+
+    payloads: list = []
+    scrapes = 0
+    max_attempts = 2
+
+    def __init__(self, *, build, build_max_attempts, **kwargs):
+        self._build = build
+        self._max = build_max_attempts
+
+    def run(self, on_done):
+        attempt = 0
+        while True:
+            attempt += 1
+            _FakeRunner.scrapes += 1
+            snapshot = self._build(_FakeRunner.payloads.pop(0))
+            if snapshot.status == SnapshotStatus.ERROR and attempt < self._max:
+                continue
+            on_done(snapshot)
+            return
+
+
+def refresh_with(monkeypatch, payloads):
+    _FakeRunner.payloads = list(payloads)
+    _FakeRunner.scrapes = 0
+    monkeypatch.setattr(codex, "ScrapeRunner", _FakeRunner)
+    results = []
+    provider = codex.CodexProvider()
+    provider.refresh(results.append)
+    return results, provider
+
+
+def test_refresh_reloads_after_one_soft_signout_and_reads_normally(monkeypatch, fixed_now):
+    results, _ = refresh_with(monkeypatch, [unrendered_payload(), usage_payload()])
+    assert [r.status for r in results] == [SnapshotStatus.OK]
+    assert _FakeRunner.scrapes == 2
+
+
+def test_refresh_reports_signed_out_when_both_loads_say_so(monkeypatch):
+    results, _ = refresh_with(monkeypatch, [unrendered_payload(), unrendered_payload()])
+    assert [r.status for r in results] == [SnapshotStatus.AUTH_REQUIRED]
+    assert _FakeRunner.scrapes == 2
+
+
+def test_refresh_does_not_reload_for_a_login_url(monkeypatch):
+    login = usage_payload("Sign in", logged_out=True, url="https://chatgpt.com/auth/login")
+    results, _ = refresh_with(monkeypatch, [login])
+    assert [r.status for r in results] == [SnapshotStatus.AUTH_REQUIRED]
+    assert _FakeRunner.scrapes == 1
+
+
+def test_refresh_reads_a_normal_payload_with_one_scrape(monkeypatch, fixed_now):
+    results, _ = refresh_with(monkeypatch, [usage_payload()])
+    assert [r.status for r in results] == [SnapshotStatus.OK]
+    assert _FakeRunner.scrapes == 1
+
+
+def test_attempt_count_restarts_on_each_refresh(monkeypatch):
+    results, provider = refresh_with(
+        monkeypatch, [unrendered_payload(), unrendered_payload()]
+    )
+    assert [r.status for r in results] == [SnapshotStatus.AUTH_REQUIRED]
+    # A second refresh must defer its first soft sign-out again, not stand on it.
+    _FakeRunner.payloads = [unrendered_payload(), usage_payload()]
+    _FakeRunner.scrapes = 0
+    provider.refresh(results.append)
+    assert results[-1].status != SnapshotStatus.AUTH_REQUIRED
+    assert _FakeRunner.scrapes == 2
+
+
+def test_real_runner_makes_two_scrapes_for_one_soft_signout(monkeypatch, fixed_now):
+    from aigauge.providers import _scrape_runner as runner_module
+
+    scrapers = []
+
+    class Signal:
+        def connect(self, slot):
+            self.slot = slot
+
+    class Scraper:
+        def __init__(self, **kwargs):
+            self.done = Signal()
+            scrapers.append(self)
+
+    monkeypatch.setattr(runner_module, "HeadlessScraper", Scraper)
+    monkeypatch.setattr(runner_module.webengine, "is_available", lambda: True)
+    results = []
+    codex.CodexProvider().refresh(results.append)
+
+    scrapers[0].done.slot(unrendered_payload(), "")
+    assert results == [] and len(scrapers) == 2
+    scrapers[1].done.slot(usage_payload(), "")
+    assert [r.status for r in results] == [SnapshotStatus.OK]

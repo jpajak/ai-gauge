@@ -1,3 +1,4 @@
+import logging
 import shutil
 from pathlib import Path
 
@@ -5,6 +6,7 @@ import pytest
 
 from aigauge.config import BrowserAccount, Config
 from aigauge.local_usage import service as service_module
+from aigauge.local_usage.importer import ProviderImportResult
 from aigauge.local_usage.service import (
     LocalUsageService,
     assigned_account,
@@ -132,5 +134,45 @@ def test_request_import_does_nothing_without_tracked_providers(tmp_path):
     try:
         assert service.request_import() is False
         assert not service.is_running()
+    finally:
+        service.shutdown()
+
+
+def _finished_records(caplog):
+    return [r for r in caplog.records if "import finished" in r.getMessage()]
+
+
+def test_import_that_parsed_nothing_is_logged_at_debug(tracked_config, tmp_path, caplog):
+    service = LocalUsageService(tracked_config, base_dir=tmp_path / "data")
+    try:
+        with caplog.at_level(logging.DEBUG, logger=service_module.log.name):
+            service.run_sync()  # imports the fixtures
+            service.run_sync()  # nothing new
+        first, second = _finished_records(caplog)
+        assert first.levelno == logging.INFO
+        assert "parsed=0" not in first.getMessage()
+        assert second.levelno == logging.DEBUG
+        assert "parsed=0" in second.getMessage()
+    finally:
+        service.shutdown()
+
+
+def test_import_that_was_cancelled_or_errored_stays_at_info(
+    tracked_config, tmp_path, caplog, monkeypatch
+):
+    service = LocalUsageService(tracked_config, base_dir=tmp_path / "data")
+    try:
+        for result in (
+            ProviderImportResult("claude", cancelled=True),
+            ProviderImportResult("claude", errors=1),
+        ):
+            monkeypatch.setattr(
+                service_module.LogImporter, "run", lambda self, sources, r=result: [r]
+            )
+            caplog.clear()
+            with caplog.at_level(logging.DEBUG, logger=service_module.log.name):
+                service.run_sync()
+            (record,) = _finished_records(caplog)
+            assert record.levelno == logging.INFO
     finally:
         service.shutdown()

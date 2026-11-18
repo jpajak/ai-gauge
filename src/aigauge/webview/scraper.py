@@ -16,6 +16,10 @@ from .profile import get_profile
 
 log = logging.getLogger("aigauge.scraper")
 
+# Providers whose profile path, viewport and user agent are already in the log.
+# They never change within a process, so they are logged once, not per check.
+_PROFILE_LOGGED: set[str] = set()
+
 
 def _enum_name(value: Any) -> str:
     return str(getattr(value, "name", value))
@@ -133,18 +137,23 @@ class HeadlessScraper(QObject):
         if loading_changed is not None:
             loading_changed.connect(self._on_loading_changed)
 
+        if provider not in _PROFILE_LOGGED:
+            _PROFILE_LOGGED.add(provider)
+            log.info(
+                "scrape profile provider=%s profile=%s viewport=%sx%s user_agent=%r",
+                provider,
+                profile.persistentStoragePath(),
+                self._view.width(),
+                self._view.height(),
+                profile.httpUserAgent(),
+            )
         log.info(
-            "scrape start provider=%s url=%s profile=%s viewport=%sx%s "
-            "wait_ms=%s timeout_ms=%s max_attempts=%s user_agent=%r",
+            "scrape start provider=%s url=%s wait_ms=%s timeout_ms=%s max_attempts=%s",
             provider,
             _safe_url(url),
-            profile.persistentStoragePath(),
-            self._view.width(),
-            self._view.height(),
             wait_ms,
             timeout_ms,
             self._max_attempts,
-            profile.httpUserAgent(),
         )
         self._begin_attempt()
 

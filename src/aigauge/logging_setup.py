@@ -32,8 +32,8 @@ def setup_logging() -> logging.Logger:
         path.parent.mkdir(parents=True, exist_ok=True)
         handler = RotatingFileHandler(
             path,
-            maxBytes=512 * 1024,
-            backupCount=2,
+            maxBytes=1024 * 1024,
+            backupCount=4,
             encoding="utf-8",
             delay=True,
         )

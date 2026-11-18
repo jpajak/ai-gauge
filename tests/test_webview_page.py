@@ -44,3 +44,15 @@ def test_embedded_page_capability_chatter_is_noise():
     )
     for sample in samples:
         assert any(fragment in sample for fragment in _NOISY_CONSOLE_FRAGMENTS), sample
+
+
+def test_chatgpt_usage_page_chatter_is_noise():
+    # The ChatGPT usage page repeats these on every Codex check: a chart library
+    # warning about its 0x0 offscreen container and a failing Statsig cache write.
+    samples = (
+        "The width(0) and height(0) of chart should be greater than 0,\n"
+        " please check the style of container, or the props width(100%) and height(100%)",
+        "  WARN  [Statsig] Caught error in _writeToCache [object Object]",
+    )
+    for sample in samples:
+        assert any(fragment in sample for fragment in _NOISY_CONSOLE_FRAGMENTS), sample

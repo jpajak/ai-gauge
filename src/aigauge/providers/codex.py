@@ -342,23 +342,54 @@ def _is_weekly_only_usage_layout(payload: dict[str, Any]) -> bool:
     )
 
 
-def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
+def _logged_out_kind(payload: dict[str, Any]) -> str | None:
+    """How the payload says the session is signed out.
+
+    ``"url"``: the page is a login or logout URL, which is conclusive.
+    ``"page"``: only the extractor's ``logged_out`` flag says so, while the URL
+    is still the usage page. A page that had not finished rendering can set it,
+    so it needs a second load to be believed. ``None``: not signed out.
+    """
     url = str(payload.get("url") or "").lower()
     if "/auth/login" in url or "/login" in url or "/logout" in url:
-        return True
-    if bool(payload.get("logged_out")):
-        return not (
-            has_usage_page_signal(payload) or _looks_like_empty_signed_in_usage(payload)
-        )
-    return False
+        return "url"
+    if bool(payload.get("logged_out")) and not (
+        has_usage_page_signal(payload) or _looks_like_empty_signed_in_usage(payload)
+    ):
+        return "page"
+    return None
+
+
+def _is_logged_out_payload(payload: dict[str, Any]) -> bool:
+    return _logged_out_kind(payload) is not None
 
 
 def _build_snapshot(
     payload: dict[str, Any],
     *,
     account_id: str = "codex",
+    confirm_soft_signout: bool = False,
 ) -> UsageSnapshot:
-    if _is_logged_out_payload(payload):
+    """Classify a scraped payload.
+
+    With ``confirm_soft_signout`` set, a sign-out seen only through the page's
+    ``logged_out`` flag becomes a retryable ERROR snapshot instead of
+    AUTH_REQUIRED, so the caller can reload once before believing it.
+    """
+    signout = _logged_out_kind(payload)
+    if signout == "page" and confirm_soft_signout:
+        log.info(
+            "codex sign-out unconfirmed, reloading account=%s title=%r",
+            account_id,
+            payload.get("title"),
+        )
+        return UsageSnapshot(
+            provider=account_id,
+            status=SnapshotStatus.ERROR,
+            error="Codex page had not finished loading; reloading.",
+            raw=payload,
+        )
+    if signout is not None:
         log_page_diagnosis(
             log,
             provider=account_id,
@@ -498,6 +529,9 @@ def _build_snapshot(
     )
 
 
+_BUILD_MAX_ATTEMPTS = 2
+
+
 class CodexProvider(Provider):
     name = "codex"
     display_name = "Codex"
@@ -508,8 +542,18 @@ class CodexProvider(Provider):
         self._runner: ScrapeRunner | None = None  # held to prevent GC
 
     def refresh(self, on_done: Callable[[UsageSnapshot], None]) -> None:
+        # Per refresh call, so each refresh starts from the first attempt.
+        # The runner reloads only when a build returns ERROR, and the first
+        # attempt turns a soft sign-out into one.
+        attempts = [0]
+
         def _build(payload: dict[str, Any]) -> UsageSnapshot:
-            return _build_snapshot(payload, account_id=self._account_id)
+            attempts[0] += 1
+            return _build_snapshot(
+                payload,
+                account_id=self._account_id,
+                confirm_soft_signout=attempts[0] < _BUILD_MAX_ATTEMPTS,
+            )
 
         cache_buster = int(datetime.now().timestamp())
         self._runner = ScrapeRunner(
@@ -520,7 +564,7 @@ class CodexProvider(Provider):
             log=log,
             wait_ms=7000,
             transport_max_attempts=1,
-            build_max_attempts=2,
+            build_max_attempts=_BUILD_MAX_ATTEMPTS,
             parent=self._parent,
         )
         self._runner.run(on_done)

@@ -1,6 +1,6 @@
 # Console session renewal
 
-**Status:** step 3 works (read 2026-11-17). The session signed in at 22:05
+**Status:** step 3 works (read 2026-11-17), shipping in 0.8.7. The session signed in at 22:05
 EST on 2026-11-09 was re-issued by the server at 17:06 EST on 2026-11-15,
 during an ordinary check, 29 hours before it would have ended. Before the
 fix the app's session ran its full 7 days with no re-issue (step 2). Steps 3

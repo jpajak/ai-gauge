@@ -2,10 +2,22 @@
 
 ## Unreleased
 
+## 0.8.7 - 2026-11-17
+
+### Changed
+
+- The log file keeps about 5 MB of history with less repeated noise, so a log attached to a bug report reaches further back.
+
 ### Fixed
 
+- The Claude API tile now stays signed in past a week: the Console renews its session as it does for Chrome. If you signed in under 0.8.6, sign out of the tile and sign in again once after updating.
+- The Codex tile checks again with a fresh load before showing Not signed in, so a passing sign-out on the usage page no longer signs it out.
 - The Claude tile no longer times out on an account with no usage yet this week; it shows 0% for Session and Weekly. ([#17](https://github.com/jpajak/ai-gauge/pull/17), thanks [@mgleeson](https://github.com/mgleeson).)
 - The Claude tile's Fable bar shows the real Fable usage again, instead of a wrong figure picked up from the usage page's credits banner.
+
+### Known limitations
+
+- Claude API session renewal has been checked live once, on Windows with Chrome as the sign-in browser. Signing in from macOS, Linux, Edge or Brave has not been checked.
 
 ## 0.8.6 - 2026-10-26
 

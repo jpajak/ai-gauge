@@ -1,17 +1,16 @@
 # Console session renewal
 
-**Status:** step 2 measured (2026-11-09). The app's session ran its full 7
-days with no re-issue and died at 21:07 EST. Chrome's was renewed 12.6 hours
-before its end. Leading cause: the app replays Chrome's cookies under a
-different browser identity and cookie set (hypothesis 6). Steps 3 and 5 built
-2026-11-09 (`0e3e444`, `1797d5a`, `a41b27f`). Waiting on a restart and a
-fresh Console sign-in, then the watcher near the end of that session. If it
-does not renew, accept a weekly sign-in. No expiry on screen.
+**Status:** step 3 works (read 2026-11-17). The session signed in at 22:05
+EST on 2026-11-09 was re-issued by the server at 17:06 EST on 2026-11-15,
+during an ordinary check, 29 hours before it would have ended. Before the
+fix the app's session ran its full 7 days with no re-issue (step 2). Steps 3
+and 5 built 2026-11-09 (`0e3e444`, `1797d5a`, `a41b27f`). One renewal seen;
+the next is due before 2026-11-22 11:06 EST. No expiry on screen.
 
 **Trigger to build the fix:** met 2026-11-09 (step 2 result below).
 
-**Size:** 2 commits, steps 3 and 5 under "Recommended fix". Step 3's verdict
-comes from the watcher near the end of the next session.
+**Size:** 2 commits, steps 3 and 5 under "Recommended fix". Step 3's verdict:
+renews (see "Result" under step 3).
 
 ## Problem
 
@@ -380,6 +379,20 @@ wrong on this point. What the evidence now allows:
      Verdict: still signed in after that time, or a `session cookie renewed
      profile=claude_api name=sessionKey` line, means it renews. The machine
      must be awake with the app running for part of the last day.
+   - **Result: renews (read 2026-11-17).** At 17:06:45 EST on 2026-11-15,
+     139 hours in, an ordinary scheduled check (`scrape start` 17:06:41, `ok`
+     17:06:46, no sign-in) received a new `sessionKey` and `sessionKeyLC` on
+     `.platform.claude.com` and new `sessionKeyV3` and `sessionKeyV3LC` on
+     `platform.claude.com`, all expiring 2026-11-22T16:06Z (Sun Nov 22 11:06
+     EST). Chrome renewed between 84 and 155 hours, so 139 sits in its range.
+     Checks stayed `ok` past the old expiry, through 22:31 on Nov 17. The line
+     reads `session cookie seen`, not `renewed`: the app restarted at 08:35 on
+     Nov 13, the stored `sessionKey` logged nothing at that restart, so the
+     tracker had no earlier expiry to compare. The grep under "How to read it"
+     matches it anyway. Re-issued cookies run 162 hours, not 168; `claude`
+     re-issues fall 6 hours short of 28 days the same way. `secrets.dat` still
+     holds the sign-in copy, expired since Nov 17, so after a first renewal a
+     hydrate from the keyring (profile with no Cookies file) signs out.
    - **Known gaps.** `hydrate_all_from_keyring` re-sets stored cookies as
      `.platform.claude.com` domain cookies when a profile has no Cookies
      file, so the `.claude.com` ones lose their domain in that case only.

@@ -93,12 +93,26 @@ EXTRACTOR_JS = r"""
       /\b(?:used|remaining)\s*:?\s*\d+(?:\.\d+)?\s*%/i.test(after);
   }
 
+  // A usage reading proper: a percentage tied to "used" or "remaining". Unlike
+  // hasUsageValue this rejects promo copy such as "Up to 30% off". No \b after
+  // "used": textContent glues the next node on ("22% usedLimit resets").
+  function hasUsageReading(after) {
+    return /\d+(?:\.\d+)?\s*%\s*(?:used|remaining)/i.test(after) ||
+      /\b(?:used|remaining)\s*:?\s*\d+(?:\.\d+)?\s*%/i.test(after);
+  }
+
   function headsARow(text, label) {
+    // The bare "Fable" label also appears in prose (the "Fable reset" credit
+    // card, the banner), and the text after it can run on into a promo such as
+    // "Up to 30% off". It needs a real usage reading; every other label keeps
+    // the lenient bare-percentage rule.
+    const needsReading = label.toLowerCase() === 'fable';
     return labelTailMatches(text, label, (after) => {
       const tail = withoutVersion(after);
       // A standalone label or reset caption is not a hydrated row. The value
       // may live in a parent element, which will be considered separately.
-      return isIdleRowTail(after) || hasUsageValue(tail);
+      return isIdleRowTail(after) ||
+        (needsReading ? hasUsageReading(tail) : hasUsageValue(tail));
     });
   }
 
@@ -269,6 +283,35 @@ EXTRACTOR_JS = r"""
       title: document.title,
       body_text: bodyText.slice(0, 8000),
     };
+  }
+
+  // Claude now hides the Fable row inside a collapsed "This week" disclosure;
+  // while collapsed the row is not in the DOM. Expand it once and let the
+  // scraper rerun us in this same document (the flag survives between reruns,
+  // and a second click would collapse it again). Never wait on the row beyond
+  // that one expand: Pro accounts have no Fable row at all.
+  if (!isLoggedOut && onUsageRoute() && requiredRowsReady && !weeklyFable) {
+    const toggle = document.querySelector('button[data-testid="pace-week-toggle"]') ||
+      Array.from(document.querySelectorAll('button[aria-expanded="false"]')).find(
+        b => typeof b.getAttribute === 'function' && /^This week\W*$/i.test(norm(b))
+      );
+    if (toggle && typeof toggle.getAttribute === 'function' &&
+        toggle.getAttribute('aria-expanded') === 'false' &&
+        !globalThis.__aigaugeWeekToggleClicked) {
+      globalThis.__aigaugeWeekToggleClicked = true;
+      toggle.click();
+      return {
+        __retry_after_ms: 600,
+        __retry_reason: 'expanded weekly breakdown',
+        logged_out: false,
+        session: null,
+        weekly_all: null,
+        weekly_fable: null,
+        url: location.href,
+        title: document.title,
+        body_text: bodyText.slice(0, 8000),
+      };
+    }
   }
 
   return {
